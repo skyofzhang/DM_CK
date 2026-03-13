@@ -1,0 +1,28 @@
+{
+  "server": {
+    "httpPort": 8080,
+    "wsPort": 8081,
+    "heartbeatInterval": 30000
+  },
+  "game": {
+    "survivalDayDuration":   240,
+    "survivalNightDuration": 120,
+    "survivalTotalDays":     70,
+    "initFood":              500,
+    "initCoal":              300,
+    "initOre":               150,
+    "initFurnaceTemp":       20,
+    "initGateHp":            1000,
+    "foodDecayDay":          0.1,
+    "foodDecayNight":        0.1,
+    "tempDecayDay":          0.3,
+    "tempDecayNight":        0.8,
+    "monsterGateDamage":     5,
+    "pauseTimeout":          1800000
+  },
+  "room": {
+    "pauseTimeout":     1800000,
+    "cleanupInterval":  300000,
+    "maxRooms":         200
+  }
+}

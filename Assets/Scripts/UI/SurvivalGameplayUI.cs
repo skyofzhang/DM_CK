@@ -1,0 +1,79 @@
+using UnityEngine;
+using DrscfZ.Core;
+using DrscfZ.Survival;
+
+namespace DrscfZ.UI
+{
+    /// <summary>
+    /// 生存游戏战斗UI总控制器。
+    /// 挂载在 Canvas（始终激活，Rule #7）。
+    /// 根据游戏状态控制 GameUIPanel（TopBar/弹幕等）和 BottomBar 的显隐：
+    ///   - State.Running   → GameUIPanel + BottomBar 显示
+    ///   - 其他状态/断线  → GameUIPanel + BottomBar 隐藏
+    /// </summary>
+    public class SurvivalGameplayUI : MonoBehaviour
+    {
+        [SerializeField] private GameObject _gameUIPanel;   // Canvas/GameUIPanel
+        [SerializeField] private GameObject _bottomBar;     // Canvas/BottomBar
+        [SerializeField] private GameObject _announcementPanel; // Canvas/AnnouncementPanel
+
+        private void Start()
+        {
+            // 订阅事件
+            var net = NetworkManager.Instance;
+            if (net != null)
+                net.OnDisconnected += OnDisconnected;
+
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm != null)
+                sgm.OnStateChanged += OnStateChanged;
+
+            // 初始化隐藏（防止场景以 Running 状态启动时漏显）
+            RefreshVisibility();
+        }
+
+        private void OnDestroy()
+        {
+            var net = NetworkManager.Instance;
+            if (net != null)
+                net.OnDisconnected -= OnDisconnected;
+
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm != null)
+                sgm.OnStateChanged -= OnStateChanged;
+        }
+
+        // ==================== 事件回调 ====================
+
+        private void OnDisconnected(string _) => HidePanels();
+
+        private void OnStateChanged(SurvivalGameManager.SurvivalState state) => RefreshVisibility();
+
+        // ==================== 显隐逻辑 ====================
+
+        private void RefreshVisibility()
+        {
+            var sgm = SurvivalGameManager.Instance;
+            bool isRunning = sgm != null && sgm.State == SurvivalGameManager.SurvivalState.Running;
+
+            if (isRunning)
+                ShowPanels();
+            else
+                HidePanels();
+        }
+
+        private void ShowPanels()
+        {
+            if (_gameUIPanel != null) _gameUIPanel.SetActive(true);
+            if (_bottomBar != null)   _bottomBar.SetActive(true);
+            // AnnouncementPanel 保持其自身逻辑（不强制显示）
+        }
+
+        private void HidePanels()
+        {
+            if (_gameUIPanel != null) _gameUIPanel.SetActive(false);
+            if (_bottomBar != null)   _bottomBar.SetActive(false);
+            if (_announcementPanel != null) _announcementPanel.SetActive(false);
+        }
+    }
+}

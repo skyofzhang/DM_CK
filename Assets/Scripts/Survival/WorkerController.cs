@@ -1,0 +1,731 @@
+using System.Collections;
+using UnityEngine;
+using DrscfZ.UI;
+
+namespace DrscfZ.Survival
+{
+    /// <summary>
+    /// 单个Worker（奶牛/村民）控制器
+    ///
+    /// 状态机：
+    ///   Idle(home) → Move(ToWork) → Work → Move(ToHome) → Idle
+    ///   任意状态 → Special（3s金光）→ 恢复原状态
+    ///   任意状态 → Frozen（30s冰冻）→ 恢复原状态
+    ///
+    /// M4改动（T003/T004/T007/T010）：
+    ///   1. AssignWork 改为接受显式 targetPos 参数（解耦 WorkerManager.WORK_POSITIONS）
+    ///   2. 移动改为协程 + EaseOutCubic，替代 Vector3.MoveTowards（T004）
+    ///   3. 新增 HomePosition：工作结束后平滑返回待机位（T007）
+    ///   4. 新增 OnWorkComplete 事件：通知 WorkerManager 释放槽位
+    ///   5. Animator 状态同步：复用 AC_Kpbl.controller 参数（Speed/IsPushing），优雅降级（T010）
+    ///
+    /// 挂载规则：挂在Worker GameObject上（与WorkerVisual同级）。
+    /// </summary>
+    public class WorkerController : MonoBehaviour
+    {
+        // ==================== 状态枚举 ====================
+
+        public enum State { Idle, Move, Work, Special, Frozen }
+
+        // ==================== Inspector 引用 ====================
+
+        [Header("视觉组件（Inspector拖入）")]
+        [SerializeField] private WorkerVisual _visual;
+        [SerializeField] private WorkerBubble _bubble;
+
+        [Header("特效材质")]
+        [SerializeField] private Material _hitExplosionMaterial; // 拖入 Mat_ParticleAdd
+
+        // ==================== 公开属性 ====================
+
+        public string PlayerId   { get; private set; }
+        public string PlayerName { get; private set; }
+
+        /// <summary>Worker 是否正在移动或工作（影响空闲判定）</summary>
+        public bool   IsWorking  => _state == State.Work || _state == State.Move;
+
+        /// <summary>当前执行的指令类型（0=无）</summary>
+        public int    CurrentCmd { get; private set; }
+
+        /// <summary>
+        /// 待机基准位置（由 WorkerManager.SpawnWorker 分配）。
+        /// Worker工作结束后会平滑返回此坐标。
+        /// </summary>
+        public Vector3 HomePosition { get; set; } = Vector3.zero;
+
+        /// <summary>工作完成事件：通知 WorkerManager 释放对应槽位</summary>
+        public event System.Action<WorkerController> OnWorkComplete;
+
+        // ==================== 私有状态 ====================
+
+        private State  _state              = State.Idle;
+        private State  _stateBeforeSpecial = State.Idle;
+
+        private Vector3 _basePos;    // Idle时的Bob动画基准（跟随HomePosition变化）
+        private Vector3 _targetPos;  // 当前移动目标（工位或HomePosition）
+
+        private Coroutine _moveCoroutine;        // 当前移动协程句柄
+        private Coroutine _returnHomeCoroutine;  // 返回待机位协程句柄
+
+        // ==================== Animator（T010）====================
+
+        private Animator _animator;
+
+        // --- 参数集 A：AC_Kpbl / AC_DrscfZ_Worker（Speed float + IsPushing bool）---
+        private bool _hasSpeed;
+        private bool _hasIsPushing;
+        private static readonly int Hash_Speed     = Animator.StringToHash("Speed");
+        private static readonly int Hash_IsPushing = Animator.StringToHash("IsPushing");
+
+        // --- 参数集 B：kuanggong_05.controller（IsRunning/IsMining/IsIdle bool）------
+        // CowWorker.prefab 默认使用 kuanggong_05，参数名与集A不同，需同时支持。
+        private bool _hasIsRunning;
+        private bool _hasIsMining;
+        private bool _hasIsCarrying;
+        private bool _hasIsIdle;
+        private static readonly int Hash_IsRunning  = Animator.StringToHash("IsRunning");
+        private static readonly int Hash_IsMining   = Animator.StringToHash("IsMining");
+        private static readonly int Hash_IsCarrying = Animator.StringToHash("IsCarrying");
+        private static readonly int Hash_IsIdle     = Animator.StringToHash("IsIdle");
+
+        // ==================== 围炉配置（cmd=4）====================
+
+        /// <summary>火堆世界坐标，由 WorkerManager 在 Awake 中写入</summary>
+        public static Vector3 CampfirePosition = Vector3.zero;
+
+        /// <summary>当前围炉 Worker 总数（用于分配槽角度），重置时由 WorkerManager 清零</summary>
+        public static int _fireWorkerCount = 0;
+
+        /// <summary>本 Worker 分配到的围炉槽编号（-1=未分配）</summary>
+        private int _myFireSlot = -1;
+
+        private const float FIRE_RADIUS             = 1.8f;
+        private const float FIRE_IDLE_INTERVAL_MIN  = 5f;
+        private const float FIRE_IDLE_INTERVAL_MAX  = 15f;
+        private float _nextFireMoveTime              = 0f;
+
+        // ==================== 常量 ====================
+
+        private const float MOVE_SPEED        = 1.5f;  // 移动速度（m/s）自然步行速度
+        private const float WORK_DURATION     = 4f;  // 工作时长（秒）
+        private const float SPECIAL_DURATION  = 3f;  // 金色光晕时长
+        private const float FROZEN_DURATION   = 30f; // 冻结时长
+        private const float BOB_AMPLITUDE     = 0.05f;
+        private const float BOB_FREQ          = 2f * Mathf.PI; // 2π → 1 Hz
+        private const float RETURN_HOME_SPEED = 1.5f;  // 返回待机位速度
+
+        // ==================== 子任务1：攻击距离 ====================
+
+        private const float ATTACK_RANGE = 2.5f;
+        private const int   WORKER_ATTACK_DAMAGE = 5; // 矿工打怪每次命中伤害
+
+        // ==================== 子任务3：攻击拖尾 ====================
+
+        private TrailRenderer _attackTrail;
+
+        // ==================== 初始化 ====================
+
+        private void Awake()
+        {
+            if (_visual == null) _visual = GetComponent<WorkerVisual>();
+            if (_bubble == null) _bubble = GetComponentInChildren<WorkerBubble>(true);
+
+            // T010：绑定子对象 CowWorker.Body 上的 Animator（Body 由 FixWorkerMesh 挂载）
+            _animator = GetComponentInChildren<Animator>(true);
+            if (_animator != null) _animator.applyRootMotion = false;  // 禁止根运动，防止角色自行漂移
+            CacheAnimatorParams();
+
+            // 子任务3：初始化攻击拖尾
+            SetupAttackTrail();
+        }
+
+        /// <summary>激活Worker并绑定玩家信息（WorkerManager.SpawnWorker 调用）</summary>
+        public void Initialize(string playerId, string playerName)
+        {
+            PlayerId    = playerId;
+            PlayerName  = playerName;
+            CurrentCmd  = 0;
+            _basePos    = HomePosition != Vector3.zero ? HomePosition : transform.position;
+            TransitionTo(State.Idle);
+        }
+
+        // ==================== Update 主循环 ====================
+
+        private void Update()
+        {
+            switch (_state)
+            {
+                case State.Idle:
+                    UpdateIdle();
+                    break;
+                case State.Work:
+                    // cmd=4 围炉：到达槽位后持续朝向火堆，并定时轻微换位
+                    if (CurrentCmd == 4)
+                        UpdateFireIdle();
+                    break;
+                // Move 和 Special/Frozen 完全由协程驱动，Update不处理
+            }
+        }
+
+        private void UpdateIdle()
+        {
+            // Y轴Bob浮动：围绕 _basePos 上下振荡
+            float bobY = Mathf.Sin(Time.time * BOB_FREQ) * BOB_AMPLITUDE;
+            transform.position = _basePos + Vector3.up * bobY;
+        }
+
+        /// <summary>
+        /// cmd=4 围炉专用更新：持续朝向火堆中心，定时轻微换位（5~15秒一次）。
+        /// 在 State.Work 且 CurrentCmd==4 时每帧调用。
+        /// </summary>
+        private void UpdateFireIdle()
+        {
+            // 朝向火堆（仅Y轴旋转，避免角色倾斜）
+            Vector3 toFire = CampfirePosition - transform.position;
+            toFire.y = 0f;
+            if (toFire.sqrMagnitude > 0.01f)
+                transform.rotation = Quaternion.Slerp(
+                    transform.rotation,
+                    Quaternion.LookRotation(toFire),
+                    Time.deltaTime * 5f);
+
+            // 定时轻微换位：重新计算槽角度并移动
+            if (Time.time >= _nextFireMoveTime)
+            {
+                _nextFireMoveTime = Time.time + Random.Range(FIRE_IDLE_INTERVAL_MIN, FIRE_IDLE_INTERVAL_MAX);
+
+                // 在当前槽基础上加随机小偏移（±0.3m），增加自然感
+                float baseAngle  = _myFireSlot * (360f / 8f) * Mathf.Deg2Rad;
+                float jitter     = Random.Range(-0.25f, 0.25f);
+                float angle      = baseAngle + jitter;
+                Vector3 newSlot  = CampfirePosition + new Vector3(
+                    Mathf.Cos(angle) * FIRE_RADIUS, 0f, Mathf.Sin(angle) * FIRE_RADIUS);
+
+                // 用短移动协程平滑换位（不改变 State，Worker 仍处于 Work 状态）
+                if (_moveCoroutine != null) StopCoroutine(_moveCoroutine);
+                _moveCoroutine = StartCoroutine(FireDriftCoroutine(newSlot));
+            }
+        }
+
+        /// <summary>围炉微移协程：短距离平滑漂移到新槽位（不切换状态）</summary>
+        private IEnumerator FireDriftCoroutine(Vector3 targetPos)
+        {
+            Vector3 startPos = transform.position;
+            float   distance = Vector3.Distance(startPos, targetPos);
+            float   duration = Mathf.Clamp(distance / (MOVE_SPEED * 0.5f), 0.3f, 3f);
+            float   elapsed  = 0f;
+
+            while (elapsed < duration && _state == State.Work && CurrentCmd == 4)
+            {
+                elapsed += Time.deltaTime;
+                float t = EaseInOutCubic(Mathf.Clamp01(elapsed / duration));
+                transform.position = Vector3.Lerp(startPos, targetPos, t);
+                yield return null;
+            }
+            _moveCoroutine = null;
+        }
+
+        // ==================== 状态切换 ====================
+
+        private void TransitionTo(State newState)
+        {
+            ExitState(_state);
+            _state = newState;
+            EnterState(newState);
+        }
+
+        private void EnterState(State state)
+        {
+            switch (state)
+            {
+                case State.Idle:
+                    transform.localRotation = Quaternion.identity;
+                    if (_bubble != null) _bubble.Hide();
+                    SetAnimatorState(false, false);  // T010
+
+                    // 平滑返回待机位（T007：Worker工作结束后回到HomePosition）
+                    Vector3 home = HomePosition != Vector3.zero ? HomePosition : transform.position;
+                    if (Vector3.Distance(transform.position, home) > 0.1f)
+                    {
+                        if (_returnHomeCoroutine != null) StopCoroutine(_returnHomeCoroutine);
+                        _returnHomeCoroutine = StartCoroutine(ReturnHomeCoroutine(home));
+                    }
+                    else
+                    {
+                        _basePos = home;
+                    }
+                    break;
+
+                case State.Move:
+                    transform.localRotation = Quaternion.identity;
+                    if (_bubble != null) _bubble.ShowWork(CurrentCmd);
+                    SetAnimatorState(true, false);   // T010：Speed=3，IsPushing=false
+                    // 协程由 AssignWork 启动
+                    break;
+
+                case State.Work:
+                    if (_visual != null) _visual.SetWorkColor(CurrentCmd);
+                    if (_bubble != null) _bubble.ShowWork(CurrentCmd);
+                    // cmd=4（围炉）：站立朝向火堆，不播 Mining 动画
+                    // cmd=1（食物）：靠近渔场站立，同样是 Idle 姿态
+                    // cmd=2/3（煤/矿）：挖掘动画 IsMining=true
+                    // cmd=6（打怪）：用 IsMining 替代战斗动画（现有参数集内最接近）
+                    SetAnimatorStateForCmd(CurrentCmd);
+                    StartCoroutine(WorkCoroutine());
+                    break;
+
+                case State.Special:
+                    if (_visual != null) _visual.ActivateGlow(SPECIAL_DURATION);
+                    if (_bubble != null) _bubble.ShowSpecial("★", new Color(1f, 0.843f, 0f, 0.9f));
+                    Invoke(nameof(OnSpecialEnd), SPECIAL_DURATION);
+                    break;
+
+                case State.Frozen:
+                    if (_visual != null) _visual.ActivateFrozen(FROZEN_DURATION);
+                    if (_bubble != null) _bubble.ShowSpecial("冰", new Color(0.533f, 0.8f, 1.0f, 0.9f));
+                    Invoke(nameof(OnFrozenEnd), FROZEN_DURATION);
+                    break;
+            }
+        }
+
+        private void ExitState(State state)
+        {
+            switch (state)
+            {
+                case State.Move:
+                    StopMoveCoroutine();
+                    break;
+                case State.Work:
+                    StopAllCoroutines(); // 停掉 WorkCoroutine（可能被打断）
+                    transform.localRotation = Quaternion.identity;
+                    break;
+                case State.Special:
+                    CancelInvoke(nameof(OnSpecialEnd));
+                    break;
+                case State.Frozen:
+                    CancelInvoke(nameof(OnFrozenEnd));
+                    break;
+            }
+        }
+
+        // ==================== 协程 ====================
+
+        /// <summary>
+        /// 平滑移动到目标点（T004：EaseOutCubic 插值，替代 MoveTowards）。
+        /// 到达后自动切换到 State.Work。
+        /// </summary>
+        private IEnumerator MoveToWorkCoroutine(Vector3 targetPos)
+        {
+            Vector3 startPos = transform.position;
+            float   distance = Vector3.Distance(startPos, targetPos);
+            float   duration = Mathf.Clamp(distance / MOVE_SPEED, 0.3f, 30f);
+            float   elapsed  = 0f;
+
+            while (elapsed < duration)
+            {
+                elapsed += Time.deltaTime;
+                float t  = EaseOutCubic(Mathf.Clamp01(elapsed / duration));
+                transform.position = Vector3.Lerp(startPos, targetPos, t);
+
+                // 朝向目标（仅Y轴旋转）
+                Vector3 dir = new Vector3(targetPos.x - transform.position.x,
+                                          0f,
+                                          targetPos.z - transform.position.z);
+                if (dir.sqrMagnitude > 0.001f)
+                    transform.rotation = Quaternion.LookRotation(dir);
+
+                yield return null;
+            }
+
+            transform.position = targetPos;
+            transform.localRotation = Quaternion.identity;
+
+            if (_state == State.Move)
+                TransitionTo(State.Work);
+        }
+
+        /// <summary>工作计时器（cmd=6 持续战斗直到怪物全灭；其他指令 4s 后回 Idle）</summary>
+        private IEnumerator WorkCoroutine()
+        {
+            // ── cmd=6：持续战斗循环，直到场上无活跃怪物 ──────────────────────────
+            if (CurrentCmd == 6)
+            {
+                if (_attackTrail != null) _attackTrail.enabled = true;
+
+                while (_state == State.Work)
+                {
+                    // 1. 找最近活跃怪物
+                    var target = FindNearestActiveMonster();
+                    if (target == null) break;  // 怪物全灭 → 退出循环
+
+                    // 2. 追到攻击范围内
+                    while (target != null && target.gameObject.activeInHierarchy &&
+                           Vector3.Distance(transform.position, target.position) > ATTACK_RANGE &&
+                           _state == State.Work)
+                    {
+                        var dir = (target.position - transform.position).normalized;
+                        dir.y = 0f;
+                        transform.position += dir * MOVE_SPEED * Time.deltaTime;
+                        SetAnimatorState(true, false);
+                        if (dir.sqrMagnitude > 0.001f)
+                            transform.rotation = Quaternion.LookRotation(dir);
+                        yield return null;
+                    }
+
+                    if (target == null || !target.gameObject.activeInHierarchy) continue;
+
+                    // 3. 进入攻击姿态
+                    SetAnimatorState(false, false);
+                    SetAnimatorStateForCmd(6);
+                    Vector3 toM = target.position - transform.position;
+                    toM.y = 0f;
+                    if (toM.sqrMagnitude > 0.001f)
+                        transform.rotation = Quaternion.LookRotation(toM);
+
+                    // 4. 近身打击（2秒一轮，轮完再重新寻找目标/继续追同一只）
+                    float burstEnd = Time.time + 2f;
+                    while (Time.time < burstEnd && _state == State.Work)
+                    {
+                        // Unity == 重载可识别已销毁对象（C# ?. 无法识别）
+                        if (target == null) break;
+
+                        // Z轴摆动：模拟工具挥动 ±30° @ 1Hz
+                        float swing = Mathf.Sin(Time.time * BOB_FREQ) * 30f;
+                        transform.localRotation = Quaternion.Euler(0f, 0f, swing);
+
+                        // 摆动峰值时命中怪物：视觉特效 + 实际扣血
+                        float sv = Mathf.Sin(Time.time * BOB_FREQ);
+                        if (sv > 0.95f)
+                        {
+                            var mc = target.GetComponent<DrscfZ.Monster.MonsterController>();
+                            if (mc != null && !mc.IsDead &&
+                                Vector3.Distance(transform.position, target.position) <= ATTACK_RANGE + 1f)
+                            {
+                                SpawnHitExplosion(target.position + Vector3.up * 0.5f);
+                                mc.TakeDamage(WORKER_ATTACK_DAMAGE);
+                            }
+                        }
+                        yield return null;
+                    }
+                    // 本轮结束 → 下一轮重新 FindNearestActiveMonster（目标死后自动切换）
+                }
+
+                // 所有怪物已死，关闭拖尾
+                if (_attackTrail != null)
+                {
+                    yield return new WaitForSeconds(0.3f);
+                    _attackTrail.enabled = false;
+                }
+
+                if (_state == State.Work)
+                {
+                    OnWorkComplete?.Invoke(this);
+                    TransitionTo(State.Idle);
+                }
+                yield break;  // cmd=6 流程结束，跳过下方通用逻辑
+            }
+
+            // ── 其他 cmd（1/2/3/4）：固定 4 秒工作计时器 ────────────────────────
+            float endTime = Time.time + WORK_DURATION;
+
+            while (Time.time < endTime && _state == State.Work)
+            {
+                // cmd=4（围炉）和 cmd=1（渔场站立）：不做 Z 轴摆动，朝向由 UpdateFireIdle 控制
+                if (CurrentCmd != 4 && CurrentCmd != 1)
+                {
+                    // Z轴摆动：模拟工具挥动 ±30° @ 1Hz（煤矿/矿山）
+                    float swing = Mathf.Sin(Time.time * BOB_FREQ) * 30f;
+                    transform.localRotation = Quaternion.Euler(0f, 0f, swing);
+                }
+
+                yield return null;
+            }
+
+            if (_state == State.Work)
+            {
+                OnWorkComplete?.Invoke(this);
+                TransitionTo(State.Idle);
+            }
+        }
+
+        /// <summary>平滑返回待机位（EaseInOutCubic，比工作移动稍快）</summary>
+        private IEnumerator ReturnHomeCoroutine(Vector3 homePos)
+        {
+            Vector3 startPos = transform.position;
+            float   distance = Vector3.Distance(startPos, homePos);
+            float   duration = Mathf.Clamp(distance / RETURN_HOME_SPEED, 0.2f, 30f);
+            float   elapsed  = 0f;
+
+            while (elapsed < duration)
+            {
+                elapsed += Time.deltaTime;
+                float t = EaseInOutCubic(Mathf.Clamp01(elapsed / duration));
+                _basePos = Vector3.Lerp(startPos, homePos, t);
+                yield return null;
+            }
+
+            _basePos = homePos;
+        }
+
+        // ==================== 特殊状态回调 ====================
+
+        private void OnSpecialEnd()
+        {
+            if (_visual != null) _visual.Reset();
+            _state = _stateBeforeSpecial;
+            EnterState(_state);
+        }
+
+        private void OnFrozenEnd()
+        {
+            if (_visual != null) _visual.Reset();
+            _state = _stateBeforeSpecial;
+            EnterState(_state);
+        }
+
+        // ==================== 公共接口 ====================
+
+        /// <summary>
+        /// 分配工作指令，Worker平滑移向指定工位坐标（T003：接受显式targetPos解耦WorkerManager）。
+        /// cmd=4 时额外分配围炉槽位，Worker走向围炉圆圈上的固定位置。
+        /// </summary>
+        /// <param name="cmdType">工作类型（1=食物/2=煤/3=矿/4=火/6=打怪）</param>
+        /// <param name="targetPos">目标世界坐标（由WorkerManager从StationSlot选出；cmd=4时被围炉计算覆盖）</param>
+        public void AssignWork(int cmdType, Vector3 targetPos)
+        {
+            _visual?.TriggerAssignmentFlash(); // T214：指派时白色闪烁
+            CurrentCmd  = cmdType;
+
+            // cmd=4 围炉：按静态槽计数分配围炉圆圈上的固定位置，忽略 WorkerManager 传入的 targetPos
+            if (cmdType == 4)
+            {
+                _myFireSlot = _fireWorkerCount++;
+                float angle  = _myFireSlot * (360f / 8f) * Mathf.Deg2Rad;
+                targetPos    = CampfirePosition + new Vector3(
+                    Mathf.Cos(angle) * FIRE_RADIUS, 0f, Mathf.Sin(angle) * FIRE_RADIUS);
+                _nextFireMoveTime = Time.time + Random.Range(FIRE_IDLE_INTERVAL_MIN, FIRE_IDLE_INTERVAL_MAX);
+            }
+            else
+            {
+                _myFireSlot = -1;
+            }
+
+            _targetPos  = targetPos;
+
+            StopMoveCoroutine();
+            if (_returnHomeCoroutine != null)
+            {
+                StopCoroutine(_returnHomeCoroutine);
+                _returnHomeCoroutine = null;
+            }
+
+            TransitionTo(State.Move);
+            _moveCoroutine = StartCoroutine(MoveToWorkCoroutine(targetPos));
+        }
+
+        /// <summary>触发Special状态（666/主播加速），3秒后恢复原状态</summary>
+        public void TriggerSpecial()
+        {
+            if (_state == State.Special || _state == State.Frozen) return;
+            _stateBeforeSpecial = _state;
+            TransitionTo(State.Special);
+        }
+
+        /// <summary>触发Frozen状态（魔法镜），30秒后恢复原状态</summary>
+        public void TriggerFrozen()
+        {
+            if (_state == State.Frozen) return;
+            _stateBeforeSpecial = _state;
+            TransitionTo(State.Frozen);
+        }
+
+        /// <summary>暂停/恢复Worker视觉（gift_pause特效期间）</summary>
+        public void SetPaused(bool paused)
+        {
+            _visual?.SetFrozen(paused);
+        }
+
+        /// <summary>重置Worker到Idle状态（归还对象池时调用）</summary>
+        public void ResetWorker()
+        {
+            CancelInvoke();
+            StopAllCoroutines();
+            _moveCoroutine       = null;
+            _returnHomeCoroutine = null;
+
+            // 若该 Worker 持有围炉槽位，归还计数（静态计数器由 WorkerManager.ClearAll 统一清零）
+            _myFireSlot = -1;
+
+            // 子任务3：确保拖尾禁用
+            if (_attackTrail != null) _attackTrail.enabled = false;
+
+            _visual?.Reset();
+            _state     = State.Idle;
+            CurrentCmd = 0;
+            transform.localRotation = Quaternion.identity;
+            _bubble?.Hide();
+        }
+
+        // ==================== Animator 辅助（T010）====================
+
+        /// <summary>
+        /// 缓存 AC_Kpbl.controller 的参数，优雅降级（参数不存在时静默忽略）。
+        /// 与 Capybara.cs 保持一致的模式。
+        /// </summary>
+        private void CacheAnimatorParams()
+        {
+            if (_animator == null || _animator.runtimeAnimatorController == null) return;
+            foreach (var p in _animator.parameters)
+            {
+                switch (p.nameHash)
+                {
+                    // 集A
+                    case var h when h == Hash_Speed:      _hasSpeed      = true; break;
+                    case var h when h == Hash_IsPushing:  _hasIsPushing  = true; break;
+                    // 集B (kuanggong_05)
+                    case var h when h == Hash_IsRunning:  _hasIsRunning  = true; break;
+                    case var h when h == Hash_IsMining:   _hasIsMining   = true; break;
+                    case var h when h == Hash_IsCarrying: _hasIsCarrying = true; break;
+                    case var h when h == Hash_IsIdle:     _hasIsIdle     = true; break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 同步 Animator 参数到当前状态（兼容两套参数集）。
+        /// 集A：Speed(float) + IsPushing(bool) → 用于 AC_Kpbl / AC_DrscfZ_Worker
+        /// 集B：IsRunning/IsMining/IsIdle(bool) → 用于 kuanggong_05.controller（CowWorker 默认）
+        /// isMoving=true  → 行走动画
+        /// isWorking=true → 工作动画（IsMining）
+        /// 两者均false     → 待机动画（Idle）
+        /// </summary>
+        private void SetAnimatorState(bool isMoving, bool isWorking)
+        {
+            if (_animator == null) return;
+
+            // 集A
+            if (_hasSpeed)     _animator.SetFloat(Hash_Speed,     isMoving  ? MOVE_SPEED : 0f);
+            if (_hasIsPushing) _animator.SetBool (Hash_IsPushing, isWorking);
+
+            // 集B
+            if (_hasIsRunning)  _animator.SetBool(Hash_IsRunning,  isMoving);
+            if (_hasIsMining)   _animator.SetBool(Hash_IsMining,   isWorking && !isMoving);
+            if (_hasIsCarrying) _animator.SetBool(Hash_IsCarrying, false);  // 暂不使用，保留扩展
+            if (_hasIsIdle)     _animator.SetBool(Hash_IsIdle,     !isMoving && !isWorking);
+        }
+
+        /// <summary>
+        /// 根据工作类型精确映射动画参数（进入 Work 状态时调用）。
+        ///
+        /// 映射规则（仅使用现有 kuanggong_05.controller 参数，不添加新参数）：
+        ///   cmd=1 食物/打鱼  → Idle 站立姿态（靠近渔场，不挥工具）
+        ///   cmd=2 挖煤       → IsMining=true（挖掘动作）
+        ///   cmd=3 挖矿       → IsMining=true（挖掘动作）
+        ///   cmd=4 火堆围炉   → Idle 站立姿态（朝向火堆，由 UpdateFireIdle 控制朝向）
+        ///   cmd=6 打怪       → IsMining=true（以挖掘动作替代战斗，现有参数集内最接近）
+        /// </summary>
+        private void SetAnimatorStateForCmd(int cmd)
+        {
+            if (_animator == null) return;
+
+            bool useMining = (cmd == 2 || cmd == 3 || cmd == 6);
+
+            // 集A
+            if (_hasSpeed)     _animator.SetFloat(Hash_Speed,     0f);
+            if (_hasIsPushing) _animator.SetBool (Hash_IsPushing, useMining);
+
+            // 集B
+            if (_hasIsRunning)  _animator.SetBool(Hash_IsRunning,  false);
+            if (_hasIsMining)   _animator.SetBool(Hash_IsMining,   useMining);
+            if (_hasIsCarrying) _animator.SetBool(Hash_IsCarrying, false);
+            if (_hasIsIdle)     _animator.SetBool(Hash_IsIdle,     !useMining);
+        }
+
+        // ==================== 子任务1：辅助方法 ====================
+
+        /// <summary>查找场景中最近的活跃怪物</summary>
+        private Transform FindNearestActiveMonster()
+        {
+            var monsters = Object.FindObjectsOfType<DrscfZ.Monster.MonsterController>();
+            Transform nearest = null;
+            float minDist = float.MaxValue;
+            foreach (var m in monsters)
+            {
+                if (m == null || !m.gameObject.activeInHierarchy || m.IsDead) continue;
+                float d = Vector3.Distance(transform.position, m.transform.position);
+                if (d < minDist) { minDist = d; nearest = m.transform; }
+            }
+            return nearest;
+        }
+
+        // ==================== 子任务3：攻击拖尾初始化 ====================
+
+        private void SetupAttackTrail()
+        {
+            _attackTrail = gameObject.AddComponent<TrailRenderer>();
+            _attackTrail.time       = 0.25f;
+            _attackTrail.startWidth = 0.15f;
+            _attackTrail.endWidth   = 0f;
+            _attackTrail.material   = new Material(Shader.Find("Sprites/Default"));
+            _attackTrail.startColor = new Color(1f, 0.55f, 0.1f, 0.85f);
+            _attackTrail.endColor   = new Color(1f, 0.55f, 0.1f, 0f);
+            _attackTrail.enabled    = false;
+        }
+
+        // ==================== 子任务4：爆炸粒子 ====================
+
+        private void SpawnHitExplosion(Vector3 pos)
+        {
+            var go = new GameObject("HitExplosion");
+            go.transform.position = pos;
+
+            var ps   = go.AddComponent<ParticleSystem>();
+            var main = ps.main;
+            main.startLifetime = 0.5f;
+            main.startSpeed    = new ParticleSystem.MinMaxCurve(2f, 5f);
+            main.startSize     = new ParticleSystem.MinMaxCurve(0.15f, 0.35f);
+            main.startColor    = new Color(1f, 0.4f, 0.05f);
+            main.maxParticles  = 25;
+            main.loop          = false;
+
+            var shape      = ps.shape;
+            shape.shapeType = ParticleSystemShapeType.Sphere;
+            shape.radius    = 0.2f;
+
+            var emission = ps.emission;
+            emission.SetBursts(new ParticleSystem.Burst[]
+            {
+                new ParticleSystem.Burst(0f, 20)
+            });
+            emission.enabled = true;
+
+            // 设置材质，防止 ParticleSystemRenderer 因无材质显示紫色
+            var psr = go.GetComponent<ParticleSystemRenderer>();
+            if (_hitExplosionMaterial != null)
+                psr.material = _hitExplosionMaterial;
+            else
+                psr.material = new Material(Shader.Find("Universal Render Pipeline/Particles/Unlit"));
+
+            ps.Play();
+            Object.Destroy(go, 1.5f);
+        }
+
+        // ==================== 私有工具 ====================
+
+        private void StopMoveCoroutine()
+        {
+            if (_moveCoroutine != null)
+            {
+                StopCoroutine(_moveCoroutine);
+                _moveCoroutine = null;
+            }
+        }
+
+        /// <summary>缓出三次方（加速开始，减速到达）</summary>
+        private static float EaseOutCubic(float t) => 1f - Mathf.Pow(1f - t, 3f);
+
+        /// <summary>缓进缓出三次方（适合返回待机）</summary>
+        private static float EaseInOutCubic(float t)
+            => t < 0.5f ? 4f * t * t * t : 1f - Mathf.Pow(-2f * t + 2f, 3f) / 2f;
+    }
+}
