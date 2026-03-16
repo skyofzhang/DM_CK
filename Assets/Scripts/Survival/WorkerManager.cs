@@ -85,7 +85,8 @@ namespace DrscfZ.Survival
         // ==================== Inspector 配置 ====================
 
         [Header("Worker生成配置")]
-        [SerializeField] private GameObject        _workerPrefab;    // 奶牛prefab（可空，使用Capsule）
+        [SerializeField] private GameObject        _workerPrefab;    // 矿工外观A（KuanggongWorker_01）
+        [SerializeField] private GameObject        _workerPrefab2;   // 矿工外观B（KuanggongWorker_02，随机选一）
         [SerializeField] private Transform         _fortressCenter;  // 中央堡垒（待机圈圆心）
         [SerializeField] private float             _idleRadius = 3f; // 待机圆圈半径
 
@@ -94,10 +95,13 @@ namespace DrscfZ.Survival
 
         // ==================== 常量 ====================
 
-        public const int MAX_WORKERS = 20;
+        public const int MAX_WORKERS = 12;  // 性能优化：从20降至12，减少峰值 Skinned Mesh 数量
 
         /// <summary>当前场景内存活的 Worker 数量（供 PreGameBannerUI 等 UI 读取）</summary>
         public int WorkerCount => _activeWorkers.Count;
+
+        /// <summary>当前活跃 Worker 只读列表（供 MonsterController 避免每帧 FindObjectsOfType）</summary>
+        public IReadOnlyList<WorkerController> ActiveWorkers => _activeWorkers;
 
         // ==================== 运行时状态 ====================
 
@@ -482,6 +486,97 @@ namespace DrscfZ.Survival
             }
         }
 
+        // ==================== 黑夜防守模式 ====================
+
+        /// <summary>
+        /// 黑夜开始 → 全员放弃当前工位，集结到城门前防守（cmd=6）。
+        /// 不受工位槽位数量限制，所有存活Worker全部参战。
+        /// </summary>
+        public void EnterNightDefense()
+        {
+            if (_activeWorkers.Count == 0) return;
+
+            // 收集 cmd=6 工位坐标（循环分配给全员）
+            var defensePositions = new List<Vector3>();
+            if (_stationSlots != null)
+                foreach (var s in _stationSlots)
+                    if (s.cmdType == 6) defensePositions.Add(s.position);
+            if (defensePositions.Count == 0)
+                defensePositions.Add(new Vector3(0f, 0f, -3f)); // 城门前兜底
+
+            // 清除所有槽位占用（防止旧工位阻塞重分配）
+            if (_stationSlots != null)
+                foreach (var slot in _stationSlots)
+                    slot.occupyingPlayerId = "";
+            _workerToSlot.Clear();
+
+            int assigned = 0;
+            foreach (var w in _activeWorkers)
+            {
+                if (w == null || w.IsDead) continue;
+                Vector3 defPos = defensePositions[assigned % defensePositions.Count];
+                w.AssignWork(6, defPos);
+                w.SetHpBarVisible(true);   // 夜晚显示矿工血条
+                assigned++;
+            }
+            Debug.Log($"[WorkerManager] EnterNightDefense: {assigned}/{_activeWorkers.Count} 名Worker进入防守模式");
+        }
+
+        /// <summary>
+        /// 天亮 → 全员退出防守，回到待机圈等待新工作指令。
+        /// </summary>
+        public void ExitNightDefense()
+        {
+            // 清除所有槽位占用
+            if (_stationSlots != null)
+                foreach (var slot in _stationSlots)
+                    slot.occupyingPlayerId = "";
+            _workerToSlot.Clear();
+
+            foreach (var w in _activeWorkers)
+            {
+                if (w == null) continue;
+                w.SetHpBarVisible(false);  // 白天隐藏矿工血条
+                if (w.IsDead) continue;    // 死亡的矿工等服务器 worker_revived 复活后再处理
+                w.ResetWorker();           // 回到 Idle，触发 ReturnHomeCoroutine
+            }
+            Debug.Log("[WorkerManager] ExitNightDefense: 全员恢复白天工作模式");
+        }
+
+        /// <summary>服务器通知矿工死亡（worker_died）→ 切换到 Dead 状态并显示倒计时</summary>
+        public void HandleWorkerDied(string playerId, long respawnAt)
+        {
+            var worker = FindWorkerByPlayerId(playerId);
+            if (worker == null)
+            {
+                Debug.LogWarning($"[WorkerManager] HandleWorkerDied: playerId={playerId} 未找到对应Worker");
+                return;
+            }
+            worker.EnterDead(respawnAt);
+            Debug.Log($"[WorkerManager] Worker '{playerId}' 已死亡，将在{respawnAt}ms后复活");
+        }
+
+        /// <summary>服务器通知矿工复活（worker_revived）→ 立即复活并重新加入战斗</summary>
+        public void HandleWorkerRevived(string playerId)
+        {
+            var worker = FindWorkerByPlayerId(playerId);
+            if (worker == null)
+            {
+                Debug.LogWarning($"[WorkerManager] HandleWorkerRevived: playerId={playerId} 未找到对应Worker");
+                return;
+            }
+            worker.Revive();
+            Debug.Log($"[WorkerManager] Worker '{playerId}' 已复活");
+        }
+
+        /// <summary>按playerId查找活跃Worker</summary>
+        private WorkerController FindWorkerByPlayerId(string playerId)
+        {
+            foreach (var w in _activeWorkers)
+                if (w != null && w.PlayerId == playerId) return w;
+            return null;
+        }
+
         /// <summary>触发全体Worker金色光晕（666弹幕/主播加速）</summary>
         public void ActivateAllWorkersGlow(float duration = 3f)
         {
@@ -628,9 +723,12 @@ namespace DrscfZ.Survival
         private WorkerController CreateWorkerAtPos(Vector3 pos)
         {
             GameObject go;
-            if (_workerPrefab != null)
+            // 随机选择两套外观，增加视觉多样性
+            var prefabToUse = (_workerPrefab2 != null && UnityEngine.Random.value > 0.5f)
+                              ? _workerPrefab2 : _workerPrefab;
+            if (prefabToUse != null)
             {
-                go = Instantiate(_workerPrefab, pos, Quaternion.identity);
+                go = Instantiate(prefabToUse, pos, Quaternion.identity);
             }
             else
             {

@@ -15,8 +15,10 @@ namespace DrscfZ.Monster
     {
         public static MonsterWaveSpawner Instance { get; private set; }
 
-        [Header("怪物 Prefab（X_guai01）")]
-        [SerializeField] private GameObject _monsterPrefab; // 如果为空使用Cube占位
+        [Header("怪物 Prefab")]
+        [SerializeField] private GameObject _monsterPrefab;  // 怪物外观A（KuanggongMonster_03）
+        [SerializeField] private GameObject _monsterPrefab2; // 怪物外观B（KuanggongMonster_04，随机选一）
+        [SerializeField] private GameObject _bossPrefab;     // Boss专用外观（KuanggongBoss_05）
 
         [Header("生成点（从场景中拖入）")]
         [SerializeField] private Transform _spawnLeft;
@@ -29,10 +31,17 @@ namespace DrscfZ.Monster
         [Header("怪物缩放（Prefab根节点已归一化为(1,1,1)，默认1.0）")]
         [SerializeField] private float _monsterScale = 1.0f;
 
+        [Header("性能：同屏最大活跃怪物数（超出时排队等死亡后再生成）")]
+        [SerializeField] private int _maxAliveMonsters = 15;
+
         [Header("内置波次配置（服务器未推送时使用）")]
         [SerializeField] private WaveConfig[] _localWaveConfigs;
 
         private List<MonsterController> _activeMonsters = new List<MonsterController>();
+
+        /// <summary>当前活跃怪物只读列表（供 WorkerController 避免每帧 FindObjectsOfType）</summary>
+        public IReadOnlyList<MonsterController> ActiveMonsters => _activeMonsters;
+
         private int _currentDay = 0;
         private bool _spawning  = false;
 
@@ -136,8 +145,11 @@ namespace DrscfZ.Monster
 
             for (int i = 0; i < cfg.count; i++)
             {
+                // 同屏怪物达上限时等待，死亡后自动续生
+                while (_activeMonsters.Count >= _maxAliveMonsters)
+                    yield return new WaitForSeconds(0.5f);
+
                 SpawnOneMonster(cfg);
-                // 极短间隔：大批怪物同时涌出，呈现千军万马效果
                 yield return new WaitForSeconds(0.05f + UnityEngine.Random.Range(0f, 0.05f));
             }
         }
@@ -151,12 +163,17 @@ namespace DrscfZ.Monster
             spawnPos += new Vector3(0, 0, -2f); // Boss稍微靠前，确保显眼
 
             GameObject go;
-            if (_monsterPrefab != null)
+            // 优先使用专属Boss Prefab（KuanggongBoss_05，已内置2.5x大小）
+            var bossPrefabToUse = _bossPrefab != null ? _bossPrefab : _monsterPrefab;
+            if (bossPrefabToUse != null)
             {
-                go = Instantiate(_monsterPrefab, spawnPos, Quaternion.identity);
-                // Boss放大2.5倍
-                float bossScale = Mathf.Max(0.001f, _monsterScale * 2.5f);
-                go.transform.localScale = Vector3.one * bossScale;
+                go = Instantiate(bossPrefabToUse, spawnPos, Quaternion.identity);
+                // 若使用专属Boss Prefab则不额外放大；若降级用普通怪则放大2.5倍
+                if (_bossPrefab == null)
+                {
+                    float bossScale = Mathf.Max(0.001f, _monsterScale * 2.5f);
+                    go.transform.localScale = Vector3.one * bossScale;
+                }
             }
             else
             {
@@ -192,9 +209,12 @@ namespace DrscfZ.Monster
             Vector3 spawnPos = GetSpawnPos(cfg.spawnSide);
             GameObject go;
 
-            if (_monsterPrefab != null)
+            // 随机选择两套怪物外观，增加视觉多样性
+            var prefabToUse = (_monsterPrefab2 != null && UnityEngine.Random.value > 0.5f)
+                              ? _monsterPrefab2 : _monsterPrefab;
+            if (prefabToUse != null)
             {
-                go = Instantiate(_monsterPrefab, spawnPos, Quaternion.identity);
+                go = Instantiate(prefabToUse, spawnPos, Quaternion.identity);
                 // Prefab 根节点 scale 已归一化为 (1,1,1)，_monsterScale 默认 1.0
                 // HPBarCanvas 的 scale 由 MonsterController.Initialize() 内部强制设置为 (0.01,0.01,0.01)
                 float s = Mathf.Max(0.001f, _monsterScale);

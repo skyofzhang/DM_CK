@@ -186,21 +186,37 @@ namespace DrscfZ.UI
             SurvivalGameManager.Instance?.ConnectToServer();
         }
 
-        /// <summary>开始游戏（State=Idle 或 Waiting 时有效）</summary>
+        /// <summary>开始游戏（GM模式：自动先重置再开始）</summary>
         private void OnStartGameClicked()
         {
             if (!_connected) { SetStatusText("请先连接服务器"); return; }
             var sgm = SurvivalGameManager.Instance;
-            bool canStart = sgm != null &&
-                (sgm.State == SurvivalGameManager.SurvivalState.Idle ||
-                 sgm.State == SurvivalGameManager.SurvivalState.Waiting);
-            if (!canStart)
+            bool isIdle    = sgm != null && sgm.State == SurvivalGameManager.SurvivalState.Idle;
+            bool isWaiting = sgm != null && sgm.State == SurvivalGameManager.SurvivalState.Waiting;
+            if (isIdle || isWaiting)
             {
-                SetStatusText($"当前状态（{sgm?.State}）无法开始");
-                return;
+                SetStatusText("发送 start_game...");
+                sgm.RequestStartGame();
             }
-            SetStatusText("发送 start_game...");
-            sgm.RequestStartGame();
+            else
+            {
+                // Running / Settlement / Loading → 先重置再开始
+                SetStatusText("重置后自动开始...");
+                long ts = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                NetworkManager.Instance?.SendJson($"{{\"type\":\"reset_game\",\"timestamp\":{ts}}}");
+                StartCoroutine(DelayedStart(1.2f));
+            }
+        }
+
+        private System.Collections.IEnumerator DelayedStart(float delay)
+        {
+            yield return new UnityEngine.WaitForSeconds(delay);
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm != null)
+            {
+                SetStatusText("发送 start_game...");
+                sgm.RequestStartGame();
+            }
         }
 
         /// <summary>暂停游戏</summary>
@@ -317,8 +333,8 @@ namespace DrscfZ.UI
             var cb = ConnectBtn;
             if (cb != null) cb.interactable = !connected;
 
-            // 开始挑战按钮：Idle 或 Waiting 状态下可用
-            if (startButton)    startButton.interactable    = connected && (isIdle || isWaiting);
+            // 开始游戏按钮：连接后始终可点（Running/Settlement会先重置再开始）
+            if (startButton)    startButton.interactable    = connected;
             if (resetButton)    resetButton.interactable    = connected;
             if (simulateButton) simulateButton.interactable = connected;
 

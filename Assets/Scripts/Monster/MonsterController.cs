@@ -37,6 +37,9 @@ namespace DrscfZ.Monster
         private Animator  _animator;
         private float _attackCooldown;
 
+        // 当前正在攻击的矿工目标（为null则攻击城门）
+        private Survival.WorkerController _currentWorkerTarget;
+
         // 事件
         public event Action<MonsterController> OnDead;  // 死亡通知 WaveSpawner
 
@@ -54,6 +57,15 @@ namespace DrscfZ.Monster
             _gateTarget = gateTarget;
             _animator   = GetComponentInChildren<Animator>();
             _state      = MonsterState.Moving;
+
+            // ── 性能优化：关闭阴影投射 + 视野外停止蒙皮 ────────────────────────
+            if (_animator != null)
+                _animator.cullingMode = AnimatorCullingMode.CullCompletely;
+            foreach (var smr in GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                smr.shadowCastingMode   = UnityEngine.Rendering.ShadowCastingMode.Off;
+                smr.updateWhenOffscreen = false;
+            }
 
             // ── 始终重置 HPBarCanvas 缩放（无论 _hpFillImage 是否已绑定）──────
             var hpCanvas = transform.Find("HPBarCanvas");
@@ -88,6 +100,9 @@ namespace DrscfZ.Monster
         {
             MonsterId    = monsterId;
             _monsterType = type;
+            // #3 校验城门目标，未设置时打警告（调用方应先 SetGateTarget 再调此方法）
+            if (_gateTarget == null)
+                Debug.LogWarning($"[MonsterController] InitializeWithType: _gateTarget 为 null，怪物 {monsterId} 将使用兜底位置。请先调用 SetGateTarget()。");
             Initialize(Mathf.RoundToInt(hp), Mathf.RoundToInt(atk), speed, _gateTarget);
         }
 
@@ -104,60 +119,74 @@ namespace DrscfZ.Monster
 
         private void UpdateMoving()
         {
-            if (_gateTarget == null)
+            // 优先攻击最近的存活矿工（黑夜防守模式）
+            var workerTarget = FindNearestAliveWorker();
+
+            Vector3 targetPos;
+            if (workerTarget != null)
             {
-                // 没有明确目标，向 Z=-4 的城门方向移动
-                Vector3 gatePos = new Vector3(transform.position.x * 0.5f, 0, -4f);
-                MoveToward(gatePos);
-                if (Vector3.Distance(transform.position, gatePos) < _attackRange)
-                    StartAttacking();
-                return;
+                _currentWorkerTarget = workerTarget;
+                targetPos = workerTarget.transform.position;
+            }
+            else
+            {
+                _currentWorkerTarget = null;
+                // 无存活矿工时攻击城门
+                if (_gateTarget != null)
+                    targetPos = _gateTarget.position;
+                else
+                    targetPos = new Vector3(transform.position.x * 0.5f, 0f, -4f);
             }
 
-            float dist = Vector3.Distance(transform.position, _gateTarget.position);
+            float dist = Vector3.Distance(transform.position, targetPos);
             if (dist <= _attackRange)
             {
                 StartAttacking();
             }
             else
             {
-                MoveToward(_gateTarget.position);
+                MoveToward(targetPos);
+                PlayAnim("Run");
             }
-
-            // 有攻击中的矿工进入范围时，转向并播放攻击动画（视觉反击，不中断移动）
-            TryFightBackWorker();
         }
 
-        /// <summary>若有 cmd=6 矿工进入攻击范围，转向并播放 Attack 动画（视觉反击）</summary>
-        private void TryFightBackWorker()
+        /// <summary>查找最近的存活矿工（#7 用 WorkerManager 缓存列表，避免每帧 FindObjectsOfType）</summary>
+        private Survival.WorkerController FindNearestAliveWorker()
         {
-            var workers = UnityEngine.Object.FindObjectsOfType<Survival.WorkerController>();
-            Transform nearest = null;
+            var mgr     = Survival.WorkerManager.Instance;
+            var workers = mgr != null
+                ? (System.Collections.Generic.IReadOnlyList<Survival.WorkerController>)mgr.ActiveWorkers
+                : System.Array.Empty<Survival.WorkerController>();
+            Survival.WorkerController nearest = null;
             float minD = float.MaxValue;
             foreach (var w in workers)
             {
-                if (w == null || !w.gameObject.activeInHierarchy) continue;
-                if (w.CurrentCmd != 6) continue;
+                if (w == null || !w.gameObject.activeInHierarchy || w.IsDead) continue;
                 float d = Vector3.Distance(transform.position, w.transform.position);
-                if (d < _attackRange && d < minD) { minD = d; nearest = w.transform; }
+                if (d < minD) { minD = d; nearest = w; }
             }
-            if (nearest != null)
-            {
-                Vector3 dir = nearest.position - transform.position;
-                dir.y = 0f;
-                if (dir.sqrMagnitude > 0.01f)
-                    transform.rotation = Quaternion.Slerp(transform.rotation,
-                        Quaternion.LookRotation(dir), Time.deltaTime * 8f);
-                PlayAnim("Attack");
-            }
-            else
-            {
-                PlayAnim("Run");  // 无附近战斗矿工时恢复奔跑动画
-            }
+            return nearest;
         }
 
         private void UpdateAttacking()
         {
+            // 若当前攻击目标是矿工，检查其是否仍然存活
+            if (_currentWorkerTarget != null)
+            {
+                bool targetGone = _currentWorkerTarget.IsDead
+                               || !_currentWorkerTarget.gameObject.activeInHierarchy;
+                bool targetFled = Vector3.Distance(transform.position,
+                                    _currentWorkerTarget.transform.position) > _attackRange * 2f;
+                if (targetGone || targetFled)
+                {
+                    // 矿工死亡/离开范围 → 重新进入寻路状态找新目标
+                    _currentWorkerTarget = null;
+                    _state = MonsterState.Moving;
+                    PlayAnim("Run");
+                    return;
+                }
+            }
+
             _attackCooldown -= Time.deltaTime;
             if (_attackCooldown <= 0f)
             {
@@ -233,21 +262,28 @@ namespace DrscfZ.Monster
             StartCoroutine(HitFlash());
         }
 
+        // #2 静态 PropertyID 避免每次字符串哈希
+        private static readonly int PropBaseColor = Shader.PropertyToID("_BaseColor");
+        private static readonly int PropColor     = Shader.PropertyToID("_Color");
+
         private IEnumerator HitFlash()
         {
             var renderers = GetComponentsInChildren<Renderer>();
-            // 获取原始材质颜色
-            var origColors = new Color[renderers.Length];
+            // #2 用 MaterialPropertyBlock 闪白，不创建材质实例
+            var block = new MaterialPropertyBlock();
             for (int i = 0; i < renderers.Length; i++)
             {
-                origColors[i] = renderers[i].material.color;
-                renderers[i].material.color = Color.white;
+                if (renderers[i] == null) continue;
+                block.SetColor(PropBaseColor, Color.white); // URP
+                block.SetColor(PropColor,     Color.white); // Standard/备用
+                renderers[i].SetPropertyBlock(block);
             }
             yield return new WaitForSeconds(0.1f);
+            // 清除 PropertyBlock → 自动恢复共享材质原色，无实例残留
             for (int i = 0; i < renderers.Length; i++)
             {
                 if (renderers[i] != null)
-                    renderers[i].material.color = origColors[i];
+                    renderers[i].SetPropertyBlock(null);
             }
         }
 
@@ -269,7 +305,7 @@ namespace DrscfZ.Monster
         private void Die()
         {
             _state = MonsterState.Dead;
-            PlayAnim("Dead");
+            PlayAnim("Sit");   // 所有kuanggong controller的死亡状态名是"Sit"（Sitting Dazed动画）
             OnDead?.Invoke(this);
             Destroy(gameObject, 2f);
         }

@@ -115,6 +115,16 @@ namespace DrscfZ.Survival
 
         private void HandleMessage(string type, string dataJson)
         {
+            try { HandleMessageInternal(type, dataJson); }
+            catch (Exception ex)
+            {
+                // #8 单条消息解析异常不应崩溃整个处理链
+                Debug.LogError($"[SGM] HandleMessage 异常 type={type}: {ex.Message}\n{ex.StackTrace}");
+            }
+        }
+
+        private void HandleMessageInternal(string type, string dataJson)
+        {
             switch (type)
             {
                 // ----- 连接确认：Connecting → Waiting -----
@@ -143,6 +153,11 @@ namespace DrscfZ.Survival
                 case "phase_changed":
                     var pc = JsonUtility.FromJson<PhaseChangedData>(dataJson);
                     dayNightManager?.HandlePhaseChanged(pc);
+                    // 黑夜开始 → 全员防守；白天开始 → 回工位
+                    if (pc.phase == "night")
+                        WorkerManager.Instance?.EnterNightDefense();
+                    else if (pc.phase == "day")
+                        WorkerManager.Instance?.ExitNightDefense();
                     break;
 
                 // ----- 资源更新 -----
@@ -160,6 +175,17 @@ namespace DrscfZ.Survival
                     monsterWaveSpawner?.SpawnWave(mw);
                     // 通知 WorkerManager 怪物出现，让闲置 Worker 自动攻击
                     WorkerManager.Instance?.OnMonstersAppear();
+                    break;
+
+                // ----- 矿工死亡/复活（HP系统）-----
+                case "worker_died":
+                    var wd = JsonUtility.FromJson<WorkerDiedData>(dataJson);
+                    WorkerManager.Instance?.HandleWorkerDied(wd.playerId, wd.respawnAt);
+                    break;
+
+                case "worker_revived":
+                    var wrv = JsonUtility.FromJson<WorkerRevivedData>(dataJson);
+                    WorkerManager.Instance?.HandleWorkerRevived(wrv.playerId);
                     break;
 
                 // ----- 玩家工作指令（评论触发）-----
@@ -501,13 +527,17 @@ namespace DrscfZ.Survival
 
         private void HandlePlayerJoined(SurvivalPlayerJoinedData data)
         {
-            if (!_contributions.ContainsKey(data.playerId ?? "unknown"))
-                _contributions[data.playerId ?? "unknown"] = 0f;
+            // #1 JsonUtility 返回默认对象时 playerId 为 null/空，拒绝处理
+            if (data == null || string.IsNullOrEmpty(data.playerId)) return;
+            var displayName = string.IsNullOrEmpty(data.playerName) ? "匿名" : data.playerName;
+
+            if (!_contributions.ContainsKey(data.playerId))
+                _contributions[data.playerId] = 0f;
 
             workerManager?.SpawnWorker(data);
             OnPlayerJoined?.Invoke(data);
-            OnPlayerActivityMessage?.Invoke($"{data.playerName} 加入了极地部落");
-            UI.HorizontalMarqueeUI.Instance?.AddMessage(data.playerName, data.avatarUrl, "加入了极地生存！");
+            OnPlayerActivityMessage?.Invoke($"{displayName} 加入了极地部落");
+            UI.HorizontalMarqueeUI.Instance?.AddMessage(displayName, data.avatarUrl, "加入了极地生存！");
         }
 
         private void HandleDefeat(string reason)

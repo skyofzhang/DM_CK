@@ -100,6 +100,15 @@ class SurvivalGameEngine {
     // 怪物攻击城门伤害
     this.monsterGateDamage = config.monsterGateDamage ?? 5;
 
+    // ── 矿工HP系统 ──────────────────────────────────────────────────────
+    // { [playerId]: { hp, maxHp, isDead, respawnAt } }
+    this._workerHp    = {};
+    this._workerMaxHp = config.workerMaxHp ?? 100; // 每个矿工的最大HP
+    // 矿工承伤倍率：每只怪对矿工的伤害 = monsterGateDamage × workerDamageMult
+    this._workerDamageMult = config.workerDamageMult ?? 1.0;
+    // 矿工死亡复活等待时间（毫秒）
+    this._workerRespawnMs  = (config.workerRespawnSec ?? 30) * 1000;
+
     // 游戏状态
     this.state          = 'idle';   // idle | day | night | settlement
     this.currentDay     = 0;
@@ -284,6 +293,11 @@ class SurvivalGameEngine {
       gateMaxHp:    this.gateMaxHp,
       gateLevel:    this.gateLevel,
       scorePool:    Math.round(this.scorePool),
+      workerHp:     Object.fromEntries(
+        Object.entries(this._workerHp).map(([pid, w]) => [pid, {
+          hp: w.hp, maxHp: w.maxHp, isDead: w.isDead, respawnAt: w.respawnAt
+        }])
+      ),
     };
   }
 
@@ -373,6 +387,12 @@ class SurvivalGameEngine {
     this._trackContribution(playerId, gift.score);
     // 积分池：礼物得分入池
     this.scorePool += gift.score;
+
+    // ── 矿工复活：送礼时若该玩家的矿工已死亡，立即复活 ──────────────
+    if (this.state === 'night' && this._workerHp[playerId]?.isDead) {
+      this._reviveWorker(playerId);
+      console.log(`[SurvivalEngine] Gift revival: ${playerName}'s worker revived`);
+    }
 
     // 每种礼物的具体效果（策划案 §5.1）
     const effects = {};
@@ -532,6 +552,9 @@ class SurvivalGameEngine {
     this._clearNightWaves();
     this._activeMonsters.clear();
     this.state         = 'day';
+
+    // 天亮时立即复活所有死亡矿工
+    this._reviveAllWorkers('day_started');
     this.currentDay    = day;
     this.remainingTime = this.dayDuration;
 
@@ -562,6 +585,9 @@ class SurvivalGameEngine {
     this.remainingTime = this.nightDuration;
 
     console.log(`[SurvivalEngine] ===== Night ${day} Start =====`);
+
+    // 初始化矿工HP（夜晚开始时全员满血上阵）
+    this._initWorkerHp();
 
     // 初始化当天怪物追踪
     this._initActiveMonsters(day);
@@ -715,6 +741,69 @@ class SurvivalGameEngine {
     } else {
       this._enterDay(nextDay);
     }
+  }
+
+  // ==================== 矿工HP系统 ====================
+
+  /** 夜晚开始时初始化所有已加入玩家的矿工HP（满血）*/
+  _initWorkerHp() {
+    this._workerHp = {};
+    for (const pid of Object.keys(this.contributions)) {
+      this._workerHp[pid] = {
+        hp:        this._workerMaxHp,
+        maxHp:     this._workerMaxHp,
+        isDead:    false,
+        respawnAt: 0,
+      };
+    }
+    // 同步完整矿工HP状态到客户端
+    this._broadcastWorkerHp();
+    console.log(`[SurvivalEngine] Worker HP initialized for ${Object.keys(this._workerHp).length} players`);
+  }
+
+  /** 复活指定玩家的矿工 */
+  _reviveWorker(playerId) {
+    const w = this._workerHp[playerId];
+    if (!w || !w.isDead) return;
+    w.hp        = w.maxHp;
+    w.isDead    = false;
+    w.respawnAt = 0;
+    this._broadcast({
+      type: 'worker_revived',
+      timestamp: Date.now(),
+      data: { playerId }
+    });
+    this._broadcastWorkerHp();
+    console.log(`[SurvivalEngine] Worker ${playerId} revived`);
+  }
+
+  /** 复活所有死亡矿工（天亮或结算时调用）*/
+  _reviveAllWorkers(reason = 'day') {
+    let count = 0;
+    for (const pid of Object.keys(this._workerHp)) {
+      const w = this._workerHp[pid];
+      if (w.isDead) {
+        w.hp        = w.maxHp;
+        w.isDead    = false;
+        w.respawnAt = 0;
+        this._broadcast({ type: 'worker_revived', timestamp: Date.now(), data: { playerId: pid } });
+        count++;
+      }
+    }
+    if (count > 0) {
+      this._broadcastWorkerHp();
+      console.log(`[SurvivalEngine] Revived ${count} workers (reason: ${reason})`);
+    }
+  }
+
+  /** 广播当前所有矿工HP快照 */
+  _broadcastWorkerHp() {
+    if (Object.keys(this._workerHp).length === 0) return;
+    const snapshot = {};
+    for (const [pid, w] of Object.entries(this._workerHp)) {
+      snapshot[pid] = { hp: w.hp, maxHp: w.maxHp, isDead: w.isDead, respawnAt: w.respawnAt };
+    }
+    this._broadcast({ type: 'worker_hp_update', timestamp: Date.now(), data: { workers: snapshot } });
   }
 
   _decayResources() {
@@ -1023,11 +1112,51 @@ class SurvivalGameEngine {
 
     this.broadcast({ type: 'monster_wave', timestamp: Date.now(), data: waveData });
 
-    // 怪物攻击城门（模拟伤害）
-    const damage = Math.floor(count * this.monsterGateDamage);
-    this.gateHp = Math.max(0, this.gateHp - damage);
+    // ── 怪物伤害路由：优先打矿工，矿工全死后才打城门 ──────────────────
+    const totalDamage = Math.floor(count * this.monsterGateDamage * this._workerDamageMult);
+    let remainingDamage = totalDamage;
 
-    console.log(`[SurvivalEngine] Wave ${waveIndex}: ${count} monsters (${spawnSide}), gate -${damage}hp → ${this.gateHp}`);
+    const aliveWorkers = Object.entries(this._workerHp).filter(([, w]) => !w.isDead);
+    if (aliveWorkers.length > 0) {
+      // 每个存活矿工平均承担伤害
+      const damagePerWorker = Math.floor(totalDamage / aliveWorkers.length);
+      for (const [pid, w] of aliveWorkers) {
+        const actualDmg = Math.min(w.hp, damagePerWorker);
+        w.hp -= actualDmg;
+        remainingDamage -= actualDmg;
+
+        if (w.hp <= 0) {
+          w.hp = 0;
+          w.isDead = true;
+          w.respawnAt = Date.now() + this._workerRespawnMs;
+
+          // 广播矿工死亡
+          this._broadcast({
+            type: 'worker_died',
+            timestamp: Date.now(),
+            data: { playerId: pid, respawnAt: w.respawnAt }
+          });
+          console.log(`[SurvivalEngine] Worker ${pid} died, respawn at +${this._workerRespawnMs/1000}s`);
+
+          // 自动定时复活（若天亮先到则由 _reviveAllWorkers 处理）
+          const respawnTimer = setTimeout(() => {
+            if (this._workerHp[pid]?.isDead) this._reviveWorker(pid);
+          }, this._workerRespawnMs);
+          this._waveTimers.push(respawnTimer);
+        }
+      }
+      // 如果所有矿工刚好被打死，剩余伤害继续打城门
+    }
+
+    // 剩余伤害（矿工全死后的溢出）打城门
+    if (remainingDamage > 0) {
+      this.gateHp = Math.max(0, this.gateHp - remainingDamage);
+    }
+
+    // 广播矿工HP更新
+    this._broadcastWorkerHp();
+
+    console.log(`[SurvivalEngine] Wave ${waveIndex}: ${count} monsters (${spawnSide}), workers=${aliveWorkers.length}, gate -${remainingDamage}hp → ${this.gateHp}`);
 
     // 立即推送资源更新（城门HP变化）
     this._broadcastResourceUpdate();
@@ -1163,6 +1292,11 @@ class SurvivalGameEngine {
         gateLevel:    this.gateLevel,
         remainingTime: Math.round(this.remainingTime),
         scorePool:    Math.round(this.scorePool),
+        workerHp:     Object.fromEntries(
+          Object.entries(this._workerHp).map(([pid, w]) => [pid, {
+            hp: w.hp, maxHp: w.maxHp, isDead: w.isDead, respawnAt: w.respawnAt
+          }])
+        ),
       }
     });
   }

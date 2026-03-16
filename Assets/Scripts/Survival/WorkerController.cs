@@ -25,13 +25,17 @@ namespace DrscfZ.Survival
     {
         // ==================== 状态枚举 ====================
 
-        public enum State { Idle, Move, Work, Special, Frozen }
+        public enum State { Idle, Move, Work, Special, Frozen, Dead }
 
         // ==================== Inspector 引用 ====================
 
         [Header("视觉组件（Inspector拖入）")]
         [SerializeField] private WorkerVisual _visual;
         [SerializeField] private WorkerBubble _bubble;
+
+        [Header("HP 条（World Space Canvas，夜晚才显示）")]
+        [SerializeField] private Transform _hpBarCanvas;
+        [SerializeField] private UnityEngine.UI.Image _hpFillImage;
 
         [Header("特效材质")]
         [SerializeField] private Material _hitExplosionMaterial; // 拖入 Mat_ParticleAdd
@@ -43,6 +47,9 @@ namespace DrscfZ.Survival
 
         /// <summary>Worker 是否正在移动或工作（影响空闲判定）</summary>
         public bool   IsWorking  => _state == State.Work || _state == State.Move;
+
+        /// <summary>Worker 当前是否已死亡</summary>
+        public bool   IsDead     => _state == State.Dead;
 
         /// <summary>当前执行的指令类型（0=无）</summary>
         public int    CurrentCmd { get; private set; }
@@ -114,6 +121,11 @@ namespace DrscfZ.Survival
         private const float BOB_FREQ          = 2f * Mathf.PI; // 2π → 1 Hz
         private const float RETURN_HOME_SPEED = 1.5f;  // 返回待机位速度
 
+        // ==================== 死亡/复活 ====================
+
+        private long      _respawnAt   = 0;     // Unix毫秒时间戳
+        private Coroutine _deadCoroutine = null;
+
         // ==================== 子任务1：攻击距离 ====================
 
         private const float ATTACK_RANGE = 2.5f;
@@ -132,8 +144,19 @@ namespace DrscfZ.Survival
 
             // T010：绑定子对象 CowWorker.Body 上的 Animator（Body 由 FixWorkerMesh 挂载）
             _animator = GetComponentInChildren<Animator>(true);
-            if (_animator != null) _animator.applyRootMotion = false;  // 禁止根运动，防止角色自行漂移
+            if (_animator != null)
+            {
+                _animator.applyRootMotion = false;                           // 禁止根运动
+                _animator.cullingMode = AnimatorCullingMode.CullCompletely;  // 离开视野停止动画计算
+            }
             CacheAnimatorParams();
+
+            // ── 性能优化：关闭阴影投射 + 视野外停止蒙皮（Shadow casters 是主要瓶颈）
+            foreach (var smr in GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                smr.shadowCastingMode   = UnityEngine.Rendering.ShadowCastingMode.Off;
+                smr.updateWhenOffscreen = false;
+            }
 
             // 子任务3：初始化攻击拖尾
             SetupAttackTrail();
@@ -146,7 +169,35 @@ namespace DrscfZ.Survival
             PlayerName  = playerName;
             CurrentCmd  = 0;
             _basePos    = HomePosition != Vector3.zero ? HomePosition : transform.position;
+
+            // 自动绑定 HPBarCanvas（若 Inspector 未拖入则运行时查找）
+            if (_hpBarCanvas == null)
+                _hpBarCanvas = transform.Find("HPBarCanvas");
+            if (_hpBarCanvas != null)
+            {
+                // 强制重置血条 Canvas 缩放（与 MonsterController 保持一致）
+                _hpBarCanvas.localScale = new Vector3(0.01f, 0.01f, 0.01f);
+                if (_hpFillImage == null)
+                    _hpFillImage = _hpBarCanvas.Find("HPFill")?.GetComponent<UnityEngine.UI.Image>();
+            }
+            // 白天默认隐藏血条
+            SetHpBarVisible(false);
+
             TransitionTo(State.Idle);
+        }
+
+        /// <summary>控制矿工头顶血条显示（白天隐藏，夜晚显示）</summary>
+        public void SetHpBarVisible(bool visible)
+        {
+            if (_hpBarCanvas != null)
+                _hpBarCanvas.gameObject.SetActive(visible);
+        }
+
+        /// <summary>更新矿工血量显示（由服务器 worker_hp 消息驱动）</summary>
+        public void SetHp(int current, int max)
+        {
+            if (_hpFillImage != null)
+                _hpFillImage.fillAmount = max > 0 ? Mathf.Clamp01((float)current / max) : 1f;
         }
 
         // ==================== Update 主循环 ====================
@@ -285,6 +336,15 @@ namespace DrscfZ.Survival
                     if (_bubble != null) _bubble.ShowSpecial("冰", new Color(0.533f, 0.8f, 1.0f, 0.9f));
                     Invoke(nameof(OnFrozenEnd), FROZEN_DURATION);
                     break;
+
+                case State.Dead:
+                    StopAllCoroutines();
+                    SetAnimatorState(false, false);
+                    if (_visual != null) _visual.SetFrozen(true);  // 灰色冻结外观复用为死亡外观
+                    if (_bubble != null) _bubble.ShowSpecial("倒计时", new Color(0.4f, 0.4f, 0.4f, 0.9f));
+                    if (_deadCoroutine != null) StopCoroutine(_deadCoroutine);
+                    _deadCoroutine = StartCoroutine(DeadCoroutine());
+                    break;
             }
         }
 
@@ -304,6 +364,12 @@ namespace DrscfZ.Survival
                     break;
                 case State.Frozen:
                     CancelInvoke(nameof(OnFrozenEnd));
+                    break;
+
+                case State.Dead:
+                    if (_deadCoroutine != null) { StopCoroutine(_deadCoroutine); _deadCoroutine = null; }
+                    if (_visual != null) _visual.SetFrozen(false);
+                    if (_bubble != null) _bubble.Hide();
                     break;
             }
         }
@@ -465,6 +531,24 @@ namespace DrscfZ.Survival
             }
 
             _basePos = homePos;
+            _returnHomeCoroutine = null; // #4 协程结束，清空句柄保持状态一致
+        }
+
+        /// <summary>死亡倒计时协程：显示泡泡倒计时直到 _respawnAt（由服务器 worker_revived 提前打断）</summary>
+        private IEnumerator DeadCoroutine()
+        {
+            while (_state == State.Dead)
+            {
+                if (_respawnAt > 0)
+                {
+                    long remaining = _respawnAt - System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    if (remaining <= 0) { yield break; } // 等服务器 worker_revived 消息
+                    int secs = Mathf.Max(0, Mathf.CeilToInt(remaining / 1000f));
+                    if (_bubble != null) _bubble.ShowSpecial($"{secs}s", new Color(0.4f, 0.4f, 0.4f, 0.9f));
+                }
+                yield return new WaitForSeconds(0.5f);
+            }
+            _deadCoroutine = null;
         }
 
         // ==================== 特殊状态回调 ====================
@@ -537,6 +621,27 @@ namespace DrscfZ.Survival
             if (_state == State.Frozen) return;
             _stateBeforeSpecial = _state;
             TransitionTo(State.Frozen);
+        }
+
+        /// <summary>服务器通知矿工死亡（夜间HP归零）</summary>
+        /// <param name="respawnAtMs">复活时间点（Unix毫秒），0=不计时</param>
+        public void EnterDead(long respawnAtMs)
+        {
+            if (_state == State.Dead) return;
+            _respawnAt = respawnAtMs;
+            TransitionTo(State.Dead);
+        }
+
+        /// <summary>服务器通知矿工复活（礼物/天亮）</summary>
+        public void Revive()
+        {
+            if (_state != State.Dead) return;
+            _respawnAt = 0;
+            TransitionTo(State.Idle);
+            // 复活后自动参与战斗（若夜晚还有怪）
+            var monster = FindNearestActiveMonster();
+            if (monster != null)
+                AssignWork(6, monster.position);
         }
 
         /// <summary>暂停/恢复Worker视觉（gift_pause特效期间）</summary>
@@ -643,10 +748,13 @@ namespace DrscfZ.Survival
 
         // ==================== 子任务1：辅助方法 ====================
 
-        /// <summary>查找场景中最近的活跃怪物</summary>
+        /// <summary>查找最近的活跃怪物（#7 用 WaveSpawner 缓存列表，避免每帧 FindObjectsOfType）</summary>
         private Transform FindNearestActiveMonster()
         {
-            var monsters = Object.FindObjectsOfType<DrscfZ.Monster.MonsterController>();
+            var spawner  = DrscfZ.Monster.MonsterWaveSpawner.Instance;
+            var monsters = spawner != null
+                ? (System.Collections.Generic.IReadOnlyList<DrscfZ.Monster.MonsterController>)spawner.ActiveMonsters
+                : System.Array.Empty<DrscfZ.Monster.MonsterController>();
             Transform nearest = null;
             float minDist = float.MaxValue;
             foreach (var m in monsters)

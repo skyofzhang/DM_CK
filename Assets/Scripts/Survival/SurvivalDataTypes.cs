@@ -161,4 +161,21 @@ namespace DrscfZ.Survival
         public int newMaxHp;        // 新的最大HP
         public int cost;            // 消耗的矿石数量
     }
+
+    // ==================== 矿工HP系统 ====================
+
+    /// <summary>矿工死亡通知（type=worker_died）</summary>
+    [Serializable]
+    public class WorkerDiedData
+    {
+        public string playerId;
+        public long   respawnAt;  // Unix毫秒时间戳
+    }
+
+    /// <summary>矿工复活通知（type=worker_revived）</summary>
+    [Serializable]
+    public class WorkerRevivedData
+    {
+        public string playerId;
+    }
 }

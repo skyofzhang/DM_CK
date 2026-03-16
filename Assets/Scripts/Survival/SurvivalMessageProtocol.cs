@@ -23,5 +23,9 @@ namespace DrscfZ.Survival
         public const string NightCleared = "night_cleared";
         public const string GateUpgraded = "gate_upgraded";
         public const string BossAppeared = "boss_appeared";
+
+        // ----- 矿工HP系统 -----
+        public const string WorkerDied    = "worker_died";
+        public const string WorkerRevived = "worker_revived";
     }
 }
