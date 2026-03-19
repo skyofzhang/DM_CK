@@ -36,6 +36,15 @@ namespace DrscfZ.Survival
         [Header("HP 条（World Space Canvas，夜晚才显示）")]
         [SerializeField] private Transform _hpBarCanvas;
         [SerializeField] private UnityEngine.UI.Image _hpFillImage;
+        [SerializeField] private float _hpBarHeightOffset = 1.8f; // 血条距脚底高度（世界单位）
+
+        // 血条颜色：绿色（与怪物红色区分）
+        private static readonly UnityEngine.Color _hpColorFull    = new UnityEngine.Color(0.1f, 0.85f, 0.2f); // 满血绿
+        private static readonly UnityEngine.Color _hpColorMid     = new UnityEngine.Color(0.9f, 0.85f, 0.0f); // 半血黄
+        private static readonly UnityEngine.Color _hpColorLow     = new UnityEngine.Color(1.0f, 0.2f, 0.1f); // 低血红
+
+        // 血条平滑动画
+        private float _hpBarTargetFill = 1f;
 
         [Header("特效材质")]
         [SerializeField] private Material _hitExplosionMaterial; // 拖入 Mat_ParticleAdd
@@ -121,6 +130,10 @@ namespace DrscfZ.Survival
         private const float BOB_FREQ          = 2f * Mathf.PI; // 2π → 1 Hz
         private const float RETURN_HOME_SPEED = 1.5f;  // 返回待机位速度
 
+        // ==================== 摄像机（Billboard 用）====================
+
+        private Camera _mainCam;
+
         // ==================== 死亡/复活 ====================
 
         private long      _respawnAt   = 0;     // Unix毫秒时间戳
@@ -137,10 +150,38 @@ namespace DrscfZ.Survival
 
         // ==================== 初始化 ====================
 
+        private void Start()
+        {
+            _mainCam = Camera.main;
+        }
+
+        private void LateUpdate()
+        {
+            // HPBarCanvas 是根对象子节点，动画的根节点旋转会带动其世界坐标偏移。
+            // 在 LateUpdate 中同时覆写世界位置（锁定到脚底正上方）和旋转（Billboard），彻底解耦动画影响。
+            if (_hpBarCanvas != null && _hpBarCanvas.gameObject.activeSelf)
+            {
+                if (_mainCam == null) _mainCam = Camera.main;
+                // 位置：始终在根节点（脚底）正上方固定高度
+                _hpBarCanvas.position = transform.position + Vector3.up * _hpBarHeightOffset;
+                // 旋转：始终面向摄像机
+                if (_mainCam != null)
+                    _hpBarCanvas.rotation = Quaternion.LookRotation(
+                        _hpBarCanvas.position - _mainCam.transform.position);
+            }
+        }
+
         private void Awake()
         {
             if (_visual == null) _visual = GetComponent<WorkerVisual>();
             if (_bubble == null) _bubble = GetComponentInChildren<WorkerBubble>(true);
+
+            // 最早时机：强制隐藏 HPBarCanvas（白天 / 未初始化状态下不应显示任何血条方块）
+            // 优先使用 Inspector 绑定的引用，否则运行时查找
+            if (_hpBarCanvas == null)
+                _hpBarCanvas = transform.Find("HPBarCanvas");
+            if (_hpBarCanvas != null)
+                _hpBarCanvas.gameObject.SetActive(false);
 
             // T010：绑定子对象 CowWorker.Body 上的 Animator（Body 由 FixWorkerMesh 挂载）
             _animator = GetComponentInChildren<Animator>(true);
@@ -196,8 +237,23 @@ namespace DrscfZ.Survival
         /// <summary>更新矿工血量显示（由服务器 worker_hp 消息驱动）</summary>
         public void SetHp(int current, int max)
         {
+            _hpBarTargetFill = max > 0 ? Mathf.Clamp01((float)current / max) : 1f;
+            // 颜色随血量变化
             if (_hpFillImage != null)
-                _hpFillImage.fillAmount = max > 0 ? Mathf.Clamp01((float)current / max) : 1f;
+            {
+                float ratio = _hpBarTargetFill;
+                UnityEngine.Color c = ratio > 0.5f
+                    ? UnityEngine.Color.Lerp(_hpColorMid, _hpColorFull, (ratio - 0.5f) * 2f)
+                    : UnityEngine.Color.Lerp(_hpColorLow, _hpColorMid, ratio * 2f);
+                _hpFillImage.color = c;
+            }
+        }
+
+        /// <summary>每帧平滑推进血条 fillAmount（在 Update 中调用）</summary>
+        private void UpdateHpBarSmooth()
+        {
+            if (_hpFillImage == null) return;
+            _hpFillImage.fillAmount = Mathf.Lerp(_hpFillImage.fillAmount, _hpBarTargetFill, Time.deltaTime * 10f);
         }
 
         // ==================== Update 主循环 ====================
@@ -216,6 +272,8 @@ namespace DrscfZ.Survival
                     break;
                 // Move 和 Special/Frozen 完全由协程驱动，Update不处理
             }
+            // 血条平滑动画（每帧推进，无论状态）
+            UpdateHpBarSmooth();
         }
 
         private void UpdateIdle()
@@ -615,7 +673,7 @@ namespace DrscfZ.Survival
             TransitionTo(State.Special);
         }
 
-        /// <summary>触发Frozen状态（魔法镜），30秒后恢复原状态</summary>
+        /// <summary>触发Frozen状态，30秒后恢复原状态</summary>
         public void TriggerFrozen()
         {
             if (_state == State.Frozen) return;

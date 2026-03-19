@@ -54,7 +54,7 @@ namespace DrscfZ.Survival
             Invoke(nameof(RestoreNormalMaterial), duration);
         }
 
-        /// <summary>激活冻结状态（魔法镜），duration秒后自动恢复</summary>
+        /// <summary>激活冻结状态，duration秒后自动恢复</summary>
         public void ActivateFrozen(float duration)
         {
             CancelInvoke(nameof(RestoreNormalMaterial));

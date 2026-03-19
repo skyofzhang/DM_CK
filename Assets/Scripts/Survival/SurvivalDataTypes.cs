@@ -178,4 +178,47 @@ namespace DrscfZ.Survival
     {
         public string playerId;
     }
+
+    // ==================== 实时贡献榜（type=live_ranking，游戏进行中推送）====================
+
+    /// <summary>实时贡献榜单条记录</summary>
+    [Serializable]
+    public class LiveRankingEntry
+    {
+        public int    rank;
+        public string playerId;
+        public string playerName;
+        public int    contribution;
+    }
+
+    /// <summary>实时贡献榜（type=live_ranking）——贡献变化时服务器防抖推送</summary>
+    [Serializable]
+    public class LiveRankingData
+    {
+        public LiveRankingEntry[] rankings; // Top 5
+    }
+
+    // ==================== 本周贡献榜（type=weekly_ranking）====================
+
+    /// <summary>本周贡献榜单条记录</summary>
+    [Serializable]
+    public class WeeklyRankingEntry
+    {
+        public int    rank;
+        public string playerId;
+        public string nickname;
+        public int    weeklyScore;
+    }
+
+    /// <summary>
+    /// 本周贡献榜响应（type=weekly_ranking）
+    /// 服务器主动广播（每局结算后）及客户端主动请求（面板打开时）均使用此结构
+    /// </summary>
+    [Serializable]
+    public class WeeklyRankingData
+    {
+        public string               week;      // 周标识，如 "2026-W12"
+        public long                 resetAt;   // 下次重置时间（Unix ms，周一 00:00 UTC+8）
+        public WeeklyRankingEntry[] rankings;  // Top 10
+    }
 }

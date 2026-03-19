@@ -55,8 +55,9 @@ namespace DrscfZ.UI
         [Header("Ranking System (auto-inject Top3)")]
         [SerializeField] private RankingSystem _rankingSystem;
 
-        [Header("Restart")]
+        [Header("Restart / Actions")]
         [SerializeField] private Button _restartButton;
+        [SerializeField] private Button _btnViewRanking;  // "查看英雄榜"
 
         // Pre-collected from the RankingList hierarchy (populated in Awake)
         private List<GameObject> _rankEntries = new List<GameObject>();
@@ -65,6 +66,8 @@ namespace DrscfZ.UI
         {
             if (_restartButton != null)
                 _restartButton.onClick.AddListener(OnRestartClicked);
+            if (_btnViewRanking != null)
+                _btnViewRanking.onClick.AddListener(OnViewRankingClicked);
 
             // Collect pre-created rank entry GameObjects (B screen)
             if (_rankingListParent != null)
@@ -98,6 +101,9 @@ namespace DrscfZ.UI
 
         private IEnumerator PlaySettlementSequence(SettlementData data)
         {
+            // 序列开始时隐藏重新开始按钮，防止误触
+            if (_restartButton != null) _restartButton.gameObject.SetActive(false);
+
             // ── Rankings 注入：若外部未提供，从 RankingSystem 拉取 Top3 ──────
             if ((data.Rankings == null || data.Rankings.Count == 0) && _rankingSystem != null)
             {
@@ -124,6 +130,10 @@ namespace DrscfZ.UI
                 ShowScreenC(data);
                 yield return new WaitForSecondsRealtime(3f);
             }
+
+            // 序列播完后停留在最后一屏，显示"重新开始"按钮等待玩家操作
+            if (_restartButton != null) _restartButton.gameObject.SetActive(true);
+            Debug.Log("[SurvivalSettlementUI] 结算序列播完，等待玩家点击重新开始");
         }
 
         // ─── Screen A: result title ───────────────────────────────────────────
@@ -196,21 +206,18 @@ namespace DrscfZ.UI
             _screenB.SetActive(false);
             _screenC.SetActive(true);
 
-            // MVP 横幅（第1名姓名）
+            // MVP 横幅（第1名姓名）—— 始终更新，不依赖 top3Slots 是否绑定
             var mvp = data.Rankings[0];
             if (_mvpAnchorLineText)
                 _mvpAnchorLineText.text = $"本局MVP是 {mvp.Nickname}，感谢TA的付出！";
+            if (_mvpNameText)  _mvpNameText.text  = mvp.Nickname;
+            if (_mvpScoreText) _mvpScoreText.text = $"贡献值: {mvp.Score}";
 
             // Top3 槽位完整性校验
             bool slotsValid = _top3Slots != null && _top3Slots.Length >= 3;
             if (!slotsValid)
             {
-                Debug.LogError("[SurvivalSettlementUI] _top3Slots 未配置或长度不足（需3个元素）。" +
-                               "请在 Inspector 中将 3 个预创建的槽位 GameObject 拖拽赋值到 _top3Slots。" +
-                               "降级：使用旧版 MVP 单行显示。");
-                // 降级：旧版单行 MVP 显示
-                if (_mvpNameText)  _mvpNameText.text  = mvp.Nickname;
-                if (_mvpScoreText) _mvpScoreText.text = $"贡献值: {mvp.Score}";
+                Debug.LogWarning("[SurvivalSettlementUI] _top3Slots 未配置，跳过 Top3 显示");
                 return;
             }
 
@@ -218,27 +225,18 @@ namespace DrscfZ.UI
             for (int i = 0; i < 3; i++)
             {
                 var slot = _top3Slots[i];
-                if (slot == null)
-                {
-                    Debug.LogError($"[SurvivalSettlementUI] _top3Slots[{i}]（第{i + 1}名槽位）为 null。" +
-                                   $"请在 Inspector 中拖拽赋值对应的预创建 GameObject。");
-                    continue;
-                }
+                if (slot == null) continue;
 
                 bool hasData = i < data.Rankings.Count;
                 slot.SetActive(hasData);
-                if (!hasData) continue; // 参与人数不足，空位直接隐藏
+                if (!hasData) continue;
 
-                var texts = slot.GetComponentsInChildren<TextMeshProUGUI>(true);
-                if (texts.Length < 2)
-                {
-                    Debug.LogError($"[SurvivalSettlementUI] _top3Slots[{i}] 子对象中 TextMeshProUGUI 数量不足" +
-                                   $"（找到 {texts.Length} 个，需 ≥2：texts[0]=名字, texts[1]=积分）。");
-                    continue;
-                }
+                // 按名字查找子组件，避免因 TMP 数量/顺序不同导致下标错位
+                var nameComp  = slot.transform.Find("NameText")?.GetComponent<TextMeshProUGUI>();
+                var scoreComp = slot.transform.Find("ScoreText")?.GetComponent<TextMeshProUGUI>();
 
-                texts[0].text = data.Rankings[i].Nickname;
-                texts[1].text = $"贡献值: {data.Rankings[i].Score}";
+                if (nameComp  != null) nameComp.text  = data.Rankings[i].Nickname;
+                if (scoreComp != null) scoreComp.text = $"贡献值: {data.Rankings[i].Score}";
             }
         }
 
@@ -248,6 +246,25 @@ namespace DrscfZ.UI
         {
             gameObject.SetActive(false);
             SurvivalGameManager.Instance?.RequestResetGame();
+        }
+
+        // ─── View Ranking ─────────────────────────────────────────────────────
+
+        private void OnViewRankingClicked()
+        {
+            // 与大厅"排行榜"按钮打开同一个面板：SurvivalRankingUI.ShowPanel()
+            var rankingUI = FindObjectOfType<SurvivalRankingUI>(true);
+            if (rankingUI != null)
+            {
+                rankingUI.ShowPanel();
+                // 置顶，确保显示在结算面板之上
+                rankingUI.transform.SetAsLastSibling();
+                Debug.Log("[SurvivalSettlementUI] 打开本周贡献榜");
+            }
+            else
+            {
+                Debug.LogWarning("[SurvivalSettlementUI] 找不到 SurvivalRankingUI，请确认场景中存在该组件");
+            }
         }
     }
 

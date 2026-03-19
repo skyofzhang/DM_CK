@@ -30,6 +30,9 @@ namespace DrscfZ.Monster
         [Header("HP 条（World Space Canvas）")]
         [SerializeField] private UnityEngine.UI.Image _hpFillImage;
 
+        // 血条平滑动画
+        private float _hpBarTargetFill = 1f;
+
         // 运行时状态
         private int   _currentHp;
         private MonsterState _state = MonsterState.Spawning;
@@ -115,6 +118,8 @@ namespace DrscfZ.Monster
                 case MonsterState.Moving:   UpdateMoving();   break;
                 case MonsterState.Attacking: UpdateAttacking(); break;
             }
+            // 血条平滑动画（每帧推进）
+            UpdateHpBarSmooth();
         }
 
         private void UpdateMoving()
@@ -246,8 +251,13 @@ namespace DrscfZ.Monster
 
         private void UpdateHpBar()
         {
-            if (_hpFillImage != null)
-                _hpFillImage.fillAmount = _maxHp > 0 ? Mathf.Clamp01((float)_currentHp / _maxHp) : 0f;
+            _hpBarTargetFill = _maxHp > 0 ? Mathf.Clamp01((float)_currentHp / _maxHp) : 0f;
+        }
+
+        private void UpdateHpBarSmooth()
+        {
+            if (_hpFillImage == null) return;
+            _hpFillImage.fillAmount = Mathf.Lerp(_hpFillImage.fillAmount, _hpBarTargetFill, Time.deltaTime * 10f);
         }
 
         public void TakeDamage(float damage)

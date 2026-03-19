@@ -51,14 +51,14 @@ namespace DrscfZ.UI
             new Dictionary<string, (string, string)>
         {
             { "fairy_wand",      ("仙女棒",   "效率+5%") },
-            { "ability_pill",    ("能力药丸", "召唤守卫") },
+            { "ability_pill",    ("能力药丸", "全员效率+50%") },
             { "donut",           ("甜甜圈",   "城门+200 食物+100") },
             { "energy_battery",  ("能量电池", "炉温+30℃ 效率+30%") },
             { "battery",         ("能量电池", "炉温+30℃ 效率+30%") }, // 兼容旧ID
             { "mystery_airdrop", ("神秘空投", "超级补给") },
             { "mystery_drop",    ("神秘空投", "超级补给") },            // 兼容旧ID
             { "airdrop",         ("神秘空投", "超级补给") },
-            { "super_jet",       ("超能喷射", "效率×2 60s") },
+            { "love_explosion",  ("爱的爆炸", "AOE伤害 矿工全满 城门+200") },
             { "magic_candy",     ("魔法糖",   "效率+10%") },
             { "super_blaster",   ("超能暴射", "全场伤害+50%") },
             { "love_blast",      ("爱心暴射", "全场伤害+50%") },        // 兼容旧ID
@@ -490,11 +490,11 @@ namespace DrscfZ.UI
                 avatarRawImg.material = matInst;
             }
 
-            // 异步加载头像
+            // 异步加载头像：加载完成前保持透明，加载成功后才显示
+            avatarRawImg.texture = null;
+            avatarRawImg.color = Color.clear; // 加载前透明，避免色块
             if (!string.IsNullOrEmpty(gift.avatarUrl))
             {
-                avatarRawImg.texture = Texture2D.whiteTexture;
-                avatarRawImg.color = new Color(0.5f, 0.5f, 0.5f);
                 var loader = AvatarLoader.Instance;
                 if (loader != null)
                 {
@@ -508,11 +508,7 @@ namespace DrscfZ.UI
                     });
                 }
             }
-            else
-            {
-                avatarRawImg.texture = Texture2D.whiteTexture;
-                avatarRawImg.color = new Color(0.6f, 0.6f, 0.6f);
-            }
+            // 无 URL 时头像保持透明（不显示色块）
 
             // --- 名字行：玩家名 + 礼物中文名 ---
             // 通过 GiftInfo 字典获取中文礼物名，降级到 gift.giftName，再降级到 giftId
@@ -717,7 +713,7 @@ namespace DrscfZ.UI
                 case "donut":                           return 3;
                 case "energy_battery":                  return 4;
                 case "battery":                         return 4; // 兼容旧ID
-                case "super_jet":                       return 4;
+                case "love_explosion":                  return 5;
                 case "love_blast":                      return 5;
                 case "super_blaster":                   return 5; // tier5 别名
                 case "mystery_drop":                    return 6;

@@ -129,13 +129,12 @@ class SurvivalGameEngine {
     this._resourceSyncTimer = null; // 5s 全量同步
     this._waveTimers   = [];     // 夜晚波次定时器列表
     this._tickCounter  = 0;
+    this._liveRankingTimer = null; // 贡献变化后防抖推送实时榜（1.5s）
 
     // 礼物效果状态（策划案 §5.1 / §4.4）
-    this._playerEfficiencyBonus = {};  // playerId → 累计加成值（仙女棒 +0.05/个，上限 1.0 = +100%）
-    this._playerCloneBoost      = {};  // playerId → bool（超能喷射 ×2 持续60s）
-    this._globalEfficiencyBoost = 1.0; // 全局效率倍率（能量电池 1.3 持续60s）
-    this._globalEfficiencyBoostTimer = null;
-    this._frozenPlayers         = new Set(); // magic_mirror 冻结中的 playerId
+    this._playerEfficiencyBonus  = {};  // playerId → 累计加成值（仙女棒 +0.05/个，上限 1.0 = +100%）
+    this._playerTempBoost        = {};  // playerId → 倍率（能量电池 1.3，持续180s，per-player）
+    this._playerTempBoostTimers  = {};  // playerId → setTimeout handle
 
     // 666弹幕效果（策划案 §4.3）
     this.efficiency666Bonus = 1.0;   // 效率加成（1.15 = +15%）
@@ -190,9 +189,9 @@ class SurvivalGameEngine {
     //   normal → 500/天：标准
     //   hard  → 800/天：怪多资源紧，高风险高回报
     const presets = {
-      easy:   { hpMult: 0.6, cntMult: 0.6, decayMult: 0.15, initMult: 1.5, totalDays: 30, poolNightBase: 300 },
-      normal: { hpMult: 1.0, cntMult: 1.0, decayMult: 0.14, initMult: 1.0, totalDays: 50, poolNightBase: 500 },
-      hard:   { hpMult: 1.5, cntMult: 1.5, decayMult: 0.14, initMult: 0.8, totalDays: 70, poolNightBase: 800 },
+      easy:   { hpMult: 0.6, cntMult: 0.6, decayMult: 0.15, initMult: 1.5, totalDays: 30, poolNightBase: 300, dayDuration: 120, nightDuration: 120 },
+      normal: { hpMult: 1.0, cntMult: 1.0, decayMult: 0.14, initMult: 1.0, totalDays: 50, poolNightBase: 500, dayDuration: 120, nightDuration: 120 },
+      hard:   { hpMult: 1.5, cntMult: 1.5, decayMult: 0.14, initMult: 0.8, totalDays: 70, poolNightBase: 800, dayDuration: 120, nightDuration: 120 },
     };
     const p = presets[difficulty] || presets.normal;
 
@@ -202,8 +201,10 @@ class SurvivalGameEngine {
     // 积分池夜晚基础奖励
     this._poolNightBase    = p.poolNightBase;
 
-    // 总关卡天数
-    this.totalDays = p.totalDays;
+    // 总关卡天数 + 阶段时长（各难度独立配置）
+    this.totalDays     = p.totalDays;
+    this.dayDuration   = p.dayDuration;
+    this.nightDuration = p.nightDuration;
 
     // 按倍率调整资源衰减（在构造函数默认值基础上乘以倍率）
     this.foodDecayDay   = (this.config.foodDecayDay   ?? 0.05) * p.decayMult;
@@ -257,13 +258,10 @@ class SurvivalGameEngine {
 
     // 重置礼物效果状态
     this._playerEfficiencyBonus = {};
-    this._playerCloneBoost      = {};
-    this._globalEfficiencyBoost = 1.0;
-    if (this._globalEfficiencyBoostTimer) {
-      clearTimeout(this._globalEfficiencyBoostTimer);
-      this._globalEfficiencyBoostTimer = null;
-    }
-    this._frozenPlayers.clear();
+    this._playerTempBoost       = {};
+    // 清除所有临时 boost 定时器
+    for (const t of Object.values(this._playerTempBoostTimers || {})) clearTimeout(t);
+    this._playerTempBoostTimers = {};
 
     // 重置666 + 点赞 + 随机事件状态
     this.efficiency666Bonus  = 1.0;
@@ -367,19 +365,18 @@ class SurvivalGameEngine {
    * giftValue — 礼物价格，单位：分（1分=0.01元=0.1抖币）
    */
   handleGift(playerId, playerName, avatarUrl, giftId, giftValue, giftName) {
+    // 注册/更新送礼玩家的名字（排行榜结算时使用）
+    if (playerId && !this.playerNames[playerId])
+      this.playerNames[playerId] = playerName || playerId;
+
     // 优先按 douyin_id 查找，TBD 期间回退到按 price_fen 查找
     let gift = findGiftById(giftId);
     if (!gift) gift = getGift(giftId);          // 模拟/测试时用内部ID直接匹配
     if (!gift) gift = findGiftByPrice(giftValue);
 
-    // 完全未知的礼物：轻量兜底（小额食物加成）
+    // 完全未知的礼物：忽略，不产生任何游戏效果也不计入贡献/积分池
     if (!gift) {
-      const fallbackScore = Math.max(1, Math.floor(giftValue / 50));
-      this.food = Math.min(2000, this.food + fallbackScore);
-      this._trackContribution(playerId, giftValue);
-      this.scorePool += giftValue;  // 积分池：未知礼物按价值入池
-      this._broadcastResourceUpdate();
-      console.log(`[SurvivalEngine] unknown gift: ${giftName || giftId} (val=${giftValue}), fallback food bonus`);
+      console.log(`[SurvivalEngine] unknown gift ignored: ${giftName || giftId} (id=${giftId}, val=${giftValue})`);
       return;
     }
 
@@ -409,40 +406,13 @@ class SurvivalGameEngine {
       }
 
       case 'ability_pill': {
-        // 全局食物+50，召唤守卫（客户端动画；夜晚时对怪物造成额外伤害）
-        this.food = Math.min(2000, this.food + 50);
-        effects.addFood = 50;
-        effects.guardSummoned = true;
-        effects.guardDuration = 30;
-        // 夜晚：守卫立即对当前所有怪物造成一次 AOE 伤害
-        if (this.state === 'night' && this._activeMonsters.size > 0) {
-          const guardDmg = 30;
-          const killed = [];
-          for (const [mid, m] of this._activeMonsters) {
-            m.currentHp -= guardDmg;
-            if (m.currentHp <= 0) killed.push(mid);
-          }
-          for (const mid of killed) {
-            const m = this._activeMonsters.get(mid);
-            this._activeMonsters.delete(mid);
-            this._broadcast({ type: 'monster_died', data: { monsterId: mid, monsterType: m.type, killerId: 'guard' } });
-          }
-          effects.guardKilled = killed.length;
-        }
+        // 全员采矿效率+50%，持续30s（复用 efficiency666 系统）
+        this.efficiency666Bonus = Math.max(this.efficiency666Bonus, 1.5); // +50%，不叠加只刷新
+        this.efficiency666Timer = 30;
+        effects.globalEfficiencyBoost = 1.5;
+        effects.globalEfficiencyDuration = 30;
         needsResourceSync = true;
-        break;
-      }
-
-      case 'magic_mirror': {
-        // 随机冻结1名已加入玩家30秒（无法工作）
-        const playerIds = Object.keys(this.contributions).filter(id => id !== playerId);
-        if (playerIds.length > 0) {
-          const targetId = playerIds[Math.floor(Math.random() * playerIds.length)];
-          this._frozenPlayers.add(targetId);
-          effects.frozenPlayerId = targetId;
-          effects.freezeDuration = 30;
-          setTimeout(() => this._frozenPlayers.delete(targetId), 30000);
-        }
+        console.log(`[SurvivalEngine] ability_pill: global efficiency +50% for 30s by ${playerName}`);
         break;
       }
 
@@ -457,18 +427,17 @@ class SurvivalGameEngine {
       }
 
       case 'energy_battery': {
-        // 炉温+30℃，全局效率+30%（持续180秒，不叠加，刷新计时）
-        // M-NUMERIC：持续时间 60s → 180s，让中档礼物更有价值感
+        // 炉温+30℃（共享资源），发送者效率+30%（持续180秒，仅影响自己矿工，刷新计时）
         this.furnaceTemp = Math.min(this.maxTemp, this.furnaceTemp + 30);
-        this._globalEfficiencyBoost = 1.3;
-        if (this._globalEfficiencyBoostTimer) clearTimeout(this._globalEfficiencyBoostTimer);
-        this._globalEfficiencyBoostTimer = setTimeout(() => {
-          this._globalEfficiencyBoost = 1.0;
-          this._globalEfficiencyBoostTimer = null;
+        this._playerTempBoost[playerId] = 1.3;
+        if (this._playerTempBoostTimers[playerId]) clearTimeout(this._playerTempBoostTimers[playerId]);
+        this._playerTempBoostTimers[playerId] = setTimeout(() => {
+          this._playerTempBoost[playerId] = 1.0;
+          delete this._playerTempBoostTimers[playerId];
         }, 180000);
-        effects.addHeat             = 30;
-        effects.globalEfficiencyBoost = 1.3;
-        effects.boostDuration       = 180;
+        effects.addHeat           = 30;
+        effects.tempBoost         = 1.3;
+        effects.boostDuration     = 180;
         needsResourceSync = true;
         break;
       }
@@ -489,14 +458,38 @@ class SurvivalGameEngine {
         break;
       }
 
-      case 'super_jet': {
-        // 发送者召唤分身，效率×2（持续60秒，同一玩家不叠加：刷新计时）
-        this._playerCloneBoost[playerId] = true;
-        setTimeout(() => {
-          this._playerCloneBoost[playerId] = false;
-        }, 60000);
-        effects.clonePlayerId = playerId;
-        effects.cloneDuration = 60;
+      case 'love_explosion': {
+        // 爱的爆炸：全体怪物AOE伤害200、所有矿工HP全满恢复、城门+200HP
+        const aoeDmg = 200;
+        const killed = [];
+        for (const [mid, m] of this._activeMonsters) {
+          m.currentHp -= aoeDmg;
+          if (m.currentHp <= 0) killed.push(mid);
+        }
+        for (const mid of killed) {
+          const m = this._activeMonsters.get(mid);
+          this._activeMonsters.delete(mid);
+          this._broadcast({ type: 'monster_died', data: { monsterId: mid, monsterType: m.type, killerId: playerId } });
+        }
+        effects.aoeDamage     = aoeDmg;
+        effects.monstersKilled = killed.length;
+
+        // 只治疗/复活发送者自己的矿工（不影响其他人）
+        const myWorker = this._workerHp[playerId];
+        if (myWorker) {
+          if (myWorker.isDead) {
+            this._reviveWorker(playerId);
+            effects.revivedWorkers = [playerId];
+          } else {
+            myWorker.hp = myWorker.maxHp;
+            effects.healedWorkers = 1;
+          }
+        }
+
+        // 城门+200HP
+        this.gateHp = Math.min(this.gateMaxHp, this.gateHp + 200);
+        effects.addGateHp = 200;
+        needsResourceSync = true;
         break;
       }
     }
@@ -817,9 +810,19 @@ class SurvivalGameEngine {
     const tempDecay = baseTempDecay * (this.tempDecayMultiplier || 1.0);
     this.furnaceTemp = Math.max(this.minTemp, this.furnaceTemp - tempDecay);
 
+    // 矿石 → 自动修复城门（每2秒消耗1矿石，补5HP；仅在城门受损时生效）
+    // 设计意图：矿石让玩家挖矿有动力——矿越多，城门越能抵御怪物攻击
+    if (this._tickCounter % 10 === 0 && this.ore > 0 && this.gateHp < this.gateMaxHp) {
+      const repair = Math.min(5, this.gateMaxHp - this.gateHp);
+      this.gateHp = Math.min(this.gateMaxHp, this.gateHp + repair);
+      this.ore    = Math.max(0, this.ore - 1);
+    }
+
     // 取整便于显示
     this.food        = Math.round(this.food * 10) / 10;
     this.furnaceTemp = Math.round(this.furnaceTemp * 10) / 10;
+    this.gateHp      = Math.round(this.gateHp);
+    this.ore         = Math.round(this.ore);
   }
 
   _checkDefeat() {
@@ -843,21 +846,15 @@ class SurvivalGameEngine {
   _applyWorkEffect(commandId, playerId) {
     if (this.state !== 'day' && this.state !== 'night') return;
 
-    // 魔法镜冻结中：无法工作（策划案 §5.1 magic_mirror）
-    if (this._frozenPlayers.has(playerId)) return;
-
-    // 效率倍率计算（策划案 §4.4）
-    // playerBonus   = 1 + 仙女棒累计加成（最高 +100%）
-    // cloneBoost    = 2.0（超能喷射激活时）否则 1.0
-    // globalBoost   = 1.3（能量电池激活时）否则 1.0
-    // 综合上限 ×3.0
     // 综合效率倍率计算（策划案 §4.4）
+    // playerBonus：仙女棒永久累计加成（最高+100%）
+    // globalBoost：能量电池 per-player 临时加成（×1.3，持续180s）
+    // 综合上限 ×3.0
     const playerBonus      = 1.0 + (this._playerEfficiencyBonus[playerId] || 0); // 仙女棒加成
-    const cloneBoost       = this._playerCloneBoost[playerId] ? 2.0 : 1.0;       // 超能喷射分身
-    const globalBoost      = this._globalEfficiencyBoost;                         // 能量电池全局加成
+    const globalBoost      = this._playerTempBoost[playerId] || 1.0;             // 能量电池 per-player 加成
     const broadcasterBoost = this.broadcasterEfficiencyMultiplier || 1.0;         // 主播紧急加速
     const eff666Boost      = this.efficiency666Bonus || 1.0;                      // 666弹幕加成
-    const totalMult        = Math.min(3.0, playerBonus * cloneBoost * globalBoost * broadcasterBoost * eff666Boost);
+    const totalMult        = Math.min(3.0, playerBonus * globalBoost * broadcasterBoost * eff666Boost);
 
     // 工作效果：每次评论小幅增加资源（基础值 × 综合倍率）
     switch (commandId) {
@@ -1306,6 +1303,32 @@ class SurvivalGameEngine {
   _trackContribution(playerId, amount) {
     if (!playerId) return;
     this.contributions[playerId] = (this.contributions[playerId] || 0) + amount;
+    // 防抖：贡献变化后 1.5s 推送实时榜（避免每条弹幕都广播）
+    this._scheduleLiveRankingBroadcast();
+  }
+
+  /** 防抖推送实时贡献榜（1.5s 内多次变化只推一次） */
+  _scheduleLiveRankingBroadcast() {
+    if (this._liveRankingTimer) return; // 已有待推送定时器，无需重复
+    this._liveRankingTimer = setTimeout(() => {
+      this._liveRankingTimer = null;
+      this._broadcastLiveRanking();
+    }, 1500);
+  }
+
+  /** 广播当前局 Top5 实时贡献榜 */
+  _broadcastLiveRanking() {
+    if (this.state !== 'day' && this.state !== 'night') return;
+    const top5 = Object.entries(this.contributions)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5)
+      .map(([id, score], i) => ({
+        rank:        i + 1,
+        playerId:    id,
+        playerName:  this.playerNames[id] || id,
+        contribution: Math.round(score),
+      }));
+    this.broadcast({ type: 'live_ranking', timestamp: Date.now(), data: { rankings: top5 } });
   }
 
   /**
@@ -1337,13 +1360,14 @@ class SurvivalGameEngine {
   _clearAllTimers() {
     this._clearTick();
     this._clearNightWaves();
-    if (this._globalEfficiencyBoostTimer) {
-      clearTimeout(this._globalEfficiencyBoostTimer);
-      this._globalEfficiencyBoostTimer = null;
-    }
+    // 清除 per-player 临时 boost 定时器（能量电池）
+    for (const t of Object.values(this._playerTempBoostTimers || {})) clearTimeout(t);
+    this._playerTempBoostTimers = {};
     // 清除随机事件超时
     for (const t of this._randomEventTimers) clearTimeout(t);
     this._randomEventTimers = [];
+    // 清除实时榜防抖定时器
+    if (this._liveRankingTimer) { clearTimeout(this._liveRankingTimer); this._liveRankingTimer = null; }
   }
 }
 

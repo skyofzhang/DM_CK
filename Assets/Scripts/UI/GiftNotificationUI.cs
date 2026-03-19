@@ -648,22 +648,20 @@ namespace DrscfZ.UI
             "ability_pill"    => "能力药丸",
             "donut"           => "甜甜圈",
             "energy_battery"  => "能量电池",
+            "love_explosion"  => "爱的爆炸",
             "mystery_airdrop" => "神秘空投",
-            "super_jet"       => "超能喷射",
-            "magic_mirror"    => "魔法镜",
-            _                 => giftId   // 未知礼物直接显示ID
+            _                 => giftId
         };
 
         /// <summary>礼物ID → 简短效果描述（用于横幅右侧提示）</summary>
         private static string GetGiftEffect(string giftId) => giftId switch
         {
             "fairy_wand"      => "[效率+]",
-            "ability_pill"    => "[召唤守卫]",
+            "ability_pill"    => "[全员效率+50% 30s]",
             "donut"           => "[食物+100 城门+200]",
             "energy_battery"  => "[炉温+30]",
+            "love_explosion"  => "[AOE伤害 矿工全满 城门+200]",
             "mystery_airdrop" => "[超级补给!]",
-            "super_jet"       => "[效率x2 / 60s]",
-            "magic_mirror"    => "[全员冰冻10s]",
             _                 => ""
         };
 

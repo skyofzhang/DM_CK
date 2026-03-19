@@ -6,7 +6,8 @@
  * 每个主播直播间对应一个独立的 SurvivalRoom + SurvivalGameEngine
  */
 
-const SurvivalGameEngine = require('./SurvivalGameEngine');
+const SurvivalGameEngine  = require('./SurvivalGameEngine');
+const WeeklyRankingStore  = require('./WeeklyRankingStore');
 
 class SurvivalRoom {
   /**
@@ -35,6 +36,9 @@ class SurvivalRoom {
       gameConfig,
       (msg) => this.broadcast(msg)
     );
+
+    // 本周贡献榜持久化存储（每周日23:59→周一00:00 UTC+8 自动重置）
+    this.weeklyRanking = new WeeklyRankingStore(roomId);
 
     // 暂停超时（30分钟后销毁）
     this._pauseTimer = null;
@@ -185,6 +189,17 @@ class SurvivalRoom {
   // ==================== 广播 ====================
 
   broadcast(message) {
+    // ── 局结束时更新本周贡献榜，并广播最新周榜数据 ──────────────────
+    if (message && message.type === 'survival_game_ended' && message.data && message.data.rankings) {
+      try {
+        this.weeklyRanking.addGameResult(message.data.rankings);
+        // 延迟 500ms 广播周榜（等本局结算消息先到客户端）
+        setTimeout(() => this._broadcastWeeklyRanking(), 500);
+      } catch (e) {
+        console.error(`[SurvivalRoom:${this.roomId}] WeeklyRanking update error: ${e.message}`);
+      }
+    }
+
     if (this.clients.size === 0) return;
     message.roomId = this.roomId;
     const data = JSON.stringify(message);
@@ -196,6 +211,25 @@ class SurvivalRoom {
         console.warn(`[SurvivalRoom:${this.roomId}] Broadcast error: ${e.message}`);
       }
     }
+  }
+
+  /**
+   * 向所有客户端广播最新本周贡献榜
+   */
+  _broadcastWeeklyRanking() {
+    const payload = this.weeklyRanking.getPayload(10);
+    const msg = JSON.stringify({
+      type:      'weekly_ranking',
+      roomId:    this.roomId,
+      timestamp: Date.now(),
+      data:      payload,
+    });
+    for (const client of this.clients) {
+      try {
+        if (client.readyState === 1) client.send(msg);
+      } catch (e) { }
+    }
+    console.log(`[SurvivalRoom:${this.roomId}] 本周榜已广播，week=${payload.week}，条数=${payload.rankings.length}`);
   }
 
   _sendStateToClient(ws) {
@@ -245,6 +279,21 @@ class SurvivalRoom {
           this._runSimulation();
         }
         break;
+      case 'get_weekly_ranking':
+        // 客户端请求本周贡献榜（面板打开时触发）
+        try {
+          const payload = this.weeklyRanking.getPayload(10);
+          ws.send(JSON.stringify({
+            type:      'weekly_ranking',
+            roomId:    this.roomId,
+            timestamp: Date.now(),
+            data:      payload,
+          }));
+        } catch (e) {
+          console.error(`[SurvivalRoom:${this.roomId}] get_weekly_ranking error: ${e.message}`);
+        }
+        break;
+
       case 'leave_room':
         // 客户端主动离开，忽略（连接断开由 WebSocket close 事件处理）
         break;
@@ -534,9 +583,10 @@ class SurvivalRoom {
 
     // ── 白天增益礼物（每15秒，仅白天触发）──────────────────────────
     const dayGiftPool = [
-      { id: 'fairy_wand',   val: 1   },
-      { id: 'ability_pill', val: 100 },
-      { id: 'donut',        val: 520 },
+      { id: 'fairy_wand',   val: 1    },
+      { id: 'ability_pill', val: 100  },
+      { id: 'donut',        val: 520  },
+      { id: 'energy_battery', val: 990 },
     ];
     this._simDayGiftInterval = setInterval(() => {
       if (!this.survivalEngine || this.survivalEngine.state !== 'day') return;
@@ -547,7 +597,9 @@ class SurvivalRoom {
 
     // ── 夜晚战斗礼物（每12秒，仅夜晚触发）──────────────────────────
     const nightGiftPool = [
+      { id: 'ability_pill',    val: 100  },
       { id: 'energy_battery',  val: 990  },
+      { id: 'love_explosion',  val: 1990 },
       { id: 'mystery_airdrop', val: 5200 },
     ];
     this._simNightGiftInterval = setInterval(() => {

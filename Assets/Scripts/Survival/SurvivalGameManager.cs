@@ -62,6 +62,8 @@ namespace DrscfZ.Survival
         public event Action<SurvivalGameEndedData> OnGameEnded;
         public event Action<string> OnPlayerActivityMessage;     // 弹幕消息文本
         public event Action<int> OnScorePoolUpdated;             // 积分池变动（实时推送）
+        public event Action<WeeklyRankingData> OnWeeklyRankingReceived; // 本周贡献榜（服务器推送）
+        public event Action<LiveRankingData>   OnLiveRankingReceived;   // 实时贡献榜（游戏中防抖推送）
 
         // 贡献追踪
         private System.Collections.Generic.Dictionary<string, float> _contributions
@@ -125,6 +127,13 @@ namespace DrscfZ.Survival
 
         private void HandleMessageInternal(string type, string dataJson)
         {
+            // 结算/空闲状态下只处理连接确认和周榜，忽略所有游戏内消息
+            // 避免结算期间礼物效果、昼夜切换、怪物等继续触发
+            if (_state == SurvivalState.Settlement || _state == SurvivalState.Idle)
+            {
+                if (type != "join_room_confirm" && type != "weekly_ranking") return;
+            }
+
             switch (type)
             {
                 // ----- 连接确认：Connecting → Waiting -----
@@ -151,6 +160,8 @@ namespace DrscfZ.Survival
 
                 // ----- 昼夜切换 -----
                 case "phase_changed":
+                    // 结算/空闲状态下忽略昼夜切换消息，避免计时器继续跑
+                    if (_state == SurvivalState.Settlement || _state == SurvivalState.Idle) break;
                     var pc = JsonUtility.FromJson<PhaseChangedData>(dataJson);
                     dayNightManager?.HandlePhaseChanged(pc);
                     // 黑夜开始 → 全员防守；白天开始 → 回工位
@@ -260,6 +271,18 @@ namespace DrscfZ.Survival
                     break;
                 case "boss_appeared":
                     HandleBossAppeared(type, dataJson);
+                    break;
+
+                // ----- 本周贡献榜（局结束后服务器推送 / 客户端主动请求）-----
+                case "weekly_ranking":
+                    var wr = JsonUtility.FromJson<WeeklyRankingData>(dataJson);
+                    if (wr != null) OnWeeklyRankingReceived?.Invoke(wr);
+                    break;
+
+                // ----- 实时贡献榜（游戏进行中，贡献变化后服务器防抖推送）-----
+                case "live_ranking":
+                    var lr = JsonUtility.FromJson<LiveRankingData>(dataJson);
+                    if (lr != null) OnLiveRankingReceived?.Invoke(lr);
                     break;
             }
         }
@@ -621,27 +644,15 @@ namespace DrscfZ.Survival
             if (_settlementUI != null)
                 _settlementUI.gameObject.SetActive(true);
             _settlementUI?.ShowSettlement(data);
-
-            // 结算序列总时长：A屏3s + B屏5s + C屏3s + 缓冲3s = 14s
-            // 自动返回大厅（若玩家未手动点击重启）
-            yield return new WaitForSeconds(14f);
-            if (_state == SurvivalState.Settlement)
-            {
-                Debug.Log("[SGM] 结算序列结束，自动返回大厅");
-                if (_settlementUI != null)
-                    _settlementUI.gameObject.SetActive(false);
-                RequestReturnFromSettlement();
-            }
+            // 结算界面停留，直到玩家点击"重新开始"按钮手动关闭
+            // _restartButton → OnRestartClicked → RequestReturnFromSettlement()
         }
 
         private IEnumerator DelayedSettlement(float delay)
         {
             yield return new WaitForSeconds(delay);
             ChangeState(SurvivalState.Settlement);
-            // 无UI时也自动返回大厅
-            yield return new WaitForSeconds(14f);
-            if (_state == SurvivalState.Settlement)
-                RequestReturnFromSettlement();
+            // 无UI时停留在结算状态，玩家通过外部方式（如服务器重置）返回大厅
         }
 
         /// <summary>
@@ -650,12 +661,13 @@ namespace DrscfZ.Survival
         public void RequestReturnFromSettlement()
         {
             if (_state != SurvivalState.Settlement) return;
-            _returnToWaiting = true;   // 结算后回到 Waiting（而非 Idle）
+            // 结算后回 Idle（大厅），让用户点"开始游戏"重新选难度开局
+            // 不设 _returnToWaiting = true，避免进入 Waiting 后两个 UI 都不显示
             IsEnteringScene = false;
             ChangeState(SurvivalState.Loading);
             NetworkManager.Instance?.SendMessage("reset_game");
             _loadingTimeoutCoroutine = StartCoroutine(LoadingTimeout());
-            Debug.Log("[SGM] 结算结束→Loading，已发送 reset_game，结束后将回到 Waiting...");
+            Debug.Log("[SGM] 结算结束→Loading，已发送 reset_game，结束后回到 Idle 大厅...");
         }
 
         // ==================== 工具 ====================

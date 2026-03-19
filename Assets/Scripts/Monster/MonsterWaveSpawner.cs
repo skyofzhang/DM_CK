@@ -177,17 +177,10 @@ namespace DrscfZ.Monster
             }
             else
             {
-                // 占位：深红色Cube，体型大
-                go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                // Boss Prefab 缺失 fallback：用空 GameObject 挂载 MonsterController（不显示色块）
+                go = new GameObject("Boss_Placeholder");
                 go.transform.position = spawnPos;
-                go.transform.localScale = new Vector3(2f, 3f, 2f);
-                var rend = go.GetComponent<Renderer>();
-                if (rend != null)
-                {
-                    var mat = new Material(Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard"));
-                    mat.color = new Color(0.6f, 0f, 0f);
-                    rend.material = mat;
-                }
+                Debug.LogWarning("[WaveSpawner] Boss prefab missing! Using invisible placeholder.");
             }
 
             string bossId = $"boss_{day}_{UnityEngine.Random.Range(1000, 9999)}";
@@ -223,17 +216,10 @@ namespace DrscfZ.Monster
             }
             else
             {
-                // 占位：红色 Cube
-                go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                // Monster Prefab 缺失 fallback：用空 GameObject 挂载 MonsterController（不显示色块）
+                go = new GameObject("Monster_Placeholder");
                 go.transform.position = spawnPos;
-                go.transform.localScale = new Vector3(0.8f, 1.2f, 0.8f);
-                var rend = go.GetComponent<Renderer>();
-                if (rend != null)
-                {
-                    var mat = new Material(Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard"));
-                    mat.color = new Color(0.8f, 0.15f, 0.15f);
-                    rend.material = mat;
-                }
+                Debug.LogWarning("[WaveSpawner] Monster prefab missing! Using invisible placeholder.");
             }
 
             string monsterId = $"{cfg.monsterId}_{_activeMonsters.Count}_{UnityEngine.Random.Range(1000,9999)}";

@@ -347,10 +347,9 @@ namespace DrscfZ.Survival
 
         // ==================== 公共接口 ====================
 
-        /// <summary>新玩家加入 → 激活一个空闲Worker，分配待机位</summary>
+        /// <summary>新玩家加入 → 激活一个空闲Worker，分配待机位（无人数上限）</summary>
         public void SpawnWorker(SurvivalPlayerJoinedData data)
         {
-            if (_activeWorkers.Count >= MAX_WORKERS) return;
 
             WorkerController worker = GetPooledWorker();
             if (worker == null)
@@ -379,111 +378,80 @@ namespace DrscfZ.Survival
         }
 
         /// <summary>
-        /// 分配工作任务（T008：就近Worker + 就近可用槽位）。
-        /// 一个指令派遣1-3名就近的空闲Worker前往对应工位槽。
+        /// 分配工作任务：只派遣发出指令的玩家自己的 Worker。
+        /// 每个玩家只能控制自己的矿工，不影响其他人的矿工。
         /// </summary>
         public void AssignWork(WorkCommandData cmd)
         {
             if (_activeWorkers.Count == 0) return;
 
-            // 获取该cmdType下所有可用（未占用）的槽位索引
-            var availableSlots = GetAvailableSlotIndices(cmd.commandId);
+            // 找到发指令玩家对应的 Worker
+            var worker = FindWorkerByPlayerId(cmd.playerId);
+            if (worker == null)
+            {
+                Debug.Log($"[WorkerManager] AssignWork: playerId={cmd.playerId} 未找到对应Worker，忽略");
+                return;
+            }
+            if (worker.IsDead)
+            {
+                Debug.Log($"[WorkerManager] AssignWork: {worker.PlayerName} 已死亡，忽略指令");
+                return;
+            }
+
+            // 获取该 cmdType 下可用槽位（不含该 Worker 自己当前占用的槽）
+            var availableSlots = GetAvailableSlotIndicesExcluding(cmd.commandId, worker);
             if (availableSlots.Count == 0)
             {
-                Debug.Log($"[WorkerManager] cmdType={cmd.commandId} 所有槽位已满，忽略本次指令");
+                Debug.Log($"[WorkerManager] AssignWork: cmdType={cmd.commandId} 所有槽位已满，忽略");
                 return;
             }
 
-            // 获取所有空闲Worker（T008：就近分配，非随机）
-            var idleWorkers = GetIdleWorkers();
-            if (idleWorkers.Count == 0)
-            {
-                Debug.Log($"[WorkerManager] 无空闲 Worker，忽略指令 cmdType={cmd.commandId}");
-                return;
-            }
+            // 释放该 Worker 之前占用的槽位
+            if (_workerToSlot.TryGetValue(worker, out int oldSlotIdx)
+                && _stationSlots != null && oldSlotIdx >= 0 && oldSlotIdx < _stationSlots.Length)
+                _stationSlots[oldSlotIdx].occupyingPlayerId = "";
 
-            // 派遣数量：min(3, 空闲Worker数, 可用槽位数)
-            int dispatchCount = Mathf.Min(3, Mathf.Min(idleWorkers.Count, availableSlots.Count));
+            // 找距离该 Worker 最近的可用槽位
+            int bestSlotIdx = FindNearestSlotToWorker(worker, availableSlots);
+            StationSlot slot = _stationSlots[bestSlotIdx];
 
-            for (int i = 0; i < dispatchCount; i++)
-            {
-                if (availableSlots.Count == 0) break;
+            slot.occupyingPlayerId = worker.PlayerId;
+            _workerToSlot[worker]  = bestSlotIdx;
+            worker.AssignWork(cmd.commandId, slot.position);
 
-                // T008：找距离最近空闲Worker和最近可用槽的最优配对
-                int    bestWorkerIdx = FindNearestWorkerToSlots(idleWorkers, availableSlots);
-                int    bestSlotIdx   = FindNearestSlotToWorker(idleWorkers[bestWorkerIdx], availableSlots);
-
-                WorkerController assignedWorker = idleWorkers[bestWorkerIdx];
-                StationSlot      assignedSlot   = _stationSlots[bestSlotIdx];
-
-                // 标记槽位占用
-                assignedSlot.occupyingPlayerId = assignedWorker.PlayerId;
-                _workerToSlot[assignedWorker]  = bestSlotIdx;
-
-                // 派遣Worker
-                assignedWorker.AssignWork(cmd.commandId, assignedSlot.position);
-
-                // 从候选池移除，避免重复选取
-                idleWorkers.RemoveAt(bestWorkerIdx);
-                availableSlots.Remove(bestSlotIdx);
-
-                Debug.Log($"[WorkerManager] 派遣 {assignedWorker.PlayerName} → 工位[{bestSlotIdx}]"
-                        + $" cmdType={cmd.commandId} pos={assignedSlot.position}");
-            }
+            Debug.Log($"[WorkerManager] {worker.PlayerName} 自主派遣 → 工位[{bestSlotIdx}]"
+                    + $" cmdType={cmd.commandId} pos={slot.position}");
         }
 
         /// <summary>
-        /// 怪物出现时，让闲置的 Worker 自动攻击守卫。
-        /// cmd=6 来源：自动触发（不覆盖已在工作中的 Worker）。
-        /// 使用 StationSlot 槽位系统分配 cmd=6 的工位，与手动弹幕"6"指令共用同一套槽位，不冲突。
+        /// 怪物出现时，全员（非死亡）Worker 全部参与防守攻击，不受工位槽数量限制。
+        /// 与 EnterNightDefense 逻辑一致，确保无论 phase_changed 是否先到，
+        /// 怪物真正出现时所有矿工都投入战斗。
         /// </summary>
         public void OnMonstersAppear()
         {
             if (_activeWorkers.Count == 0) return;
 
-            // 获取 cmd=6 下所有可用（未占用）槽位
-            var availableSlots = GetAvailableSlotIndices(6);
-            if (availableSlots.Count == 0)
+            // 清除所有槽位占用，允许重新分配
+            if (_stationSlots != null)
+                foreach (var slot in _stationSlots)
+                    slot.occupyingPlayerId = "";
+            _workerToSlot.Clear();
+
+            // 统计参战人数（用于均匀铺开站位）
+            int total = 0;
+            foreach (var w in _activeWorkers)
+                if (w != null && !w.IsDead) total++;
+
+            int assigned = 0;
+            foreach (var w in _activeWorkers)
             {
-                Debug.Log("[WorkerManager] OnMonstersAppear: cmd=6 所有槽位已满，无需额外分配");
-                return;
+                if (w == null || w.IsDead) continue;
+                w.AssignWork(6, GetDefensePosition(assigned, total));
+                w.SetHpBarVisible(true);
+                assigned++;
             }
-
-            // 只让处于 Idle 状态（IsWorking==false）的 Worker 自动攻击，不打断已在工作的 Worker
-            var idleWorkers = GetIdleWorkers();
-            if (idleWorkers.Count == 0)
-            {
-                Debug.Log("[WorkerManager] OnMonstersAppear: 无空闲 Worker，跳过自动攻击");
-                return;
-            }
-
-            // 派遣数量：min(空闲Worker数, 可用槽位数)，不限制3个上限（怪物出现时尽量全员参战）
-            int dispatchCount = Mathf.Min(idleWorkers.Count, availableSlots.Count);
-
-            for (int i = 0; i < dispatchCount; i++)
-            {
-                if (availableSlots.Count == 0 || idleWorkers.Count == 0) break;
-
-                // 就近Worker + 就近槽位匹配（复用 T008 算法）
-                int bestWorkerIdx = FindNearestWorkerToSlots(idleWorkers, availableSlots);
-                int bestSlotIdx   = FindNearestSlotToWorker(idleWorkers[bestWorkerIdx], availableSlots);
-
-                WorkerController assignedWorker = idleWorkers[bestWorkerIdx];
-                StationSlot      assignedSlot   = _stationSlots[bestSlotIdx];
-
-                // 标记槽位占用
-                assignedSlot.occupyingPlayerId = assignedWorker.PlayerId;
-                _workerToSlot[assignedWorker]  = bestSlotIdx;
-
-                // 派遣 Worker 执行 cmd=6（攻击）
-                assignedWorker.AssignWork(6, assignedSlot.position);
-
-                idleWorkers.RemoveAt(bestWorkerIdx);
-                availableSlots.Remove(bestSlotIdx);
-
-                Debug.Log($"[WorkerManager] OnMonstersAppear: 派遣 {assignedWorker.PlayerName}"
-                        + $" → 工位[{bestSlotIdx}] pos={assignedSlot.position}");
-            }
+            Debug.Log($"[WorkerManager] OnMonstersAppear: {assigned}/{_activeWorkers.Count} 名Worker全员参战");
         }
 
         // ==================== 黑夜防守模式 ====================
@@ -496,26 +464,22 @@ namespace DrscfZ.Survival
         {
             if (_activeWorkers.Count == 0) return;
 
-            // 收集 cmd=6 工位坐标（循环分配给全员）
-            var defensePositions = new List<Vector3>();
-            if (_stationSlots != null)
-                foreach (var s in _stationSlots)
-                    if (s.cmdType == 6) defensePositions.Add(s.position);
-            if (defensePositions.Count == 0)
-                defensePositions.Add(new Vector3(0f, 0f, -3f)); // 城门前兜底
-
             // 清除所有槽位占用（防止旧工位阻塞重分配）
             if (_stationSlots != null)
                 foreach (var slot in _stationSlots)
                     slot.occupyingPlayerId = "";
             _workerToSlot.Clear();
 
+            // 统计参战人数（用于均匀铺开站位）
+            int total = 0;
+            foreach (var w in _activeWorkers)
+                if (w != null && !w.IsDead) total++;
+
             int assigned = 0;
             foreach (var w in _activeWorkers)
             {
                 if (w == null || w.IsDead) continue;
-                Vector3 defPos = defensePositions[assigned % defensePositions.Count];
-                w.AssignWork(6, defPos);
+                w.AssignWork(6, GetDefensePosition(assigned, total));
                 w.SetHpBarVisible(true);   // 夜晚显示矿工血条
                 assigned++;
             }
@@ -584,7 +548,7 @@ namespace DrscfZ.Survival
                 if (w != null) w.TriggerSpecial();
         }
 
-        /// <summary>触发全体Worker冻结（魔法镜礼物）</summary>
+        /// <summary>触发全体Worker冻结（捣乱礼物预留接口）</summary>
         public void ActivateAllWorkersFrozen(float duration = 30f)
         {
             foreach (var w in _activeWorkers)
@@ -635,9 +599,35 @@ namespace DrscfZ.Survival
         private Vector3 GetIdlePosition(int workerIndex)
         {
             Vector3 center = _fortressCenter != null ? _fortressCenter.position : Vector3.zero;
-            float angle = (workerIndex / (float)MAX_WORKERS) * 360f * Mathf.Deg2Rad;
+            // 圆圈槽数至少 MAX_WORKERS，超出时动态扩展，避免多人时位置重叠
+            int totalSlots = Mathf.Max(MAX_WORKERS, workerIndex + 1);
+            float angle = (workerIndex / (float)totalSlots) * 360f * Mathf.Deg2Rad;
             return center + new Vector3(Mathf.Cos(angle) * _idleRadius, 0f,
                                         Mathf.Sin(angle) * _idleRadius);
+        }
+
+        /// <summary>
+        /// 根据参战人数为第 index 名 Worker 生成唯一防守站位。
+        /// 沿城门前线横向均匀铺开，每人间距 0.8m，确保无论人数多少都不重叠。
+        /// </summary>
+        private Vector3 GetDefensePosition(int index, int total)
+        {
+            // 城门前防守基准点：从 cmd=6 工位槽中心推算，无槽则用默认坐标
+            Vector3 gateCenter = new Vector3(0f, 0f, -3f);
+            if (_stationSlots != null)
+            {
+                Vector3 sum = Vector3.zero;
+                int cnt = 0;
+                foreach (var s in _stationSlots)
+                    if (s.cmdType == 6) { sum += s.position; cnt++; }
+                if (cnt > 0) gateCenter = sum / cnt;
+            }
+
+            const float SPACING = 0.8f;
+            // 居中排列：总宽度 = (total-1)*SPACING，index 0 从最左端开始
+            float totalWidth = (total - 1) * SPACING;
+            float offsetX = index * SPACING - totalWidth * 0.5f;
+            return new Vector3(gateCenter.x + offsetX, gateCenter.y, gateCenter.z);
         }
 
         /// <summary>获取该cmdType下所有未占用的槽位索引列表</summary>
@@ -648,6 +638,26 @@ namespace DrscfZ.Survival
             for (int i = 0; i < _stationSlots.Length; i++)
             {
                 if (_stationSlots[i].cmdType == cmdType && !_stationSlots[i].IsOccupied)
+                    result.Add(i);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// 获取该cmdType下所有未占用的槽位索引，允许该Worker自己当前占用的槽被重新选中。
+        /// 用于玩家切换工作指令时不被自己的旧槽阻塞。
+        /// </summary>
+        private List<int> GetAvailableSlotIndicesExcluding(int cmdType, WorkerController excludeWorker)
+        {
+            var result = new List<int>();
+            if (_stationSlots == null) return result;
+            string excludeId = excludeWorker?.PlayerId ?? "";
+            for (int i = 0; i < _stationSlots.Length; i++)
+            {
+                var slot = _stationSlots[i];
+                if (slot.cmdType != cmdType) continue;
+                // 空闲，或当前占用者就是该 Worker 本人（切换工作时允许重选自己的槽）
+                if (!slot.IsOccupied || slot.occupyingPlayerId == excludeId)
                     result.Add(i);
             }
             return result;

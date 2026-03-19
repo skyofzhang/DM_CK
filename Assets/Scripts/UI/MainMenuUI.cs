@@ -169,14 +169,15 @@ namespace DrscfZ.UI
         /// </summary>
         private void OnLeaderboardClicked()
         {
-            var rankingPanel = FindObjectOfType<RankingPanelUI>(true); // 包含 inactive 对象
-            if (rankingPanel != null)
+            // 使用 SurvivalRankingUI（本周贡献榜，与结算界面"查看英雄榜"相同）
+            var rankingUI = FindObjectOfType<SurvivalRankingUI>(true);
+            if (rankingUI != null)
             {
-                rankingPanel.Show();
+                rankingUI.ShowPanel();
             }
             else
             {
-                Debug.LogWarning("[MainMenuUI] RankingPanelUI not found");
+                Debug.LogWarning("[MainMenuUI] SurvivalRankingUI not found");
             }
         }
 
