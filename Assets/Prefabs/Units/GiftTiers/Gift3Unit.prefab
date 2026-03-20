@@ -329,7 +329,7 @@ SkinnedMeshRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1947190951751152914}
   m_Enabled: 1
-  m_CastShadows: 1
+  m_CastShadows: 0
   m_ReceiveShadows: 1
   m_DynamicOccludee: 1
   m_StaticShadowCaster: 0
@@ -1181,6 +1181,7 @@ GameObject:
   - component: {fileID: 2929250586205334987}
   - component: {fileID: 8626664271019324106}
   - component: {fileID: 5827116055179975944}
+  - component: {fileID: 934254686304750335}
   m_Layer: 0
   m_Name: Gift3Unit
   m_TagString: Untagged
@@ -1216,7 +1217,7 @@ Animator:
   m_Enabled: 1
   m_Avatar: {fileID: 9000000, guid: 7b721196e9436a447b2c98402a4335a2, type: 3}
   m_Controller: {fileID: 9100000, guid: 9300b0dad9693624993c93d2996ecac7, type: 2}
-  m_CullingMode: 1
+  m_CullingMode: 2
   m_UpdateMode: 0
   m_ApplyRootMotion: 0
   m_LinearVelocityBlending: 0
@@ -1319,5 +1320,46 @@ MonoBehaviour:
   tier4Tint: {r: 1, g: 0.85, b: 0.3, a: 1}
   tier5Tint: {r: 1, g: 0.5, b: 0.3, a: 1}
   tier6Tint: {r: 0.9, g: 0.7, b: 1, a: 1}
+  upgradeMaterials:
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
   breathAmplitude: 0.02
   breathSpeed: 0.8
+  haloHeightOffset: 0.35
+  haloBaseRadius: 0.45
+  haloRotateSpeed: 45
+  haloPulseSpeed: 1.5
+  haloPulseAmount: 0.1
+  haloAlpha: 0.85
+  haloFloatAmount: 0.03
+  haloFloatSpeed: 1.2
+  flashWidth: 0.8
+  flashHeightMultiplier: 3
+  flashDuration: 1.2
+--- !u!205 &934254686304750335
+LODGroup:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 9097164137536653794}
+  serializedVersion: 2
+  m_LocalReferencePoint: {x: -0.026975885, y: 0.30335897, z: 0.096310735}
+  m_Size: 1.4503021
+  m_FadeMode: 0
+  m_AnimateCrossFading: 0
+  m_LastLODIsBillboard: 0
+  m_LODs:
+  - screenRelativeHeight: 0.05
+    fadeTransitionWidth: 0
+    renderers:
+    - renderer: {fileID: 2564892284026675573}
+  m_Enabled: 1

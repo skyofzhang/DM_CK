@@ -53,6 +53,10 @@ PrefabInstance:
       value: BigSheepUnit
       objectReference: {fileID: 0}
     - target: {fileID: 5416559759809129733, guid: 3434a948698dd3b4e818cac46719aa26, type: 3}
+      propertyPath: m_CastShadows
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 5416559759809129733, guid: 3434a948698dd3b4e818cac46719aa26, type: 3}
       propertyPath: m_Materials.Array.data[0]
       value: 
       objectReference: {fileID: 2100000, guid: 19cb83a61d9267c48a3f05fadb30b704, type: 2}
@@ -76,7 +80,15 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 3434a948698dd3b4e818cac46719aa26, type: 3}
       insertIndex: -1
       addedObject: {fileID: 328077899251922169}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 3434a948698dd3b4e818cac46719aa26, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: -8917648289946687933}
   m_SourcePrefab: {fileID: 100100000, guid: 3434a948698dd3b4e818cac46719aa26, type: 3}
+--- !u!137 &850061874260400231 stripped
+SkinnedMeshRenderer:
+  m_CorrespondingSourceObject: {fileID: 5416559759809129733, guid: 3434a948698dd3b4e818cac46719aa26, type: 3}
+  m_PrefabInstance: {fileID: 4676841574527530338}
+  m_PrefabAsset: {fileID: 0}
 --- !u!1 &5487094584740726835 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 919132149155446097, guid: 3434a948698dd3b4e818cac46719aa26, type: 3}
@@ -93,7 +105,7 @@ Animator:
   m_Enabled: 1
   m_Avatar: {fileID: 0}
   m_Controller: {fileID: 9100000, guid: 4368bb07f817f5641927d32cd8c89f6e, type: 2}
-  m_CullingMode: 0
+  m_CullingMode: 2
   m_UpdateMode: 0
   m_ApplyRootMotion: 0
   m_LinearVelocityBlending: 0
@@ -129,6 +141,10 @@ MonoBehaviour:
   squeezedThreshold: 8
   campBuffer: 1.5
   retreatChainSpeed: 15
+  spawnAnimDuration: 0.6
+  spawnOvershoot: 1.15
+  PoolTier: 0
+  ContributionValue: 0
 --- !u!114 &1092946291851679245
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -184,5 +200,54 @@ MonoBehaviour:
   tier6PulseAmount: 0.25
   tier6RainbowSpeed: 0.3
   tier6RainbowSaturation: 0.5
+  tintStrength: 0.35
+  giftModelTintStrength: 0.02
+  tier1Tint: {r: 0.85, g: 0.85, b: 0.9, a: 1}
+  tier2Tint: {r: 0.6, g: 0.8, b: 1, a: 1}
+  tier3Tint: {r: 0.8, g: 0.6, b: 1, a: 1}
+  tier4Tint: {r: 1, g: 0.85, b: 0.3, a: 1}
+  tier5Tint: {r: 1, g: 0.5, b: 0.3, a: 1}
+  tier6Tint: {r: 0.9, g: 0.7, b: 1, a: 1}
+  upgradeMaterials:
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
   breathAmplitude: 0.02
   breathSpeed: 0.8
+  haloHeightOffset: 0.35
+  haloBaseRadius: 0.45
+  haloRotateSpeed: 45
+  haloPulseSpeed: 1.5
+  haloPulseAmount: 0.1
+  haloAlpha: 0.85
+  haloFloatAmount: 0.03
+  haloFloatSpeed: 1.2
+  flashWidth: 0.8
+  flashHeightMultiplier: 3
+  flashDuration: 1.2
+--- !u!205 &-8917648289946687933
+LODGroup:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5487094584740726835}
+  serializedVersion: 2
+  m_LocalReferencePoint: {x: -3.5000005, y: 0.6488482, z: -2.8525436}
+  m_Size: 1.326828
+  m_FadeMode: 0
+  m_AnimateCrossFading: 0
+  m_LastLODIsBillboard: 0
+  m_LODs:
+  - screenRelativeHeight: 0.05
+    fadeTransitionWidth: 0
+    renderers:
+    - renderer: {fileID: 850061874260400231}
+  m_Enabled: 1

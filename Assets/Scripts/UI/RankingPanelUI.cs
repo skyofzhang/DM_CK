@@ -481,6 +481,7 @@ namespace DrscfZ.UI
         public void Hide()
         {
             gameObject.SetActive(false);
+            // 关闭时不需要恢复层级，下次 Show 时由调用方决定是否置顶
         }
 
         /// <summary>运行时排版保障：确保 TMP 对齐、字体、描边清晰度</summary>
@@ -696,7 +697,7 @@ namespace DrscfZ.UI
                 var avatarGo = new GameObject("Avatar", typeof(RectTransform));
                 avatarGo.transform.SetParent(frameGo.transform, false);
                 var avatarImg = avatarGo.AddComponent<RawImage>();
-                avatarImg.color = new Color(0.5f, 0.5f, 0.6f); // 默认灰色色块
+                avatarImg.color = Color.clear; // 加载前透明，加载成功后覆盖为 Color.white
                 var avatarRT = avatarGo.GetComponent<RectTransform>();
                 avatarRT.anchorMin = new Vector2(0.5f, 0.5f);
                 avatarRT.anchorMax = new Vector2(0.5f, 0.5f);

@@ -9,6 +9,10 @@ PrefabInstance:
     m_TransformParent: {fileID: 0}
     m_Modifications:
     - target: {fileID: -9070156636804247137, guid: 17fee9ce976a49a43a2e455c416d4f98, type: 3}
+      propertyPath: m_CastShadows
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -9070156636804247137, guid: 17fee9ce976a49a43a2e455c416d4f98, type: 3}
       propertyPath: m_Materials.Array.data[0]
       value: 
       objectReference: {fileID: 2100000, guid: eb9445f96639ea14aaf955b68bc1b094, type: 2}
@@ -57,9 +61,17 @@ PrefabInstance:
       value: 201_SheepUnit
       objectReference: {fileID: 0}
     - target: {fileID: 3011728412838760790, guid: 17fee9ce976a49a43a2e455c416d4f98, type: 3}
+      propertyPath: m_CastShadows
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 3011728412838760790, guid: 17fee9ce976a49a43a2e455c416d4f98, type: 3}
       propertyPath: m_Materials.Array.data[0]
       value: 
       objectReference: {fileID: 2100000, guid: eb9445f96639ea14aaf955b68bc1b094, type: 2}
+    - target: {fileID: 5517328758900359706, guid: 17fee9ce976a49a43a2e455c416d4f98, type: 3}
+      propertyPath: m_CastShadows
+      value: 0
+      objectReference: {fileID: 0}
     - target: {fileID: 5517328758900359706, guid: 17fee9ce976a49a43a2e455c416d4f98, type: 3}
       propertyPath: m_Materials.Array.data[0]
       value: 
@@ -80,6 +92,9 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 17fee9ce976a49a43a2e455c416d4f98, type: 3}
       insertIndex: -1
       addedObject: {fileID: 6698314340667332980}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 17fee9ce976a49a43a2e455c416d4f98, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: -4872700901062135390}
   m_SourcePrefab: {fileID: 100100000, guid: 17fee9ce976a49a43a2e455c416d4f98, type: 3}
 --- !u!1 &124157390411385753 stripped
 GameObject:
@@ -97,7 +112,7 @@ Animator:
   m_Enabled: 1
   m_Avatar: {fileID: 0}
   m_Controller: {fileID: 9100000, guid: 6b55a04fc8b7107439963c9330ef2a7a, type: 2}
-  m_CullingMode: 0
+  m_CullingMode: 2
   m_UpdateMode: 0
   m_ApplyRootMotion: 0
   m_LinearVelocityBlending: 0
@@ -133,6 +148,10 @@ MonoBehaviour:
   squeezedThreshold: 8
   campBuffer: 1.5
   retreatChainSpeed: 15
+  spawnAnimDuration: 0.6
+  spawnOvershoot: 1.15
+  PoolTier: 0
+  ContributionValue: 0
 --- !u!114 &3320745090198973937
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -188,5 +207,71 @@ MonoBehaviour:
   tier6PulseAmount: 0.25
   tier6RainbowSpeed: 0.3
   tier6RainbowSaturation: 0.5
+  tintStrength: 0.35
+  giftModelTintStrength: 0.02
+  tier1Tint: {r: 0.85, g: 0.85, b: 0.9, a: 1}
+  tier2Tint: {r: 0.6, g: 0.8, b: 1, a: 1}
+  tier3Tint: {r: 0.8, g: 0.6, b: 1, a: 1}
+  tier4Tint: {r: 1, g: 0.85, b: 0.3, a: 1}
+  tier5Tint: {r: 1, g: 0.5, b: 0.3, a: 1}
+  tier6Tint: {r: 0.9, g: 0.7, b: 1, a: 1}
+  upgradeMaterials:
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
   breathAmplitude: 0.02
   breathSpeed: 0.8
+  haloHeightOffset: 0.35
+  haloBaseRadius: 0.45
+  haloRotateSpeed: 45
+  haloPulseSpeed: 1.5
+  haloPulseAmount: 0.1
+  haloAlpha: 0.85
+  haloFloatAmount: 0.03
+  haloFloatSpeed: 1.2
+  flashWidth: 0.8
+  flashHeightMultiplier: 3
+  flashDuration: 1.2
+--- !u!205 &-4872700901062135390
+LODGroup:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 124157390411385753}
+  serializedVersion: 2
+  m_LocalReferencePoint: {x: -0.040461864, y: 0.0037666801, z: -0.0003943853}
+  m_Size: 0.011678927
+  m_FadeMode: 0
+  m_AnimateCrossFading: 0
+  m_LastLODIsBillboard: 0
+  m_LODs:
+  - screenRelativeHeight: 0.05
+    fadeTransitionWidth: 0
+    renderers:
+    - renderer: {fileID: 4749341484773635282}
+    - renderer: {fileID: 1105674617237366615}
+    - renderer: {fileID: 2644667018393708446}
+  m_Enabled: 1
+--- !u!137 &1105674617237366615 stripped
+SkinnedMeshRenderer:
+  m_CorrespondingSourceObject: {fileID: -9070156636804247137, guid: 17fee9ce976a49a43a2e455c416d4f98, type: 3}
+  m_PrefabInstance: {fileID: 970650707469858504}
+  m_PrefabAsset: {fileID: 0}
+--- !u!137 &2644667018393708446 stripped
+SkinnedMeshRenderer:
+  m_CorrespondingSourceObject: {fileID: 3011728412838760790, guid: 17fee9ce976a49a43a2e455c416d4f98, type: 3}
+  m_PrefabInstance: {fileID: 970650707469858504}
+  m_PrefabAsset: {fileID: 0}
+--- !u!137 &4749341484773635282 stripped
+SkinnedMeshRenderer:
+  m_CorrespondingSourceObject: {fileID: 5517328758900359706, guid: 17fee9ce976a49a43a2e455c416d4f98, type: 3}
+  m_PrefabInstance: {fileID: 970650707469858504}
+  m_PrefabAsset: {fileID: 0}

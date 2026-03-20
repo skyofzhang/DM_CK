@@ -221,4 +221,27 @@ namespace DrscfZ.Survival
         public long                 resetAt;   // 下次重置时间（Unix ms，周一 00:00 UTC+8）
         public WeeklyRankingEntry[] rankings;  // Top 10
     }
+
+    // ==================== 主播排行榜（type=streamer_ranking）====================
+
+    /// <summary>主播排行榜单条记录</summary>
+    [Serializable]
+    public class StreamerRankingEntry
+    {
+        public int    rank;
+        public string streamerId;
+        public string streamerName;    // 主播名
+        public string maxDifficulty;   // "normal" | "hard" | "hell"
+        public int    maxDays;         // 最多坚持天数（最佳完成局）
+        public int    totalWins;       // 总胜场数
+        public int    totalGames;      // 总场次
+        public int    score;           // 排名得分（difficulty_weight × maxDays）
+    }
+
+    /// <summary>主播排行榜响应（type=streamer_ranking）</summary>
+    [Serializable]
+    public class StreamerRankingData
+    {
+        public StreamerRankingEntry[] rankings; // Top 10
+    }
 }

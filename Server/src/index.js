@@ -107,6 +107,13 @@ app.get('/room/:roomId/rankings', (req, res) => {
   res.json(room.survivalEngine._buildRankings());
 });
 
+// 指定房间本周贡献榜（生存游戏）
+app.get('/room/:roomId/rankings/weekly', (req, res) => {
+  const room = roomManager.getRoom(req.params.roomId);
+  if (!room) return res.status(404).json({ error: 'Room not found' });
+  res.json(room.weeklyRanking.getPayload(10));
+});
+
 // 指定房间历史排行（生存游戏暂无此功能）
 app.get('/room/:roomId/rankings/history', (req, res) => {
   res.json({ message: 'History rankings not available in survival mode', rankings: [] });
@@ -264,6 +271,11 @@ app.get('/state', (req, res) => {
 app.get('/rankings', (req, res) => {
   const room = roomManager.getOrCreateRoom('default');
   res.json(room.survivalEngine._buildRankings());
+});
+
+app.get('/rankings/weekly', (req, res) => {
+  const room = roomManager.getOrCreateRoom('default');
+  res.json(room.weeklyRanking.getPayload(10));
 });
 
 app.get('/rankings/history', (req, res) => {

@@ -87,7 +87,7 @@ namespace DrscfZ.UI
                 var avatarRect = avatarGO.GetComponent<RectTransform>();
                 avatarRect.sizeDelta = new Vector2(_avatarSize, _avatarSize);
                 var avatarImg  = avatarGO.GetComponent<RawImage>();
-                avatarImg.color = new Color(0.3f, 0.6f, 1f, 1f);
+                avatarImg.color = Color.clear; // 无头像时透明，不显示色块
 
                 // 玩家名
                 var nameGO   = new GameObject("Name", typeof(RectTransform), typeof(TextMeshProUGUI));
@@ -158,7 +158,7 @@ namespace DrscfZ.UI
             row.nameText.text  = playerName;
             row.eventText.text = eventText;
             row.avatar.texture = null;
-            row.avatar.color   = new Color(0.3f, 0.6f, 1f, 1f);  // 默认蓝色占位
+            row.avatar.color   = Color.clear; // 加载前透明，避免蓝色色块
 
             // 起始位置：从右侧屏幕外入场
             float zoneWidth = _zone != null ? _zone.rect.width : Screen.width;

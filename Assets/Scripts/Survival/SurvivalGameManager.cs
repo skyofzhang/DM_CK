@@ -62,8 +62,9 @@ namespace DrscfZ.Survival
         public event Action<SurvivalGameEndedData> OnGameEnded;
         public event Action<string> OnPlayerActivityMessage;     // 弹幕消息文本
         public event Action<int> OnScorePoolUpdated;             // 积分池变动（实时推送）
-        public event Action<WeeklyRankingData> OnWeeklyRankingReceived; // 本周贡献榜（服务器推送）
-        public event Action<LiveRankingData>   OnLiveRankingReceived;   // 实时贡献榜（游戏中防抖推送）
+        public event Action<WeeklyRankingData>   OnWeeklyRankingReceived;   // 本周贡献榜（服务器推送）
+        public event Action<LiveRankingData>     OnLiveRankingReceived;     // 实时贡献榜（游戏中防抖推送）
+        public event Action<StreamerRankingData> OnStreamerRankingReceived; // 主播排行榜（服务器推送）
 
         // 贡献追踪
         private System.Collections.Generic.Dictionary<string, float> _contributions
@@ -131,7 +132,7 @@ namespace DrscfZ.Survival
             // 避免结算期间礼物效果、昼夜切换、怪物等继续触发
             if (_state == SurvivalState.Settlement || _state == SurvivalState.Idle)
             {
-                if (type != "join_room_confirm" && type != "weekly_ranking") return;
+                if (type != "join_room_confirm" && type != "weekly_ranking" && type != "streamer_ranking") return;
             }
 
             switch (type)
@@ -277,6 +278,12 @@ namespace DrscfZ.Survival
                 case "weekly_ranking":
                     var wr = JsonUtility.FromJson<WeeklyRankingData>(dataJson);
                     if (wr != null) OnWeeklyRankingReceived?.Invoke(wr);
+                    break;
+
+                // ----- 主播排行榜（服务器推送）-----
+                case "streamer_ranking":
+                    var sr = JsonUtility.FromJson<StreamerRankingData>(dataJson);
+                    if (sr != null) OnStreamerRankingReceived?.Invoke(sr);
                     break;
 
                 // ----- 实时贡献榜（游戏进行中，贡献变化后服务器防抖推送）-----

@@ -6,8 +6,16 @@
  * 每个主播直播间对应一个独立的 SurvivalRoom + SurvivalGameEngine
  */
 
-const SurvivalGameEngine  = require('./SurvivalGameEngine');
-const WeeklyRankingStore  = require('./WeeklyRankingStore');
+const SurvivalGameEngine    = require('./SurvivalGameEngine');
+const WeeklyRankingStore    = require('./WeeklyRankingStore');
+const StreamerRankingStore  = require('./StreamerRankingStore');
+
+// 全局单例：主播排行榜（所有房间共享一个存储）
+let _streamerRankingInstance = null;
+function getStreamerRanking() {
+  if (!_streamerRankingInstance) _streamerRankingInstance = new StreamerRankingStore();
+  return _streamerRankingInstance;
+}
 
 class SurvivalRoom {
   /**
@@ -39,6 +47,9 @@ class SurvivalRoom {
 
     // 本周贡献榜持久化存储（每周日23:59→周一00:00 UTC+8 自动重置）
     this.weeklyRanking = new WeeklyRankingStore(roomId);
+
+    // 主播排行榜（全局共享单例）
+    this.streamerRanking = getStreamerRanking();
 
     // 暂停超时（30分钟后销毁）
     this._pauseTimer = null;
@@ -190,13 +201,25 @@ class SurvivalRoom {
 
   broadcast(message) {
     // ── 局结束时更新本周贡献榜，并广播最新周榜数据 ──────────────────
-    if (message && message.type === 'survival_game_ended' && message.data && message.data.rankings) {
+    if (message && message.type === 'survival_game_ended' && message.data) {
+      const d = message.data;
+      // 更新本周贡献榜
+      if (d.rankings) {
+        try {
+          this.weeklyRanking.addGameResult(d.rankings);
+          setTimeout(() => this._broadcastWeeklyRanking(), 500);
+        } catch (e) {
+          console.error(`[SurvivalRoom:${this.roomId}] WeeklyRanking update error: ${e.message}`);
+        }
+      }
+      // 更新主播排行榜
       try {
-        this.weeklyRanking.addGameResult(message.data.rankings);
-        // 延迟 500ms 广播周榜（等本局结算消息先到客户端）
-        setTimeout(() => this._broadcastWeeklyRanking(), 500);
+        const difficulty = this.survivalEngine._difficulty || 'normal';
+        const streamerName = this.roomId; // 房间ID即主播标识，后续可改为真实昵称
+        this.streamerRanking.addGameResult(this.roomId, streamerName, difficulty, d.dayssurvived || 0, d.result || 'lose');
+        setTimeout(() => this._broadcastStreamerRanking(), 600);
       } catch (e) {
-        console.error(`[SurvivalRoom:${this.roomId}] WeeklyRanking update error: ${e.message}`);
+        console.error(`[SurvivalRoom:${this.roomId}] StreamerRanking update error: ${e.message}`);
       }
     }
 
@@ -230,6 +253,25 @@ class SurvivalRoom {
       } catch (e) { }
     }
     console.log(`[SurvivalRoom:${this.roomId}] 本周榜已广播，week=${payload.week}，条数=${payload.rankings.length}`);
+  }
+
+  /**
+   * 向所有客户端广播最新主播排行榜
+   */
+  _broadcastStreamerRanking() {
+    const payload = this.streamerRanking.getPayload(10);
+    const msg = JSON.stringify({
+      type:      'streamer_ranking',
+      roomId:    this.roomId,
+      timestamp: Date.now(),
+      data:      payload,
+    });
+    for (const client of this.clients) {
+      try {
+        if (client.readyState === 1) client.send(msg);
+      } catch (e) { }
+    }
+    console.log(`[SurvivalRoom:${this.roomId}] 主播榜已广播，条数=${payload.rankings.length}`);
   }
 
   _sendStateToClient(ws) {
@@ -282,7 +324,8 @@ class SurvivalRoom {
       case 'get_weekly_ranking':
         // 客户端请求本周贡献榜（面板打开时触发）
         try {
-          const payload = this.weeklyRanking.getPayload(10);
+          const n = (data && data.top && data.top <= 50) ? data.top : 50;
+          const payload = this.weeklyRanking.getPayload(n);
           ws.send(JSON.stringify({
             type:      'weekly_ranking',
             roomId:    this.roomId,
@@ -291,6 +334,22 @@ class SurvivalRoom {
           }));
         } catch (e) {
           console.error(`[SurvivalRoom:${this.roomId}] get_weekly_ranking error: ${e.message}`);
+        }
+        break;
+
+      case 'get_streamer_ranking':
+        // 客户端请求主播排行榜
+        try {
+          const sN = (data && data.top && data.top <= 50) ? data.top : 50;
+          const sPayload = this.streamerRanking.getPayload(sN);
+          ws.send(JSON.stringify({
+            type:      'streamer_ranking',
+            roomId:    this.roomId,
+            timestamp: Date.now(),
+            data:      sPayload,
+          }));
+        } catch (e) {
+          console.error(`[SurvivalRoom:${this.roomId}] get_streamer_ranking error: ${e.message}`);
         }
         break;
 

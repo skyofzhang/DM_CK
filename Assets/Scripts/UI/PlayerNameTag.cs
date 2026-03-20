@@ -47,14 +47,15 @@ namespace DrscfZ.UI
 
         private void LateUpdate()
         {
-            // Billboard：始终面朝相机（与 WorldSpaceLabel 一致的 LookRotation 模式）
             if (_cam == null) _cam = Camera.main;
+            // 位置：始终锁定在父对象（矿工根节点）固定偏移处，避免动画根节点旋转带来的位移
+            if (transform.parent != null)
+                transform.position = transform.parent.position + _offset;
+            // Billboard：始终面朝相机
             if (_cam != null)
-            {
                 transform.rotation = Quaternion.LookRotation(
                     transform.position - _cam.transform.position
                 );
-            }
         }
 
         /// <summary>初始化名字标签（由 WorkerManager 调用）</summary>
@@ -63,18 +64,18 @@ namespace DrscfZ.UI
             if (_nameText != null)
                 _nameText.text = playerName;
 
-            // 头像加载或空URL占位（任务2）
+            // 头像加载：有 URL 则异步加载，无 URL 则隐藏头像区域（避免显示实心色块）
             if (_avatarImage != null)
             {
                 if (!string.IsNullOrEmpty(avatarUrl))
                 {
+                    _avatarImage.gameObject.SetActive(true);
                     StartCoroutine(LoadAvatar(avatarUrl));
                 }
                 else
                 {
-                    // avatarUrl 为空→显示蓝色占位，确保 alpha=1
-                    _avatarImage.texture = null;
-                    _avatarImage.color = new Color(0.3f, 0.6f, 1f, 1f);
+                    // 无头像：隐藏头像 RawImage，只显示名字文本
+                    _avatarImage.gameObject.SetActive(false);
                 }
             }
 
@@ -87,14 +88,10 @@ namespace DrscfZ.UI
             {
                 yield return req.SendWebRequest();
 
-                // 任务1：错误处理（网络失败→显示蓝色占位）
+                // 网络失败 → 隐藏头像，只显示名字文本（避免显示实心色块）
                 if (req.result != UnityEngine.Networking.UnityWebRequest.Result.Success)
                 {
-                    if (_avatarImage != null)
-                    {
-                        _avatarImage.texture = null;
-                        _avatarImage.color = new Color(0.3f, 0.6f, 1f, 1f);  // 蓝色占位
-                    }
+                    if (_avatarImage != null) _avatarImage.gameObject.SetActive(false);
                     yield break;
                 }
 

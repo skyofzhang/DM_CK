@@ -327,7 +327,7 @@ SkinnedMeshRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 2396617918320555004}
   m_Enabled: 1
-  m_CastShadows: 1
+  m_CastShadows: 0
   m_ReceiveShadows: 1
   m_DynamicOccludee: 1
   m_StaticShadowCaster: 0
@@ -869,6 +869,7 @@ GameObject:
   - component: {fileID: 1254694063234345616}
   - component: {fileID: 53609800171821696}
   - component: {fileID: 1873557560320119830}
+  - component: {fileID: -6846085394087482711}
   m_Layer: 0
   m_Name: Gift2Unit
   m_TagString: Untagged
@@ -904,7 +905,7 @@ Animator:
   m_Enabled: 1
   m_Avatar: {fileID: 9000000, guid: 53b3c5c4c785b6f428c6f80a20138f13, type: 3}
   m_Controller: {fileID: 9100000, guid: f0c1debbbef3b3649b0ba9aa3f397374, type: 2}
-  m_CullingMode: 1
+  m_CullingMode: 2
   m_UpdateMode: 0
   m_ApplyRootMotion: 0
   m_LinearVelocityBlending: 0
@@ -1007,8 +1008,49 @@ MonoBehaviour:
   tier4Tint: {r: 1, g: 0.85, b: 0.3, a: 1}
   tier5Tint: {r: 1, g: 0.5, b: 0.3, a: 1}
   tier6Tint: {r: 0.9, g: 0.7, b: 1, a: 1}
+  upgradeMaterials:
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
   breathAmplitude: 0.02
   breathSpeed: 0.8
+  haloHeightOffset: 0.35
+  haloBaseRadius: 0.45
+  haloRotateSpeed: 45
+  haloPulseSpeed: 1.5
+  haloPulseAmount: 0.1
+  haloAlpha: 0.85
+  haloFloatAmount: 0.03
+  haloFloatSpeed: 1.2
+  flashWidth: 0.8
+  flashHeightMultiplier: 3
+  flashDuration: 1.2
+--- !u!205 &-6846085394087482711
+LODGroup:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5621177202476434464}
+  serializedVersion: 2
+  m_LocalReferencePoint: {x: -0.0101542175, y: 0.34704483, z: 0.03548181}
+  m_Size: 1.3816686
+  m_FadeMode: 0
+  m_AnimateCrossFading: 0
+  m_LastLODIsBillboard: 0
+  m_LODs:
+  - screenRelativeHeight: 0.05
+    fadeTransitionWidth: 0
+    renderers:
+    - renderer: {fileID: 2365810450881679655}
+  m_Enabled: 1
 --- !u!1 &5703986379825034072
 GameObject:
   m_ObjectHideFlags: 0

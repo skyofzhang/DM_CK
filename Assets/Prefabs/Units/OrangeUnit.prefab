@@ -72,6 +72,9 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 5fc34c94a93d87944b97a193f611c653, type: 3}
       insertIndex: -1
       addedObject: {fileID: 5789590709278949385}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 5fc34c94a93d87944b97a193f611c653, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 7921187578499230245}
   m_SourcePrefab: {fileID: 100100000, guid: 5fc34c94a93d87944b97a193f611c653, type: 3}
 --- !u!1 &7256209609329649396 stripped
 GameObject:
@@ -89,7 +92,7 @@ Animator:
   m_Enabled: 1
   m_Avatar: {fileID: 0}
   m_Controller: {fileID: 9100000, guid: eda3ed1fc8944c74e9130b6bf719def6, type: 2}
-  m_CullingMode: 0
+  m_CullingMode: 2
   m_UpdateMode: 0
   m_ApplyRootMotion: 0
   m_LinearVelocityBlending: 0
@@ -125,6 +128,10 @@ MonoBehaviour:
   squeezedThreshold: 8
   campBuffer: 1.5
   retreatChainSpeed: 15
+  spawnAnimDuration: 0.6
+  spawnOvershoot: 1.15
+  PoolTier: 0
+  ContributionValue: 0
 --- !u!114 &1423495431285450604
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -180,5 +187,59 @@ MonoBehaviour:
   tier6PulseAmount: 0.25
   tier6RainbowSpeed: 0.3
   tier6RainbowSaturation: 0.5
+  tintStrength: 0.35
+  giftModelTintStrength: 0.02
+  tier1Tint: {r: 0.85, g: 0.85, b: 0.9, a: 1}
+  tier2Tint: {r: 0.6, g: 0.8, b: 1, a: 1}
+  tier3Tint: {r: 0.8, g: 0.6, b: 1, a: 1}
+  tier4Tint: {r: 1, g: 0.85, b: 0.3, a: 1}
+  tier5Tint: {r: 1, g: 0.5, b: 0.3, a: 1}
+  tier6Tint: {r: 0.9, g: 0.7, b: 1, a: 1}
+  upgradeMaterials:
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
   breathAmplitude: 0.02
   breathSpeed: 0.8
+  haloHeightOffset: 0.35
+  haloBaseRadius: 0.45
+  haloRotateSpeed: 45
+  haloPulseSpeed: 1.5
+  haloPulseAmount: 0.1
+  haloAlpha: 0.85
+  haloFloatAmount: 0.03
+  haloFloatSpeed: 1.2
+  flashWidth: 0.8
+  flashHeightMultiplier: 3
+  flashDuration: 1.2
+--- !u!205 &7921187578499230245
+LODGroup:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7256209609329649396}
+  serializedVersion: 2
+  m_LocalReferencePoint: {x: -0.011107385, y: -0.15066487, z: 0.003790021}
+  m_Size: 1.0389448
+  m_FadeMode: 0
+  m_AnimateCrossFading: 0
+  m_LastLODIsBillboard: 0
+  m_LODs:
+  - screenRelativeHeight: 0.05
+    fadeTransitionWidth: 0
+    renderers:
+    - renderer: {fileID: 9201909852902852385}
+  m_Enabled: 1
+--- !u!23 &9201909852902852385 stripped
+MeshRenderer:
+  m_CorrespondingSourceObject: {fileID: -7511558181221131132, guid: 5fc34c94a93d87944b97a193f611c653, type: 3}
+  m_PrefabInstance: {fileID: 7526172348787170213}
+  m_PrefabAsset: {fileID: 0}
