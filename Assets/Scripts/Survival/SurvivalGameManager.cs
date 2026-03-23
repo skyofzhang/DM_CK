@@ -804,6 +804,15 @@ namespace DrscfZ.Survival
             if (_state == newState) return;
             _state = newState;
             OnStateChanged?.Invoke(newState);
+
+            // Running 状态开始时初始化墙壁屏障
+            if (newState == SurvivalState.Running)
+            {
+                // 城墙 Z 轴防线参数（根据 chengqiang-chengmen 模型 bounds 推算）
+                // chengqiang-chengmen bounds: Z from -8.33 to -6.38, center Z ≈ -7.35
+                // 城门缺口 X: 约 -1.5 ~ 3.5（chengmen 中间开口区域）
+                WallBarrier.Initialize(wallZ: -7.5f, gateMinX: -1.5f, gateMaxX: 3.5f, thickness: 2.0f);
+            }
         }
 
         private void TrackContribution(string playerId, float amount)

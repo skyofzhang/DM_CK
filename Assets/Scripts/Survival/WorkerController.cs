@@ -440,18 +440,36 @@ namespace DrscfZ.Survival
         /// </summary>
         private IEnumerator MoveToWorkCoroutine(Vector3 targetPos)
         {
+            // 墙壁绕行：如果目标在墙另一侧，先走到城门口
+            Vector3? detour = WallBarrier.GetDetourPoint(transform.position, targetPos);
+            if (detour.HasValue)
+            {
+                yield return MoveSegment(detour.Value);
+            }
+
+            yield return MoveSegment(targetPos);
+
+            transform.position = targetPos;
+            transform.localRotation = Quaternion.identity;
+
+            if (_state == State.Move)
+                TransitionTo(State.Work);
+        }
+
+        /// <summary>平滑移动到某个中间/最终点（EaseOutCubic）</summary>
+        private IEnumerator MoveSegment(Vector3 targetPos)
+        {
             Vector3 startPos = transform.position;
             float   distance = Vector3.Distance(startPos, targetPos);
             float   duration = Mathf.Clamp(distance / MOVE_SPEED, 0.3f, 30f);
             float   elapsed  = 0f;
 
-            while (elapsed < duration)
+            while (elapsed < duration && _state == State.Move)
             {
                 elapsed += Time.deltaTime;
                 float t  = EaseOutCubic(Mathf.Clamp01(elapsed / duration));
                 transform.position = Vector3.Lerp(startPos, targetPos, t);
 
-                // 朝向目标（仅Y轴旋转）
                 Vector3 dir = new Vector3(targetPos.x - transform.position.x,
                                           0f,
                                           targetPos.z - transform.position.z);
@@ -460,12 +478,6 @@ namespace DrscfZ.Survival
 
                 yield return null;
             }
-
-            transform.position = targetPos;
-            transform.localRotation = Quaternion.identity;
-
-            if (_state == State.Move)
-                TransitionTo(State.Work);
         }
 
         /// <summary>工作计时器（cmd=6 持续战斗直到怪物全灭；其他指令 4s 后回 Idle）</summary>
@@ -489,7 +501,8 @@ namespace DrscfZ.Survival
                     {
                         var dir = (target.position - transform.position).normalized;
                         dir.y = 0f;
-                        transform.position += dir * MOVE_SPEED * Time.deltaTime;
+                        Vector3 newPos = transform.position + dir * MOVE_SPEED * Time.deltaTime;
+                        transform.position = WallBarrier.ClampMovement(transform.position, newPos);
                         SetAnimatorState(true, false);
                         if (dir.sqrMagnitude > 0.001f)
                             transform.rotation = Quaternion.LookRotation(dir);
@@ -506,32 +519,42 @@ namespace DrscfZ.Survival
                     if (toM.sqrMagnitude > 0.001f)
                         transform.rotation = Quaternion.LookRotation(toM);
 
-                    // 4. 近身打击（2秒一轮，轮完再重新寻找目标/继续追同一只）
-                    float burstEnd = Time.time + 2f;
-                    while (Time.time < burstEnd && _state == State.Work)
+                    // 4. 近身打击：持续攻击直到目标死亡或消失，每 ATTACK_INTERVAL 秒命中一次
+                    const float ATTACK_INTERVAL = 1.2f;
+                    float nextHitTime = Time.time + 0.3f; // 首次命中快一些
+                    while (_state == State.Work)
                     {
-                        // Unity == 重载可识别已销毁对象（C# ?. 无法识别）
                         if (target == null) break;
+                        var mc = target.GetComponent<DrscfZ.Monster.MonsterController>();
+                        if (mc == null || mc.IsDead) break;
 
-                        // Z轴摆动：模拟工具挥动 ±30° @ 1Hz
-                        float swing = Mathf.Sin(Time.time * BOB_FREQ) * 30f;
-                        transform.localRotation = Quaternion.Euler(0f, 0f, swing);
+                        // 如果目标走远了，重新追
+                        if (Vector3.Distance(transform.position, target.position) > ATTACK_RANGE + 1.5f)
+                            break;
 
-                        // 摆动峰值时命中怪物：视觉特效 + 实际扣血
-                        float sv = Mathf.Sin(Time.time * BOB_FREQ);
-                        if (sv > 0.95f)
+                        // 面朝目标 + Z轴摆动叠加（不覆盖朝向）
+                        Vector3 toTarget = target.position - transform.position;
+                        toTarget.y = 0f;
+                        if (toTarget.sqrMagnitude > 0.001f)
                         {
-                            var mc = target.GetComponent<DrscfZ.Monster.MonsterController>();
-                            if (mc != null && !mc.IsDead &&
-                                Vector3.Distance(transform.position, target.position) <= ATTACK_RANGE + 1f)
+                            Quaternion facingRot = Quaternion.LookRotation(toTarget);
+                            float swing = Mathf.Sin(Time.time * BOB_FREQ) * 30f;
+                            transform.rotation = facingRot * Quaternion.Euler(0f, 0f, swing);
+                        }
+
+                        // 定时命中
+                        if (Time.time >= nextHitTime)
+                        {
+                            if (Vector3.Distance(transform.position, target.position) <= ATTACK_RANGE + 1f)
                             {
                                 SpawnHitExplosion(target.position + Vector3.up * 0.5f);
                                 mc.TakeDamage(WORKER_ATTACK_DAMAGE);
                             }
+                            nextHitTime = Time.time + ATTACK_INTERVAL;
                         }
                         yield return null;
                     }
-                    // 本轮结束 → 下一轮重新 FindNearestActiveMonster（目标死后自动切换）
+                    // 目标死亡/消失 → 下一轮重新 FindNearestActiveMonster
                 }
 
                 // 所有怪物已死，关闭拖尾

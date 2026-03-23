@@ -223,12 +223,21 @@ namespace DrscfZ.Monster
 
         private void MoveToward(Vector3 target)
         {
-            Vector3 dir = (target - transform.position);
+            // 墙壁绕行：如果目标在墙另一侧且不在城门口，先走向城门
+            Vector3 effectiveTarget = target;
+            Vector3? detour = Survival.WallBarrier.GetDetourPoint(transform.position, target);
+            if (detour.HasValue)
+                effectiveTarget = detour.Value;
+
+            Vector3 dir = (effectiveTarget - transform.position);
             dir.y = 0;
             if (dir.sqrMagnitude > 0.01f)
             {
                 dir.Normalize();
-                transform.position += dir * _moveSpeed * Time.deltaTime;
+                Vector3 newPos = transform.position + dir * _moveSpeed * Time.deltaTime;
+                // 墙壁碰撞检测：阻止穿墙
+                newPos = Survival.WallBarrier.ClampMovement(transform.position, newPos);
+                transform.position = newPos;
                 transform.rotation = Quaternion.Slerp(transform.rotation,
                     Quaternion.LookRotation(dir), Time.deltaTime * 6f);
             }

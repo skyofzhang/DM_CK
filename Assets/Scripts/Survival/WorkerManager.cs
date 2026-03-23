@@ -90,6 +90,9 @@ namespace DrscfZ.Survival
         [SerializeField] private Transform         _fortressCenter;  // 中央堡垒（待机圈圆心）
         [SerializeField] private float             _idleRadius = 3f; // 待机圆圈半径
 
+        [Header("城门防守配置")]
+        [SerializeField] private Transform         _gateDefenseCenter; // 城门前防守集结点（拖入WorkTarget_Gate）
+
         [Header("预创建Worker池（Inspector拖入，数量=MAX_WORKERS）")]
         [SerializeField] private WorkerController[] _preCreatedWorkers;
 
@@ -612,19 +615,27 @@ namespace DrscfZ.Survival
         /// </summary>
         private Vector3 GetDefensePosition(int index, int total)
         {
-            // 城门前防守基准点：从 cmd=6 工位槽中心推算，无槽则用默认坐标
-            Vector3 gateCenter = new Vector3(0f, 0f, -3f);
-            if (_stationSlots != null)
+            // 城门前防守基准点：优先使用 Inspector 绑定的 WorkTarget_Gate
+            Vector3 gateCenter;
+            if (_gateDefenseCenter != null)
             {
-                Vector3 sum = Vector3.zero;
-                int cnt = 0;
-                foreach (var s in _stationSlots)
-                    if (s.cmdType == 6) { sum += s.position; cnt++; }
-                if (cnt > 0) gateCenter = sum / cnt;
+                gateCenter = _gateDefenseCenter.position;
+            }
+            else
+            {
+                // Fallback: 从 cmd=6 工位槽中心推算
+                gateCenter = new Vector3(0f, 0f, -13.5f);
+                if (_stationSlots != null)
+                {
+                    Vector3 sum = Vector3.zero;
+                    int cnt = 0;
+                    foreach (var s in _stationSlots)
+                        if (s.cmdType == 6) { sum += s.position; cnt++; }
+                    if (cnt > 0) gateCenter = sum / cnt;
+                }
             }
 
             const float SPACING = 0.8f;
-            // 居中排列：总宽度 = (total-1)*SPACING，index 0 从最左端开始
             float totalWidth = (total - 1) * SPACING;
             float offsetX = index * SPACING - totalWidth * 0.5f;
             return new Vector3(gateCenter.x + offsetX, gateCenter.y, gateCenter.z);

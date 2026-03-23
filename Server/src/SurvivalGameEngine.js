@@ -87,13 +87,12 @@ class SurvivalGameEngine {
     this.gateLevel    = 1;
 
     // 资源衰减配置（每秒）
-    // M-NUMERIC 数值深化：放缓消耗速率，支持长期在线玩法
-    // 目标：10人在线不消费情况下，食物约可维持3天（7天周期 × 180+120s/天 ≈ 2100s，
-    //       初始食物500，3天 ≈ 900s，foodDecay = 500/900 ≈ 0.055，取整为 0.05）
-    this.foodDecayDay    = config.foodDecayDay    ?? 0.05;  // 白天食物消耗/s（原0.1，减半）
-    this.foodDecayNight  = config.foodDecayNight  ?? 0.05;  // 夜晚食物消耗/s（原0.1，减半）
-    this.tempDecayDay    = config.tempDecayDay    ?? 0.15;  // 白天炉温/s（原0.3，减半）
-    this.tempDecayNight  = config.tempDecayNight  ?? 0.4;   // 夜晚炉温衰减更快/s（原0.8，减半）
+    // 目标：Normal难度下不采食约 3min 耗尽（200/1.0≈200s≈3.3min），持续紧迫
+    this.foodDecayDay    = config.foodDecayDay    ?? 1.0;   // 白天食物消耗/s
+    this.foodDecayNight  = config.foodDecayNight  ?? 1.5;   // 夜晚食物消耗/s（夜晚更快）
+    this.tempDecayDay    = config.tempDecayDay    ?? 0.15;  // 白天炉温衰减/s
+    this.tempDecayNight  = config.tempDecayNight  ?? 0.4;   // 夜晚炉温衰减/s
+    this.coalBurnTicks   = 10;                              // 自动烧煤间隔（tick数，10=2秒）
     this.minTemp         = -100;
     this.maxTemp         = 100;
 
@@ -183,15 +182,15 @@ class SurvivalGameEngine {
     this._difficulty = difficulty;
 
     // decayMult 基于"7天难度 = 现在总天数的1/10"进行等比缩放：
-    //   easy 原0.65 × (7/30) ≈ 0.15；normal 原1.00 × (7/50) ≈ 0.14；hard 原1.35 × (7/70) = 0.135
-    // poolNightBase：每成功防守一夜进入积分池的基础分（× 当前天数）
-    //   easy  → 300/天：怪少资源多，奖池积累慢，风险低
-    //   normal → 500/天：标准
-    //   hard  → 800/天：怪多资源紧，高风险高回报
+    // decayMult: 资源衰减倍率（食物+炉温），越高越紧迫
+    // coalBurnTicks: 自动烧煤间隔（tick数，1tick=200ms），越小烧得越快
+    //   easy:   食物降~7/天, 煤3秒烧1个(宽裕), 初始资源1.5倍
+    //   normal: 食物降~10/天, 煤2秒烧1个(标准), 压力适中
+    //   hard:   食物降~14/天, 煤1.4秒烧1个(紧迫), 极限生存
     const presets = {
-      easy:   { hpMult: 0.6, cntMult: 0.6, decayMult: 0.15, initMult: 1.5, totalDays: 30, poolNightBase: 300, dayDuration: 120, nightDuration: 120 },
-      normal: { hpMult: 1.0, cntMult: 1.0, decayMult: 0.14, initMult: 1.0, totalDays: 50, poolNightBase: 500, dayDuration: 120, nightDuration: 120 },
-      hard:   { hpMult: 1.5, cntMult: 1.5, decayMult: 0.14, initMult: 0.8, totalDays: 70, poolNightBase: 800, dayDuration: 120, nightDuration: 120 },
+      easy:   { hpMult: 0.6, cntMult: 0.6, decayMult: 0.7, coalBurnTicks: 10, initFood: 160, initCoal: 96,  initOre: 40,  initGateHp: 800,  totalDays: 30, poolNightBase: 300, dayDuration: 120, nightDuration: 120 },
+      normal: { hpMult: 1.0, cntMult: 1.0, decayMult: 1.0, coalBurnTicks: 7,  initFood: 200, initCoal: 120, initOre: 50,  initGateHp: 1000, totalDays: 50, poolNightBase: 500, dayDuration: 120, nightDuration: 120 },
+      hard:   { hpMult: 1.5, cntMult: 1.5, decayMult: 1.5, coalBurnTicks: 5,  initFood: 300, initCoal: 180, initOre: 75,  initGateHp: 1500, totalDays: 70, poolNightBase: 800, dayDuration: 120, nightDuration: 120 },
     };
     const p = presets[difficulty] || presets.normal;
 
@@ -207,25 +206,20 @@ class SurvivalGameEngine {
     this.nightDuration = p.nightDuration;
 
     // 按倍率调整资源衰减（在构造函数默认值基础上乘以倍率）
-    this.foodDecayDay   = (this.config.foodDecayDay   ?? 0.05) * p.decayMult;
-    this.foodDecayNight = (this.config.foodDecayNight ?? 0.05) * p.decayMult;
+    this.foodDecayDay   = (this.config.foodDecayDay   ?? 0.12) * p.decayMult;
+    this.foodDecayNight = (this.config.foodDecayNight ?? 0.15) * p.decayMult;
     this.tempDecayDay   = (this.config.tempDecayDay   ?? 0.15) * p.decayMult;
     this.tempDecayNight = (this.config.tempDecayNight ?? 0.40) * p.decayMult;
+    this.coalBurnTicks  = p.coalBurnTicks || 10;  // 自动烧煤间隔
 
-    // 按倍率调整初始资源
-    const base = {
-      food:      this.config.initFood       ?? 500,
-      coal:      this.config.initCoal       ?? 300,
-      ore:       this.config.initOre        ?? 150,
-      gateHp:    this.config.initGateHp     ?? 1000,
-    };
-    this.food      = Math.round(base.food    * p.initMult);
-    this.coal      = Math.round(base.coal    * p.initMult);
-    this.ore       = Math.round(base.ore     * p.initMult);
-    this.gateHp    = Math.round(base.gateHp  * p.initMult);
-    this.gateMaxHp = this.gateHp;
+    // 各难度独立配置初始资源
+    this.food      = p.initFood;
+    this.coal      = p.initCoal;
+    this.ore       = p.initOre;
+    this.gateHp    = p.initGateHp;
+    this.gateMaxHp = p.initGateHp;
 
-    console.log(`[Engine] 难度: ${difficulty} | 怪物HP×${p.hpMult} 数量×${p.cntMult} 衰减×${p.decayMult} 资源×${p.initMult} 总天数:${p.totalDays} 夜晚积分基数:${p.poolNightBase}/天`);
+    console.log(`[Engine] 难度: ${difficulty} | 怪物HP×${p.hpMult} 数量×${p.cntMult} 衰减×${p.decayMult} 煤烧速${p.coalBurnTicks}tick 食${p.initFood}/煤${p.initCoal}/矿${p.initOre}/门${p.initGateHp} 总天数:${p.totalDays}`);
   }
 
   /** 客户端请求重置 */
@@ -805,10 +799,18 @@ class SurvivalGameEngine {
     // 食物：每秒消耗
     this.food = Math.max(0, this.food - (isNight ? this.foodDecayNight : this.foodDecayDay));
 
-    // 炉温：每秒下降（夜晚更快；暴风雪事件可加速衰减）
+    // 炉温：有煤时自动烧煤维持温度，无煤时才开始失温
     const baseTempDecay = isNight ? this.tempDecayNight : this.tempDecayDay;
     const tempDecay = baseTempDecay * (this.tempDecayMultiplier || 1.0);
-    this.furnaceTemp = Math.max(this.minTemp, this.furnaceTemp - tempDecay);
+    if (this.coal > 0) {
+      // 有煤：按难度自动消耗煤炭维持炉温（easy=3秒/个, normal=2秒/个, hard=1.4秒/个）
+      if (this._tickCounter % this.coalBurnTicks === 0) {
+        this.coal = Math.max(0, this.coal - 1);
+      }
+    } else {
+      // 无煤：炉温持续下降（夜晚更快，暴风雪加速）
+      this.furnaceTemp = Math.max(this.minTemp, this.furnaceTemp - tempDecay);
+    }
 
     // 矿石 → 自动修复城门（每2秒消耗1矿石，补5HP；仅在城门受损时生效）
     // 设计意图：矿石让玩家挖矿有动力——矿越多，城门越能抵御怪物攻击

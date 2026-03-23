@@ -155,31 +155,30 @@ class SurvivalRoom {
     }
   }
 
-  destroy() {
-    this._cancelPauseTimer();
-
-    // 停止模拟器递归调度
+  /** 停止模拟器并清理所有定时器 */
+  _stopSimulation() {
     this._simRunning = false;
 
-    // 清理每玩家独立工作定时器
     if (this._simPlayerTimers) {
       this._simPlayerTimers.forEach(t => clearTimeout(t));
       this._simPlayerTimers.clear();
       this._simPlayerTimers = null;
     }
 
-    // 清理夜晚攻击定时器
     if (this._simNightTimer) {
       clearTimeout(this._simNightTimer);
       this._simNightTimer = null;
     }
 
-    // 兼容旧interval（防止升级前残留实例未清理）
     if (this._simWorkInterval)      clearInterval(this._simWorkInterval);
     if (this._simNightInterval)     clearInterval(this._simNightInterval);
-
     if (this._simDayGiftInterval)   clearInterval(this._simDayGiftInterval);
     if (this._simNightGiftInterval) clearInterval(this._simNightGiftInterval);
+  }
+
+  destroy() {
+    this._cancelPauseTimer();
+    this._stopSimulation();
     this.survivalEngine.pause();
     this.status = 'destroyed';
 
@@ -295,10 +294,13 @@ class SurvivalRoom {
   handleClientMessage(ws, msgType, data) {
     switch (msgType) {
       case 'start_game':
+        // 新一局开始时，停止上一局残留的模拟器
+        this._stopSimulation();
         // 支持难度参数：data.difficulty = 'easy' | 'normal' | 'hard'
         this.survivalEngine.startGame(data && data.difficulty ? data.difficulty : 'normal');
         break;
       case 'reset_game':
+        this._stopSimulation();
         this.survivalEngine.reset();
         break;
       case 'sync_state':
@@ -319,6 +321,8 @@ class SurvivalRoom {
         // 生存游戏模拟器（直接触发测试事件）
         if (data && data.enabled) {
           this._runSimulation();
+        } else {
+          this._stopSimulation();
         }
         break;
       case 'get_weekly_ranking':
@@ -353,6 +357,14 @@ class SurvivalRoom {
         }
         break;
 
+      case 'end_game':
+        // GM 手动结束游戏 → 强制触发失败结算
+        this._stopSimulation();
+        if (this.survivalEngine.state === 'day' || this.survivalEngine.state === 'night') {
+          this.survivalEngine._enterSettlement('lose', 'manual');
+          console.log(`[SurvivalRoom:${this.roomId}] GM 手动结束游戏`);
+        }
+        break;
       case 'leave_room':
         // 客户端主动离开，忽略（连接断开由 WebSocket close 事件处理）
         break;
