@@ -179,6 +179,24 @@ namespace DrscfZ.Survival
         public string playerId;
     }
 
+    /// <summary>单个矿工HP快照（worker_hp_update 数组元素）</summary>
+    [Serializable]
+    public class WorkerHpEntry
+    {
+        public string playerId;
+        public int    hp;
+        public int    maxHp;
+        public bool   isDead;
+        public long   respawnAt;
+    }
+
+    /// <summary>矿工HP全量快照（type=worker_hp_update），服务器在每次HP变化后广播</summary>
+    [Serializable]
+    public class WorkerHpUpdateData
+    {
+        public WorkerHpEntry[] workers;
+    }
+
     // ==================== 实时贡献榜（type=live_ranking，游戏进行中推送）====================
 
     /// <summary>实时贡献榜单条记录</summary>

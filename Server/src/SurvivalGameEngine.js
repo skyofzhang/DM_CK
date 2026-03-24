@@ -206,8 +206,9 @@ class SurvivalGameEngine {
     this.nightDuration = p.nightDuration;
 
     // 按倍率调整资源衰减（在构造函数默认值基础上乘以倍率）
-    this.foodDecayDay   = (this.config.foodDecayDay   ?? 0.12) * p.decayMult;
-    this.foodDecayNight = (this.config.foodDecayNight ?? 0.15) * p.decayMult;
+    // ⚠️ 默认值必须与构造函数保持一致：foodDecayDay=1.0, foodDecayNight=1.5
+    this.foodDecayDay   = (this.config.foodDecayDay   ?? 1.0) * p.decayMult;
+    this.foodDecayNight = (this.config.foodDecayNight ?? 1.5) * p.decayMult;
     this.tempDecayDay   = (this.config.tempDecayDay   ?? 0.15) * p.decayMult;
     this.tempDecayNight = (this.config.tempDecayNight ?? 0.40) * p.decayMult;
     this.coalBurnTicks  = p.coalBurnTicks || 10;  // 自动烧煤间隔
@@ -783,14 +784,17 @@ class SurvivalGameEngine {
     }
   }
 
-  /** 广播当前所有矿工HP快照 */
+  /** 广播当前所有矿工HP快照（数组格式，方便 Unity JsonUtility 解析）*/
   _broadcastWorkerHp() {
     if (Object.keys(this._workerHp).length === 0) return;
-    const snapshot = {};
-    for (const [pid, w] of Object.entries(this._workerHp)) {
-      snapshot[pid] = { hp: w.hp, maxHp: w.maxHp, isDead: w.isDead, respawnAt: w.respawnAt };
-    }
-    this._broadcast({ type: 'worker_hp_update', timestamp: Date.now(), data: { workers: snapshot } });
+    const workers = Object.entries(this._workerHp).map(([pid, w]) => ({
+      playerId:  pid,
+      hp:        w.hp,
+      maxHp:     w.maxHp,
+      isDead:    w.isDead,
+      respawnAt: w.respawnAt,
+    }));
+    this._broadcast({ type: 'worker_hp_update', timestamp: Date.now(), data: { workers } });
   }
 
   _decayResources() {
@@ -803,7 +807,7 @@ class SurvivalGameEngine {
     const baseTempDecay = isNight ? this.tempDecayNight : this.tempDecayDay;
     const tempDecay = baseTempDecay * (this.tempDecayMultiplier || 1.0);
     if (this.coal > 0) {
-      // 有煤：按难度自动消耗煤炭维持炉温（easy=3秒/个, normal=2秒/个, hard=1.4秒/个）
+      // 有煤：按难度自动消耗煤炭维持炉温（easy=2秒/个, normal=1.4秒/个, hard=1秒/个）
       if (this._tickCounter % this.coalBurnTicks === 0) {
         this.coal = Math.max(0, this.coal - 1);
       }
@@ -1117,8 +1121,8 @@ class SurvivalGameEngine {
 
     const aliveWorkers = Object.entries(this._workerHp).filter(([, w]) => !w.isDead);
     if (aliveWorkers.length > 0) {
-      // 每个存活矿工平均承担伤害
-      const damagePerWorker = Math.floor(totalDamage / aliveWorkers.length);
+      // 每个存活矿工平均承担伤害（至少1点，避免小伤害完全跳过矿工直打城门）
+      const damagePerWorker = Math.max(1, Math.floor(totalDamage / aliveWorkers.length));
       for (const [pid, w] of aliveWorkers) {
         const actualDmg = Math.min(w.hp, damagePerWorker);
         w.hp -= actualDmg;
@@ -1147,7 +1151,8 @@ class SurvivalGameEngine {
       // 如果所有矿工刚好被打死，剩余伤害继续打城门
     }
 
-    // 剩余伤害（矿工全死后的溢出）打城门
+    // 剩余伤害（矿工全死后的溢出）打城门；clamp到0避免矿工分摊时负值"治疗"城门
+    remainingDamage = Math.max(0, remainingDamage);
     if (remainingDamage > 0) {
       this.gateHp = Math.max(0, this.gateHp - remainingDamage);
     }

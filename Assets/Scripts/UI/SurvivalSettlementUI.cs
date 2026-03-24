@@ -173,9 +173,13 @@ namespace DrscfZ.UI
             _screenC.SetActive(false);
 
             if (_survivalDaysText) _survivalDaysText.text = $"生存天数: {data.SurvivalDays}";
-            if (_totalKillsText)   _totalKillsText.text   = $"总击杀: {data.TotalKills}";
-            if (_totalGatherText)  _totalGatherText.text  = $"总采集: {data.TotalGather}";
-            if (_totalRepairText)  _totalRepairText.text  = $"总修墙: {data.TotalRepair}";
+            // TotalKills/Gather/Repair 当前由服务器统计，暂无数据时隐藏避免显示"0"
+            if (_totalKillsText)  _totalKillsText.gameObject.SetActive(data.TotalKills  > 0);
+            if (_totalGatherText) _totalGatherText.gameObject.SetActive(data.TotalGather > 0);
+            if (_totalRepairText) _totalRepairText.gameObject.SetActive(data.TotalRepair > 0);
+            if (_totalKillsText  && data.TotalKills  > 0) _totalKillsText.text  = $"总击杀: {data.TotalKills}";
+            if (_totalGatherText && data.TotalGather > 0) _totalGatherText.text = $"总采集: {data.TotalGather}";
+            if (_totalRepairText && data.TotalRepair > 0) _totalRepairText.text = $"总修墙: {data.TotalRepair}";
 
             // Hide all pre-created entries, then reveal as needed
             foreach (var entry in _rankEntries) entry.SetActive(false);
@@ -207,11 +211,14 @@ namespace DrscfZ.UI
             _screenC.SetActive(true);
 
             // MVP 横幅（第1名姓名）—— 始终更新，不依赖 top3Slots 是否绑定
-            var mvp = data.Rankings[0];
-            if (_mvpAnchorLineText)
-                _mvpAnchorLineText.text = $"本局MVP是 {mvp.Nickname}，感谢TA的付出！";
-            if (_mvpNameText)  _mvpNameText.text  = mvp.Nickname;
-            if (_mvpScoreText) _mvpScoreText.text = $"贡献值: {mvp.Score}";
+            var mvp = data.Rankings.Count > 0 ? data.Rankings[0] : null;
+            if (mvp != null)
+            {
+                if (_mvpAnchorLineText)
+                    _mvpAnchorLineText.text = $"本局MVP是 {mvp.Nickname}，感谢TA的付出！";
+                if (_mvpNameText)  _mvpNameText.text  = mvp.Nickname;
+                if (_mvpScoreText) _mvpScoreText.text = $"贡献值: {mvp.Score}";
+            }
 
             // Top3 槽位完整性校验
             bool slotsValid = _top3Slots != null && _top3Slots.Length >= 3;

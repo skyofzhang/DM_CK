@@ -66,6 +66,7 @@ namespace DrscfZ.UI
 
         private void OnEnable()  { TrySubscribe(); }
         private void OnDisable() { Unsubscribe(); }
+        private void OnDestroy() { Unsubscribe(); }
 
         private void TrySubscribe()
         {
@@ -74,6 +75,8 @@ namespace DrscfZ.UI
             if (sgm == null) return;
             sgm.OnStateChanged += OnStateChanged;
             _subscribed = true;
+            // 订阅后立即检查当前状态（可能已经是 Running）
+            OnStateChanged(sgm.State);
         }
 
         private void Unsubscribe()
@@ -131,7 +134,7 @@ namespace DrscfZ.UI
 
         private void RefreshColumn(TextMeshProUGUI[] rows, string resourceType)
         {
-            List<(string playerId, int amount)> top = null;
+            List<(string playerId, string playerName, int amount)> top = null;
             var rankSys = RankingSystem.Instance;
             if (rankSys != null)
                 top = rankSys.GetTopByResource(resourceType, 3);
@@ -140,7 +143,7 @@ namespace DrscfZ.UI
             {
                 if (rows[i] == null) continue;
                 if (top != null && i < top.Count)
-                    rows[i].text = $"{i + 1}. {TruncateName(top[i].playerId, 6)} {top[i].amount}";
+                    rows[i].text = $"{i + 1}. {TruncateName(top[i].playerName, 6)} {top[i].amount}";
                 else
                     rows[i].text = $"{i + 1}. —";
             }

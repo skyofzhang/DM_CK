@@ -100,8 +100,8 @@ namespace DrscfZ.Survival
             // 订阅昼夜切换事件 → 顶部飘字
             if (dayNightManager != null)
             {
-                dayNightManager.OnNightStarted += day => UI.TopFloatingTextUI.Instance?.ShowDanger("☠ 夜晚来临，怪物入侵！");
-                dayNightManager.OnDayStarted   += day => UI.TopFloatingTextUI.Instance?.ShowGold("☀ 黎明到来，守住了！");
+                dayNightManager.OnNightStarted += day => UI.TopFloatingTextUI.Instance?.ShowDanger("【夜袭】怪物入侵！全员防守！");
+                dayNightManager.OnDayStarted   += day => UI.TopFloatingTextUI.Instance?.ShowGold("【黎明】守住了！太阳升起！");
             }
 
             Debug.Log("[SurvivalGM] 极地生存游戏管理器已启动");
@@ -189,7 +189,7 @@ namespace DrscfZ.Survival
                     WorkerManager.Instance?.OnMonstersAppear();
                     break;
 
-                // ----- 矿工死亡/复活（HP系统）-----
+                // ----- 矿工死亡/复活/HP全量同步（HP系统）-----
                 case "worker_died":
                     var wd = JsonUtility.FromJson<WorkerDiedData>(dataJson);
                     WorkerManager.Instance?.HandleWorkerDied(wd.playerId, wd.respawnAt);
@@ -198,6 +198,12 @@ namespace DrscfZ.Survival
                 case "worker_revived":
                     var wrv = JsonUtility.FromJson<WorkerRevivedData>(dataJson);
                     WorkerManager.Instance?.HandleWorkerRevived(wrv.playerId);
+                    break;
+
+                case "worker_hp_update":
+                    var hpu = JsonUtility.FromJson<WorkerHpUpdateData>(dataJson);
+                    if (hpu?.workers != null)
+                        WorkerManager.Instance?.HandleWorkerHpUpdate(hpu.workers);
                     break;
 
                 // ----- 玩家工作指令（评论触发）-----
@@ -391,7 +397,14 @@ namespace DrscfZ.Survival
                     break;
 
                 case "settlement":
-                    HandleDefeatOrVictory("survived");
+                    // 断线重连时服务器处于结算状态 → 直接切换到 Settlement UI（原因未知，用 unknown）
+                    // 不调用 HandleDefeatOrVictory（那会创建假的"胜利"结算数据）
+                    // 10s 后服务器会自动重启，客户端会收到新的 survival_game_state(day)
+                    if (_state == SurvivalState.Running || _state == SurvivalState.Loading)
+                    {
+                        Debug.Log("[SGM] survival_game_state=settlement，服务器正在结算，等待自动重开");
+                        ChangeState(SurvivalState.Settlement);
+                    }
                     break;
             }
         }
@@ -410,7 +423,7 @@ namespace DrscfZ.Survival
                 _ => null
             };
             if (resType != null && !string.IsNullOrEmpty(data.playerId))
-                RankingSystem.Instance?.AddResourceContrib(data.playerId, resType, 1);
+                RankingSystem.Instance?.AddResourceContrib(data.playerId, data.playerName, resType, 1);
 
             string action = data.commandId switch
             {
@@ -437,7 +450,7 @@ namespace DrscfZ.Survival
             {
                 float dur = data.duration > 0 ? data.duration / 1000f : 30f;
                 workerManager?.ActivateAllWorkersGlow(dur);
-                ShowAnnouncementBanner("⚡ 主播加速！全体效率翻倍！", dur);
+                ShowAnnouncementBanner("【加速】主播加速！全体效率翻倍！", dur);
                 Debug.Log($"[SGM] broadcaster_effect: efficiency_boost ({dur}s)");
             }
             else if (data.action == "trigger_event")
@@ -456,14 +469,14 @@ namespace DrscfZ.Survival
             {
                 float dur = data.duration > 0 ? data.duration : 3f;
                 workerManager?.ActivateAllWorkersGlow(dur);
-                ShowAnnouncementBanner("🌟 666！全员加速！", 2f);
+                ShowAnnouncementBanner("【666】全员加速！", 2f);
                 Debug.Log("[SGM] special_effect: glow_all");
             }
             else if (data.effect == "frozen_all")
             {
                 float dur = data.duration > 0 ? data.duration : 30f;
                 workerManager?.ActivateAllWorkersFrozen(dur);
-                ShowAnnouncementBanner($"❄ 思能冻结！全体守护者冻结 {dur:F0}秒！", 3f);
+                ShowAnnouncementBanner($"【冰冻】全体守护者冻结 {dur:F0}秒！", 3f);
                 UI.FrozenStatusUI.ShowFrozen(dur);
                 Debug.Log("[SGM] special_effect: frozen_all");
             }
@@ -577,7 +590,7 @@ namespace DrscfZ.Survival
 
             // 城门失守时触发顶部飘字
             if (reason == "gate_breached")
-                UI.TopFloatingTextUI.Instance?.ShowDanger("⚠ 城门失守！游戏结束");
+                UI.TopFloatingTextUI.Instance?.ShowDanger("【告急】城门失守！游戏结束");
 
             var endData = new SurvivalGameEndedData
             {

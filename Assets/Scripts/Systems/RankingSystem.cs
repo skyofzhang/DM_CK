@@ -175,15 +175,21 @@ namespace DrscfZ.Systems
         // ─── 资源分类贡献追踪（白天物资排行榜专用）──────────────────────────
 
         // 按资源类型分别记录贡献（food=食物, coal=煤炭, ore=矿石）
-        private Dictionary<string, int> _foodContrib = new Dictionary<string, int>();
-        private Dictionary<string, int> _coalContrib = new Dictionary<string, int>();
-        private Dictionary<string, int> _oreContrib  = new Dictionary<string, int>();
+        private Dictionary<string, int>    _foodContrib = new Dictionary<string, int>();
+        private Dictionary<string, int>    _coalContrib = new Dictionary<string, int>();
+        private Dictionary<string, int>    _oreContrib  = new Dictionary<string, int>();
+        // playerId → playerName 映射（显示用）
+        private Dictionary<string, string> _playerNames = new Dictionary<string, string>();
         private bool _resourceDirty = false;
 
-        /// <summary>记录玩家某类资源的贡献量</summary>
-        public void AddResourceContrib(string playerId, string resourceType, int amount)
+        /// <summary>记录玩家某类资源的贡献量（playerName 用于显示）</summary>
+        public void AddResourceContrib(string playerId, string playerName, string resourceType, int amount)
         {
             if (string.IsNullOrEmpty(playerId) || amount <= 0) return;
+
+            // 缓存最新 playerName
+            if (!string.IsNullOrEmpty(playerName))
+                _playerNames[playerId] = playerName;
 
             Dictionary<string, int> dict;
             switch (resourceType.ToLower())
@@ -199,8 +205,8 @@ namespace DrscfZ.Systems
             _resourceDirty = true;
         }
 
-        /// <summary>获取某类资源的 Top N 玩家</summary>
-        public List<(string playerId, int amount)> GetTopByResource(string resourceType, int n = 3)
+        /// <summary>获取某类资源的 Top N 玩家（含 playerName）</summary>
+        public List<(string playerId, string playerName, int amount)> GetTopByResource(string resourceType, int n = 3)
         {
             Dictionary<string, int> dict;
             switch (resourceType.ToLower())
@@ -208,12 +214,15 @@ namespace DrscfZ.Systems
                 case "food":  dict = _foodContrib; break;
                 case "coal":  dict = _coalContrib; break;
                 case "ore":   dict = _oreContrib;  break;
-                default: return new List<(string, int)>();
+                default: return new List<(string, string, int)>();
             }
 
-            var result = new List<(string playerId, int amount)>();
+            var result = new List<(string playerId, string playerName, int amount)>();
             foreach (var kv in dict)
-                result.Add((kv.Key, kv.Value));
+            {
+                _playerNames.TryGetValue(kv.Key, out var name);
+                result.Add((kv.Key, name ?? kv.Key, kv.Value));
+            }
             result.Sort((a, b) => b.amount.CompareTo(a.amount));
             if (result.Count > n) result.RemoveRange(n, result.Count - n);
             return result;
@@ -233,6 +242,7 @@ namespace DrscfZ.Systems
             _foodContrib.Clear();
             _coalContrib.Clear();
             _oreContrib.Clear();
+            _playerNames.Clear();
             _resourceDirty = false;
         }
     }

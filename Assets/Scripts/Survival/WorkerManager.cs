@@ -536,6 +536,17 @@ namespace DrscfZ.Survival
             Debug.Log($"[WorkerManager] Worker '{playerId}' 已复活");
         }
 
+        /// <summary>服务器推送矿工HP全量快照 → 更新各Worker血条显示</summary>
+        public void HandleWorkerHpUpdate(WorkerHpEntry[] entries)
+        {
+            foreach (var entry in entries)
+            {
+                var worker = FindWorkerByPlayerId(entry.playerId);
+                if (worker == null) continue;
+                worker.SetHp(entry.hp, entry.maxHp);
+            }
+        }
+
         /// <summary>按playerId查找活跃Worker</summary>
         private WorkerController FindWorkerByPlayerId(string playerId)
         {

@@ -230,7 +230,7 @@ namespace DrscfZ.UI
             {
                 // 屏幕顶部大字公告
                 AnnouncementUI.Instance?.ShowAnnouncement(
-                    "⚡ 主播激活紧急加速！",
+                    "【加速】主播激活紧急加速！",
                     "全体效率翻倍30秒！",
                     new Color(1f, 1f, 0f),  // #FFFF00
                     3f
@@ -241,7 +241,7 @@ namespace DrscfZ.UI
             {
                 // 随机事件公告由服务器的 bobao 广播处理，这里显示通用提示
                 AnnouncementUI.Instance?.ShowAnnouncement(
-                    "🌊 主播触发了随机事件！",
+                    "【事件】主播触发了随机事件！",
                     "好事or坏事？拭目以待！",
                     new Color(0.27f, 1f, 0.53f), // #44FF88
                     3f
