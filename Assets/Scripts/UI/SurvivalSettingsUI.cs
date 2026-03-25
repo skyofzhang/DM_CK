@@ -165,7 +165,7 @@ namespace DrscfZ.UI
 
             // 版本号
             if (_versionText != null)
-                _versionText.text = $"冬日生存法则  v{Application.version}";
+                _versionText.text = $"极地生存法则  v{Application.version}";
 
             RefreshVolumeTexts(bgmVol, sfxVol);
             RefreshToggleIcons(bgmOn, sfxOn);
@@ -239,8 +239,8 @@ namespace DrscfZ.UI
 
         private void RefreshToggleIcons(bool bgmOn, bool sfxOn)
         {
-            if (_bgmToggleText != null) _bgmToggleText.text = bgmOn ? "🔊" : "🔇";
-            if (_sfxToggleText != null) _sfxToggleText.text = sfxOn ? "🔊" : "🔇";
+            if (_bgmToggleText != null) _bgmToggleText.text = bgmOn ? "开" : "关";
+            if (_sfxToggleText != null) _sfxToggleText.text = sfxOn ? "开" : "关";
         }
 
         // ==================== Phase2 视频开关回调 ====================
