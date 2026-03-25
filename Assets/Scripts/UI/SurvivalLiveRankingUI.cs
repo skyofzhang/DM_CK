@@ -47,8 +47,9 @@ namespace DrscfZ.UI
             BindFont(_titleText);
         }
 
-        private void OnEnable()  { TrySubscribe(); }
-        private void OnDisable() { Unsubscribe(); }
+        private void OnEnable()   { TrySubscribe(); }
+        private void OnDisable()  { Unsubscribe(); }
+        private void OnDestroy()  { Unsubscribe(); }
 
         // SGM 可能比本组件晚初始化，Update 里补订阅（成功后停止轮询）
         private void Update()
@@ -62,9 +63,14 @@ namespace DrscfZ.UI
             var sgm = SurvivalGameManager.Instance;
             if (sgm == null) return;
 
-            sgm.OnStateChanged       += OnStateChanged;
+            sgm.OnStateChanged        += OnStateChanged;
             sgm.OnLiveRankingReceived += OnLiveRankingReceived;
             _subscribed = true;
+
+            // ⚠️ 订阅后立即检查当前状态：
+            // GameUIPanel 被激活时游戏可能已在 Running 状态，
+            // OnStateChanged 不会再次触发，必须主动补一次。
+            OnStateChanged(sgm.State);
         }
 
         private void Unsubscribe()
