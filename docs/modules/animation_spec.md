@@ -1,4 +1,4 @@
-# 冬日生存法则 — 动画规格 v1.0
+# 极地生存法则 — 动画规格 v1.0
 
 > 参考：`docs/modules/ui_theme.md` 中的 A_ 动画变量
 > 技术栈：Unity 2022.3 + URP；Worker动画用 Animator状态机 + 代码驱动；UI动画用 DOTween/LeanTween

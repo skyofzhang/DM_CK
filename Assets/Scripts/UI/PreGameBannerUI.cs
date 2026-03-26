@@ -27,7 +27,7 @@ namespace DrscfZ.UI
         [SerializeField] private GameObject _panel;
 
         [Header("文字")]
-        [SerializeField] private TMP_Text _titleText;       // "冬日生存法则"
+        [SerializeField] private TMP_Text _titleText;       // "极地生存法则"
         [SerializeField] private TMP_Text _statusText;      // "等待玩家加入... | 已有 N 位守护者"
         [SerializeField] private TMP_Text _playerCountText; // 倒计时大字 / 玩家人数大字
 
@@ -63,7 +63,7 @@ namespace DrscfZ.UI
             _startBtn?.onClick.AddListener(OnStartClicked);
 
             // 设置标题
-            if (_titleText != null) _titleText.text = "冬日生存法则";
+            if (_titleText != null) _titleText.text = "极地生存法则";
 
             // 订阅网络事件
             var net = NetworkManager.Instance;

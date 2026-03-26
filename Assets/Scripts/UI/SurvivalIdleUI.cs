@@ -62,7 +62,7 @@ namespace DrscfZ.UI
 
             // 初始标题
             if (_titleText != null)
-                _titleText.text = "冬日生存法则";
+                _titleText.text = "极地生存法则";
 
             // 初始化（防止场景已连接+Idle 时漏显）
             RefreshVisibility();
@@ -109,7 +109,7 @@ namespace DrscfZ.UI
 
             // 更新连接状态文字
             if (_serverStatus != null)
-                _serverStatus.text = isConnected ? "已连接 ✓" : "连接中...";
+                _serverStatus.text = isConnected ? "已连接 √" : "连接中...";
         }
 
         private void ShowPanel()

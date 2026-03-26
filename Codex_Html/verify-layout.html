@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>极地生存法则 · UI布局验证报告 v3</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#020810;color:#CBD5E1;font-family:'PingFang SC','Microsoft YaHei','Segoe UI',sans-serif;padding:28px 20px}
+h1{text-align:center;font-size:24px;color:#7EC8E3;margin-bottom:6px}
+.subtitle{text-align:center;font-size:13px;color:#475569;margin-bottom:4px}
+.stats{text-align:center;font-size:13px;color:#4ADE80;margin-bottom:22px}
+.legend{display:flex;flex-wrap:wrap;gap:8px 18px;justify-content:center;margin-bottom:28px}
+.leg{display:flex;align-items:center;gap:5px;font-size:11px;color:#94A3B8}
+.leg-box{width:12px;height:12px;border-radius:2px;flex-shrink:0}
+.grid{display:flex;flex-wrap:wrap;gap:18px;justify-content:center;max-width:1480px;margin:0 auto}
+.card{background:#0A1628;border:1px solid #1E3A5F;border-radius:10px;padding:10px;width:292px}
+.card-id{font-size:10px;color:#475569;margin-bottom:2px}
+.card-name{font-size:13px;font-weight:700;color:#93C5FD}
+.card-ref{font-size:10px;color:#334155;margin-bottom:7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cvwrap{
+  position:relative;width:270px;height:480px;
+  background:#061525;border:1px solid #0F2844;
+  border-radius:3px;overflow:hidden
+}
+.cvwrap::before{
+  content:'';position:absolute;left:0;right:0;top:240px;
+  height:1px;background:rgba(74,158,204,.2);pointer-events:none;z-index:5
+}
+.cvwrap::after{
+  content:'中心';position:absolute;right:3px;top:232px;
+  font-size:8px;color:rgba(74,158,204,.4);z-index:5
+}
+.elem{position:absolute;box-sizing:border-box;overflow:hidden;border-radius:2px}
+.lbl{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-size:7.5px;font-weight:700;text-align:center;padding:1px 3px;line-height:1.2;word-break:break-all}
+/* 元素色彩 */
+.btn {background:rgba(34,197,94,.16); border:1.5px solid #22C55E;color:#22C55E}
+.txt {background:rgba(56,189,248,.12); border:1.5px solid #38BDF8;color:#38BDF8}
+.pan {background:rgba(74,158,204,.08); border:1.5px dashed #4A9ECC;color:#4A9ECC}
+.ovl {background:rgba(168,85,247,.06); border:1.5px dashed #A78BFA;color:#A78BFA}
+.bar {background:rgba(245,158,11,.12); border:1.5px solid #F59E0B;color:#F59E0B}
+.slot{background:rgba(249,115,22,.15); border:1.5px solid #F97316;color:#F97316}
+.fix {background:rgba(239,68,68,.18);  border:1.5px solid #EF4444;color:#EF4444}
+.miss{background:rgba(234,179,8,.08); border:1.5px dashed #EAB308;color:#CA8A04}
+.xtra{background:rgba(100,116,139,.08);border:1.5px dashed #64748B;color:#64748B}
+
+.badge-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
+.badge{display:inline-flex;align-items:center;gap:3px;font-size:10px;padding:2px 8px;border-radius:4px}
+.bok  {background:rgba(34,197,94,.15); color:#4ADE80}
+.bfix {background:rgba(239,68,68,.15); color:#F87171}
+.bwarn{background:rgba(245,158,11,.15);color:#FCD34D}
+.bcat {background:rgba(56,189,248,.12);color:#7DD3FC}
+.bpar {background:rgba(139,92,246,.12);color:#C4B5FD}
+.card-note{font-size:10px;color:#A16207;margin-top:6px;line-height:1.5;
+  border-top:1px solid #1E3A5F;padding-top:5px}
+
+.summary{max-width:960px;margin:36px auto 0;background:#0A1628;border:1px solid #1E3A5F;border-radius:10px;padding:20px}
+.summary h2{font-size:15px;color:#7EC8E3;margin-bottom:14px}
+.sg{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.si{font-size:11px;color:#94A3B8;padding:5px 0;border-bottom:1px solid #0F2A42}
+.si .ok{color:#4ADE80}.si .fx{color:#F87171}.si .wn{color:#FCD34D}
+.foot{margin-top:14px;padding-top:12px;border-top:1px solid #0F2A42;font-size:11px;color:#475569;text-align:center}
+</style>
+</head>
+<body>
+<h1>极地生存法则 · UI布局验证对比报告 v3</h1>
+<p class="subtitle">Unity RectTransform 实际值可视化 &nbsp;·&nbsp; 缩放比 1:4（1080→270 / 1920→480）&nbsp;·&nbsp; 蓝线 = 画布垂直中心</p>
+<p class="stats" id="stats">载入中…</p>
+
+<div class="legend">
+  <div class="leg"><div class="leg-box" style="background:rgba(34,197,94,.3);border:1.5px solid #22C55E"></div>按钮/交互（已验证）</div>
+  <div class="leg"><div class="leg-box" style="background:rgba(56,189,248,.25);border:1.5px solid #38BDF8"></div>文本（已验证）</div>
+  <div class="leg"><div class="leg-box" style="background:rgba(74,158,204,.15);border:1.5px dashed #4A9ECC"></div>容器/面板</div>
+  <div class="leg"><div class="leg-box" style="background:rgba(168,85,247,.15);border:1.5px dashed #A78BFA"></div>全屏覆盖层</div>
+  <div class="leg"><div class="leg-box" style="background:rgba(245,158,11,.25);border:1.5px solid #F59E0B"></div>横条/底栏</div>
+  <div class="leg"><div class="leg-box" style="background:rgba(249,115,22,.25);border:1.5px solid #F97316"></div>排行槽位</div>
+  <div class="leg"><div class="leg-box" style="background:rgba(239,68,68,.3);border:1.5px solid #EF4444"></div>本次修复</div>
+  <div class="leg"><div class="leg-box" style="background:rgba(234,179,8,.2);border:1.5px dashed #EAB308"></div>HTML有，Unity未实现/未验证</div>
+  <div class="leg"><div class="leg-box" style="background:rgba(100,116,139,.2);border:1.5px dashed #64748B"></div>Unity额外（HTML原型无）</div>
+</div>
+
+<div class="grid" id="grid"></div>
+<div class="summary" id="summary"></div>
+
+<script>
+const S=0.25, CW=1080, CH=1920;
+
+function css(aMin,aMax,piv,pos,sz){
+  const aL=aMin.x*CW,aR=aMax.x*CW,aB=aMin.y*CH,aT=aMax.y*CH;
+  const aCX=(aL+aR)/2,aCY=(aB+aT)/2;
+  const w=(aR-aL)+sz.w,h=(aT-aB)+sz.h;
+  const pOX=(piv.x-.5)*w,pOY=(piv.y-.5)*h;
+  const cX=aCX+pos.x-pOX,cY=aCY+pos.y-pOY;
+  return{left:(cX-w/2)*S,top:(CH-cY-h/2)*S,width:Math.max(w*S,2),height:Math.max(h*S,2)};
+}
+const c  =(px,py,w,h)=>css({x:.5,y:.5},{x:.5,y:.5},{x:.5,y:.5},{x:px,y:py},{w,h});
+const ts =(py,h)     =>css({x:0,y:1},{x:1,y:1},{x:.5,y:1},{x:0,y:py},{w:0,h});
+const bs =(py,h)     =>css({x:0,y:0},{x:1,y:0},{x:.5,y:0},{x:0,y:py},{w:0,h});
+const ms =(py,h)     =>css({x:0,y:.5},{x:1,y:.5},{x:.5,y:.5},{x:0,y:py},{w:0,h});
+const fs =()         =>css({x:0,y:0},{x:1,y:1},{x:.5,y:.5},{x:0,y:0},{w:0,h:0});
+const rt =(px,py,w,h)=>css({x:1,y:.5},{x:1,y:.5},{x:1,y:.5},{x:px,y:py},{w,h});
+const bc =(px,py,w,h)=>css({x:.5,y:0},{x:.5,y:0},{x:.5,y:0},{x:px,y:py},{w,h});
+// BottomBar子元素（高280，底部锚定画布底部，BottomBar中心 Unity y=-820）
+const bb =(px,py,w,h)=>c(px,-820+py,w,h);
+
+// ─── 14个面板数据 ─────────────────────────────────────────────
+const PANELS=[
+
+  // ══════════════════════════════════════════════════════════════
+  // HTML 01 — 大厅面板 LobbyPanel
+  // 诊断结论：LiveRankingPanel 在 Canvas/GameUIPanel 内，大厅态不可见。
+  // HTML01 右侧排行榜（top=520）在 Unity 当前属于"待实现功能"，非位置错误。
+  // ══════════════════════════════════════════════════════════════
+  {
+    id:"01", name:"大厅面板 LobbyPanel",
+    ref:"01-winter-survival-idle-lobby.html",
+    tags:["ok","warn"],
+    note:"【诊断结果】LiveRankingPanel 位于 Canvas/GameUIPanel 内（activeSelf=false），大厅不显示\n" +
+         "→ HTML01 右侧贡献榜（right=0, top=520, 240×520）是待实现的大厅专属功能\n" +
+         "→ RankingBtn/SettingsBtn 是 Unity 额外按钮（HTML01 无此设计）\n" +
+         "黄虚线 = HTML01 原型应有的大厅板块（现 Unity 中缺失）",
+    elems:[
+      {n:"TitleText",                          r:c(0,825,920,110),   t:"txt"},
+      {n:"StatusText",                         r:c(0,176,760,65),    t:"txt"},
+      {n:"ServerStatus",                       r:c(0,90,760,38),     t:"txt"},
+      {n:"StartBtn",                           r:c(0,-785,520,110),  t:"btn"},
+      // HTML01 参考：等待面板 left=80, top=500, 760×480
+      {n:"WaitPanel\n(HTML01待实现)\nleft=80,top=500\n760×480",
+                                               r:c(-80,220,760,480), t:"miss"},
+      // HTML01 参考：右侧贡献榜 right=0, top=520, 240×520（大厅专属位置）
+      {n:"大厅Board\n(HTML01待实现)\nright=0,top=520\n240×520",
+                                               r:rt(0,180,240,520),  t:"miss"},
+      // Unity 额外（HTML01 无此按钮设计）
+      {n:"RankingBtn\n(Unity额外)",             r:c(-175,-650,230,60),t:"xtra"},
+      {n:"SettingsBtn\n(Unity额外)",            r:c(175,-650,230,60), t:"xtra"},
+    ]
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // HTML 02 — 加载面板
+  // ══════════════════════════════════════════════════════════════
+  {
+    id:"02", name:"加载面板 LoadingPanel",
+    ref:"02-loading-ui.html",
+    tags:["ok"],
+    note:"",
+    elems:[
+      {n:"LoadingPanel（全屏）", r:fs(),             t:"pan"},
+      {n:"LoadingText",          r:c(0,-118,700,45), t:"txt"},
+    ]
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // HTML 03 — 游戏主战斗HUD
+  // ══════════════════════════════════════════════════════════════
+  {
+    id:"03", name:"游戏HUD 主战斗界面",
+    ref:"03-game-hud.html",
+    tags:["ok"],
+    note:"",
+    elems:[
+      {n:"TopBar\nh=120 顶部拉伸", r:ts(0,120),          t:"bar"},
+      {n:"LiveRankingPanel\n(Canvas/GameUIPanel子级)\n230×460",
+                                    r:rt(0,590,230,460),  t:"pan"},
+    ]
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // HTML 04 — 实时贡献榜
+  // ══════════════════════════════════════════════════════════════
+  {
+    id:"04", name:"实时贡献榜",
+    ref:"04-live-contribution-board.html",
+    tags:["ok"],
+    note:"",
+    elems:[
+      {n:"LiveRankingPanel\n(GameUIPanel子级)\n230×460", r:rt(0,590,230,460), t:"pan"},
+    ]
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // HTML 05 — 结算A 胜负结果
+  // 已验证：hero区域 ResultTitle/Subtitle
+  // 未覆盖：.stats 3列面板 / .join文字 / 次级按钮 / 分页点
+  // ══════════════════════════════════════════════════════════════
+  {
+    id:"05", name:"结算A 胜负结果",
+    ref:"05-settlement-a-result.html",
+    tags:["ok","partial"],
+    note:"✅ 已验证: ResultTitle / ResultSubtitle\n" +
+         "🔧 BtnViewRanking(480×100)+RestartButton/返回大厅(300×80)已按HTML06横排样式重构\n" +
+         "⚠ 未核实 .stats 3列数据面板(top=800,h=340) / .join文字(top=1180) / 次级按钮 / 分页点",
+    elems:[
+      {n:"ScreenA（全屏）",   r:fs(),                t:"ovl"},
+      {n:"ResultTitle",       r:c(0,610,860,140),    t:"txt"},
+      {n:"ResultSubtitle",    r:c(0,311,700,100),    t:"txt"},
+      // HTML05 .stats 3列数据面板 top=800, h=340
+      {n:".stats 3列数据\n(HTML参考 top=800,h=340)", r:c(0,-10,980,340), t:"miss"},
+      // HTML05 .join 参与提示文字 top=1180
+      {n:".join 参与文字\n(HTML参考 top=1180)",      r:c(0,-244,900,48), t:"miss"},
+      {n:"BtnViewRanking\n查看英雄榜 480×100", r:c(-165,-750,480,100), t:"btn"},
+      {n:"RestartButton\n返回大厅 300×80",     r:c(255,-740,300,80),   t:"btn"},
+      // HTML05 次级按钮 560×80，叠于RestartButton下方
+      {n:".subb 次级按钮\n(HTML参考 560×80)",        r:c(0,-852,560,80), t:"miss"},
+      // HTML05 分页点 bottom=80
+      {n:".pager 分页点\n(HTML参考 bottom=80)",       r:c(0,-868,280,24), t:"miss"},
+    ]
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // HTML 06 — 结算B 数据统计
+  // 修复记录：已删除 RankingTitle + RankingList（HTML06无此元素）
+  // 修复后：ScreenB 仅剩 StatsHeader + 4个数据格（正确）
+  // 注：实际Unity对象名带"Text"后缀（如TotalGatherText）
+  // ══════════════════════════════════════════════════════════════
+  {
+    id:"06", name:"结算B 数据统计",
+    ref:"06-settlement-b-stats.html",
+    tags:["ok","fix"],
+    note:"🔧 已修复：删除 RankingTitle + RankingList（HTML06无此元素）\n" +
+         "🔧 已修复：RestartButton拆分为横排两按钮对齐HTML06\n" +
+         "   BtnViewRanking(480×100 x=-165,y=-750) + RestartButton/返回大厅(300×80 x=255,y=-740)\n" +
+         "注：Unity实际对象名带Text后缀（TotalGatherText / TotalKillsText等）",
+    elems:[
+      {n:"ScreenB（全屏）",          r:fs(),                   t:"ovl"},
+      {n:"StatsHeader\n本局数据",    r:c(0,818,800,84),        t:"txt"},
+      // 数据网格（HTML06原型 2列×3行，坐标已验证）
+      {n:"TotalGatherText\n采集总量(左)", r:c(-210,560,380,180), t:"txt"},
+      {n:"TotalKillsText\n击杀总数(右)",  r:c(210,560,380,180),  t:"txt"},
+      {n:"TotalRepairText\n修缮次数(右)", r:c(210,330,380,180),  t:"txt"},
+      {n:"SurvivalDaysText\n存活天数(右)",r:c(210,100,380,180),  t:"txt"},
+      {n:"HintText\n(HTML参考 top=1320)", r:c(0,-377,800,34),    t:"miss"},
+      // HTML06横排Flex按钮 — 已在Unity中实现
+      {n:"BtnViewRanking\n查看英雄榜\n480×100",  r:c(-165,-750,480,100), t:"btn"},
+      {n:"RestartButton\n返回大厅\n300×80",       r:c(255,-740,300,80),   t:"btn"},
+      {n:".pager ○●○\n(HTML参考 bottom=80)", r:c(0,-868,280,24), t:"miss"},
+    ]
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // HTML 07 — 结算C 英雄榜
+  // ══════════════════════════════════════════════════════════════
+  {
+    id:"07", name:"结算C 英雄榜",
+    ref:"07-settlement-c-heroes.html",
+    tags:["ok"],
+    note:"",
+    elems:[
+      {n:"ScreenC（全屏）",   r:fs(),                t:"ovl"},
+      {n:"MvpLabel",          r:c(0,712,700,40),     t:"txt"},
+      {n:"MvpNameText",       r:c(80,620,500,70),    t:"txt"},
+      {n:"MvpScoreText",      r:c(80,560,400,44),    t:"txt"},
+      {n:"MvpAnchorLine",     r:c(0,460,600,3),      t:"txt"},
+      {n:"Top3 1st\n260×490", r:c(0,245,260,490),    t:"slot"},
+      {n:"Top3 2nd\n220×364", r:c(-250,182,220,364), t:"slot"},
+      {n:"Top3 3rd\n200×314", r:c(260,157,200,314),  t:"slot"},
+      {n:"BtnViewRanking\n查看英雄榜 480×100", r:c(-165,-750,480,100), t:"btn"},
+      {n:"RestartButton\n返回大厅 300×80",     r:c(255,-740,300,80),   t:"btn"},
+    ]
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // HTML 08 — 设置面板
+  // ══════════════════════════════════════════════════════════════
+  {
+    id:"08", name:"设置面板",
+    ref:"08-settings-modal.html",
+    tags:["ok"],
+    note:"",
+    elems:[
+      {n:"SurvivalSettingsPanel\n860×620 居中", r:c(0,0,860,620), t:"pan"},
+    ]
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // HTML 09 — 全屏公告（设计参考：含3种变体）
+  // HTML09为3种公告变体叠放展示，Unity用单一面板实现
+  // ══════════════════════════════════════════════════════════════
+  {
+    id:"09", name:"全屏公告（3变体设计参考）",
+    ref:"09-announcement-variants.html",
+    tags:["ok","catalog"],
+    note:"📚 HTML09含3种变体叠放展示（各640px高）：游戏开始/怪物来袭/度过凛冬\n" +
+         "Unity用单一AnnouncementPanel全屏实现，代码切换内容\n" +
+         "当前坐标基于变体t1的中心偏移，其余变体同构",
+    elems:[
+      {n:"AnnouncementPanel（全屏）", r:fs(),             t:"ovl"},
+      {n:"MainText 900×140",         r:c(0,132,900,140), t:"txt"},
+      {n:"SubText 800×50",           r:c(0,-30,800,50),  t:"txt"},
+    ]
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // HTML 10 — VIP礼物公告
+  // ══════════════════════════════════════════════════════════════
+  {
+    id:"10", name:"VIP礼物公告",
+    ref:"10-vip-gift-announcement.html",
+    tags:["ok"],
+    note:"",
+    elems:[
+      {n:"VIPAnnouncement（全屏）", r:fs(),            t:"ovl"},
+      {n:"VideoContainer（全屏）",  r:fs(),            t:"pan"},
+      {n:"VIPText 800×300",         r:c(0,0,800,300), t:"txt"},
+    ]
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // HTML 11 — 玩家加入通知
+  // 修复记录：
+  //   原: bc(0,20,700,280) — bottom-center，宽700px
+  //   改: bs(0,260) — 全宽底部拉伸，高260px，对齐HTML11 .zone
+  // 说明：3个胶囊通知（680×72）由PlayerJoinNotificationUI.cs运行时生成
+  //       下方黄虚线为HTML11的胶囊参考位置
+  // ══════════════════════════════════════════════════════════════
+  {
+    id:"11", name:"玩家加入通知",
+    ref:"11-player-join-notifications.html",
+    tags:["ok","fix"],
+    note:"🔧 已修复：700×280 bottom-center → 全宽底部拉伸 h=260，对齐HTML11 .zone\n" +
+         "HTML11 .zone = 全宽渐变背景（1080×260，bottom=0）\n" +
+         "胶囊通知（680×72）由代码运行时生成，bottom=20/108/196（下方黄虚线为参考位置）",
+    elems:[
+      // Unity修复后：全宽底部拉伸 h=260
+      {n:"JoinNotification\n(已修复)\n全宽拉伸 h=260",  r:bs(0,260),         t:"bar"},
+      // HTML11 胶囊通知参考位置（运行时生成，非场景预置）
+      {n:"Cap1 最新通知\n680×72\n(运行时生成)\nbottom=20",  r:bc(0,20,680,72),   t:"miss"},
+      {n:"Cap2 中间\n680×72\nbottom=108",                   r:bc(0,108,680,72),  t:"miss"},
+      {n:"Cap3 最旧\n680×72\nbottom=196",                   r:bc(0,196,680,72),  t:"miss"},
+    ]
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // HTML 12 — 冻结状态横幅
+  // ══════════════════════════════════════════════════════════════
+  {
+    id:"12", name:"冻结状态横幅",
+    ref:"12-freeze-status-banner.html",
+    tags:["ok"],
+    note:"",
+    elems:[
+      {n:"FrozenStatusPanel\nh=100 横向拉伸", r:ms(-11,100), t:"bar"},
+    ]
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // HTML 13 — 礼物通知横幅（7种档位设计参考）
+  // HTML13为设计样式参考，非单一位置规范
+  // ══════════════════════════════════════════════════════════════
+  {
+    id:"13", name:"礼物通知横幅（7档设计参考）",
+    ref:"13-gift-banner-tiers.html",
+    tags:["ok","catalog"],
+    note:"📚 HTML13为7种礼物档位视觉样式展示（T1~T5，高度110~165px）\n" +
+         "Unity的GiftNotification位置(y=-300, h=140)为游戏叠加层语境位置\n" +
+         "各档位视觉样式请参照HTML13原稿",
+    elems:[
+      {n:"GiftNotification\n全宽拉伸 h=140\ny=-300（游戏叠加层）", r:ms(-300,140), t:"bar"},
+    ]
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  // HTML 14 — GM调试控制栏
+  // HTML14实际设计：Row1=4个按钮 + Row2=5个按钮 + 底部状态行
+  // Unity现状：1行5个旧命名按钮（已修复y=0→y+60）
+  // 黄虚线=HTML14参考布局（2行9个按钮），按钮命名与Unity不同
+  // ══════════════════════════════════════════════════════════════
+  {
+    id:"14", name:"GM调试控制栏",
+    ref:"14-gm-debug-panel.html",
+    tags:["ok","fix","warn"],
+    note:"🔧 已重构：BottomBar完整对齐HTML14（9按钮布局）\n" +
+         "  Row1: BtnStart▶/BtnPause⏸/BtnEnd⏹/BtnReset🔄\n" +
+         "  Row2a: BtnGiftT1/T3/T5/BtnFreeze❄\n" +
+         "  Row2b: BtnMonster💥（flex-wrap换行，左对齐）\n" +
+         "  BtnConnect/BtnSimulate已隐藏（保留代码引用），BtnPlayerData已删除",
+    elems:[
+      {n:"BottomBar\nh=280 底部拉伸",         r:bs(0,280),             t:"bar"},
+      {n:"StatusText\n底部拉伸 h=28",         r:bs(5,28),              t:"txt"},
+      // Row1 (y=-776 canvas → ap.y=44 in BottomBar)
+      {n:"BtnStart\n▶ 开始游戏\n200×60",     r:c(-410,-776,200,60),   t:"btn"},
+      {n:"BtnPause\n⏸ 暂停游戏\n200×60",     r:c(-194,-776,200,60),   t:"btn"},
+      {n:"BtnEnd\n⏹ 结束游戏\n200×60",       r:c(22,-776,200,60),     t:"btn"},
+      {n:"BtnReset\n🔄 重置\n160×60",         r:c(218,-776,160,60),    t:"btn"},
+      // Row2a (y=-850 → ap.y=-30)
+      {n:"BtnGiftT1\nT1 礼物\n220×60",       r:c(-400,-850,220,60),   t:"btn"},
+      {n:"BtnGiftT3\nT3 礼物\n220×60",       r:c(-164,-850,220,60),   t:"btn"},
+      {n:"BtnGiftT5\nT5 礼物\n220×60",       r:c(72,-850,220,60),     t:"btn"},
+      {n:"BtnFreeze\n❄ 冻结\n200×60",        r:c(298,-850,200,60),    t:"btn"},
+      // Row2b: flex-wrap换行 (y=-926 → ap.y=-106)
+      {n:"BtnMonster\n💥 怪物\n200×60",       r:c(-410,-926,200,60),   t:"btn"},
+      // 隐藏的旧按钮（保留代码引用，size=1×1透明）
+      {n:"BtnConnect\n(已隐藏,保留引用)",      r:c(0,-900,1,1),         t:"xtra"},
+      {n:"BtnSimulate\n(已隐藏,保留引用)",     r:c(0,-910,1,1),         t:"xtra"},
+    ]
+  },
+
+];
+
+// ─── 渲染 ────────────────────────────────────────────────────
+const grid=document.getElementById('grid');
+let totalOk=0, totalFix=0, totalMiss=0, totalXtra=0;
+
+const TAG_BADGES={
+  ok:     '<span class="badge bok">✅ 已验证</span>',
+  fix:    '<span class="badge bfix">🔧 已修复</span>',
+  warn:   '<span class="badge bwarn">⚠️ 存在差异</span>',
+  catalog:'<span class="badge bcat">📚 设计参考</span>',
+  partial:'<span class="badge bpar">🔍 部分覆盖</span>',
+};
+
+PANELS.forEach(p=>{
+  const card=document.createElement('div');
+  card.className='card';
+  const badges=p.tags.map(t=>TAG_BADGES[t]||'').join('');
+  const noteHtml=p.note?`<div class="card-note">${p.note.replace(/\n/g,'<br>')}</div>`:'';
+
+  card.innerHTML=`
+    <div class="card-id">HTML ${p.id}</div>
+    <div class="card-name">${p.name}</div>
+    <div class="card-ref" title="${p.ref}">${p.ref}</div>
+    <div class="cvwrap" id="cv-${p.id}"></div>
+    <div class="badge-row">${badges}</div>
+    ${noteHtml}`;
+  grid.appendChild(card);
+
+  const cv=card.querySelector('.cvwrap');
+  p.elems.forEach(el=>{
+    const r=el.r;
+    if(r.left+r.width<0||r.left>270||r.top+r.height<0||r.top>480) return;
+    const div=document.createElement('div');
+    div.className=`elem ${el.t}`;
+    div.style.cssText=`left:${r.left.toFixed(1)}px;top:${r.top.toFixed(1)}px;`+
+      `width:${r.width.toFixed(1)}px;height:${r.height.toFixed(1)}px;`;
+    const lbl=document.createElement('div');
+    lbl.className='lbl';
+    lbl.textContent=el.n;
+    div.appendChild(lbl);
+    cv.appendChild(div);
+    if(el.t==='fix')       totalFix++;
+    else if(el.t==='miss') totalMiss++;
+    else if(el.t==='xtra') totalXtra++;
+    else                   totalOk++;
+  });
+});
+
+document.getElementById('stats').textContent=
+  `✅ ${totalOk} 已验证  ·  🔧 ${totalFix} 已修复  ·  `+
+  `⚠ ${totalMiss} HTML有未实现  ·  ⬜ ${totalXtra} Unity额外  ·  📅 2026-03-11`;
+
+// ─── 汇总表 ──────────────────────────────────────────────────
+// ok=绿, fix=橙(修复过), warn=黄(存在差异)
+const STATUS={
+  '01':'wn','02':'ok','03':'ok','04':'ok','05':'wn',
+  '06':'fx','07':'ok','08':'ok','09':'ok','10':'ok',
+  '11':'fx','12':'ok','13':'ok','14':'fx'
+};
+const ICON={'ok':'✅','fx':'🔧','wn':'⚠️'};
+const STATUS_DESC={
+  '01':'大厅Board待实现（LiveRankingPanel在GameUIPanel内）',
+  '02':'全屏LoadingText 已验证',
+  '03':'TopBar+LiveRankingPanel 已验证',
+  '04':'LiveRankingPanel 已验证',
+  '05':'hero区已验证，stats/join/次级btn待核实',
+  '06':'已删除多余RankingTitle+RankingList',
+  '07':'MVP+Top3槽位 已验证',
+  '08':'设置面板居中 已验证',
+  '09':'设计参考页（3变体），单一面板已实现',
+  '10':'VIPText+VideoContainer 已验证',
+  '11':'已修复为全宽拉伸h=260，胶囊运行时生成',
+  '12':'FrozenStatusPanel 已验证',
+  '13':'设计参考页（7档位），叠加层位置已设置',
+  '14':'已修复y+60，HTML14 2行布局待重构',
+};
+
+document.getElementById('summary').innerHTML=`
+<h2>📋 完整验证清单（14 HTML → Unity 布局）</h2>
+<div class="sg">
+${PANELS.map(p=>{
+  const s=STATUS[p.id];
+  return`<div class="si">
+    <span class="${s}">${ICON[s]}</span>
+    <strong>${p.id}</strong> ${p.name}<br>
+    <span style="font-size:10px;opacity:.6">${STATUS_DESC[p.id]||''}</span>
+  </div>`;
+}).join('')}
+</div>
+<div class="foot">
+  Canvas 1080×1920 · Scale With Screen Size<br>
+  绿=已验证对齐 · 橙=本轮修复 · 黄=设计存在差异或待实现<br>
+  <strong>本轮修复：</strong> ScreenB删除RankingTitle+RankingList · JoinNotification改为全宽拉伸260px · BottomBar按钮y=0→y+60
+</div>`;
+</script>
+</body>
+</html>

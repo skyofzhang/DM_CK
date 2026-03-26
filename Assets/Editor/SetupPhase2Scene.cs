@@ -268,8 +268,8 @@ public class SetupPhase2Scene
             slot.SetActive(false);
         }
 
-        // 挂 GiftNotificationUI 到 Gift_Canvas 根
-        var gnUI = giftCanvasGO.AddComponent<GiftNotificationUI>();
+        // GiftNotificationUI has been removed; skipping component add.
+        // var gnUI = giftCanvasGO.AddComponent<GiftNotificationUI>();
         EditorUtility.SetDirty(giftCanvasGO);
 
         Debug.Log("[SetupPhase2Scene] ✅ Gift_Canvas hierarchy created. Wire [SerializeField] refs in Inspector.");

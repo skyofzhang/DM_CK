@@ -21,6 +21,8 @@ namespace DrscfZ.UI
     /// </summary>
     public class GiftAnimationUI : MonoBehaviour
     {
+        public static GiftAnimationUI Instance { get; private set; }
+
         [Header("Config")]
         [Tooltip("同屏最大礼物动画数")]
         [SerializeField] private int maxSimultaneous = 3;
@@ -44,6 +46,16 @@ namespace DrscfZ.UI
         [Header("Video Clips (tier1~tier6, Inspector中拖入WebM)")]
         [SerializeField] private VideoClip[] tierVideoClips = new VideoClip[6];
 
+        [Header("VIP入场 - 全屏显示（场景预创建引用）")]
+        [Tooltip("全屏 RawImage，用于播放 VIP 入场视频")]
+        [SerializeField] private RawImage    _vipVideoDisplay;
+        [Tooltip("控制 VIP 视频整体透明度（淡入淡出）")]
+        [SerializeField] private CanvasGroup _vipCanvasGroup;
+        [SerializeField] private float _vipFadeIn  = 0.5f;
+        [SerializeField] private float _vipFadeOut = 1.0f;
+        [Tooltip("最多排队多少个 VIP 入场（超出丢弃）")]
+        [SerializeField] private int _maxVipQueue = 3;
+
         // ==================== 礼物信息字典 ====================
 
         /// <summary>礼物ID → (中文名, 效果描述)</summary>
@@ -64,11 +76,24 @@ namespace DrscfZ.UI
             { "love_blast",      ("爱心暴射", "全场伤害+50%") },        // 兼容旧ID
         };
 
-        // 活跃动画实例
+        // 活跃动画实例（礼物弹窗）
         private List<GiftAnimInstance> _activeAnims = new List<GiftAnimInstance>();
         private GiftHandler _giftHandler;
         private bool _subscribed;
         private bool _survivalSubscribed;
+
+        // VIP 入场队列
+        private struct VIPRequest
+        {
+            public VideoClip clip;
+            public string    playerName;
+            public string    vipTitle;
+            public float     maxDuration;
+        }
+        private Queue<VIPRequest> _vipQueue   = new Queue<VIPRequest>();
+        private bool              _vipPlaying = false;
+        private VideoPlayer       _vipPlayer;
+        private RenderTexture     _vipRenderTex;
 
         private class GiftAnimInstance
         {
@@ -81,6 +106,16 @@ namespace DrscfZ.UI
         }
 
         // ==================== 生命周期 ====================
+
+        private void Awake()
+        {
+            if (Instance != null && Instance != this) { Destroy(this); return; }
+            Instance = this;
+
+            // 初始化：确保 VIP 显示层隐藏
+            if (_vipVideoDisplay != null) _vipVideoDisplay.enabled = false;
+            if (_vipCanvasGroup  != null) _vipCanvasGroup.alpha    = 0f;
+        }
 
         private void OnEnable() { TrySubscribe(); }
 
@@ -118,6 +153,8 @@ namespace DrscfZ.UI
 
         private void OnDestroy()
         {
+            if (Instance == this) Instance = null;
+
             if (_giftHandler != null)
                 _giftHandler.OnGiftReceived -= OnGiftReceived;
 
@@ -125,9 +162,12 @@ namespace DrscfZ.UI
             if (sgm != null)
                 sgm.OnGiftReceived -= OnSurvivalGiftReceived;
 
-            // 清理所有RenderTexture
+            // 清理所有礼物 RenderTexture
             foreach (var a in _activeAnims)
                 CleanupInstance(a);
+
+            // 清理 VIP 视频
+            CleanupVIPVideo();
         }
 
         private void Update()
@@ -743,6 +783,134 @@ namespace DrscfZ.UI
                 case 6:  return 7f;
                 default: return 3f;
             }
+        }
+
+        // ==================== VIP 入场 ====================
+
+        /// <summary>
+        /// 播放 VIP 入场 WebM 视频（与礼物特效使用同一套 VideoPlayer/RenderTexture 机制）。
+        /// 由 VIPAnnouncementUI 事件路由调用。
+        /// </summary>
+        public void ShowVIPEffect(VideoClip clip, string playerName, string vipTitle, float maxDuration)
+        {
+            if (clip == null || !gameObject.activeInHierarchy) return;
+            if (_vipQueue.Count >= _maxVipQueue) return; // 队列满则丢弃，防止积压
+
+            _vipQueue.Enqueue(new VIPRequest
+            {
+                clip        = clip,
+                playerName  = playerName,
+                vipTitle    = vipTitle,
+                maxDuration = maxDuration,
+            });
+
+            if (!_vipPlaying)
+                StartCoroutine(ProcessVIPQueue());
+        }
+
+        private IEnumerator ProcessVIPQueue()
+        {
+            _vipPlaying = true;
+            while (_vipQueue.Count > 0)
+            {
+                var req = _vipQueue.Dequeue();
+                yield return PlayVIPVideoCoroutine(req);
+                yield return new WaitForSeconds(0.3f);
+            }
+            _vipPlaying = false;
+        }
+
+        /// <summary>播放单条 VIP 入场视频：创建 RenderTexture → 播放 → 淡入等待淡出 → 清理</summary>
+        private IEnumerator PlayVIPVideoCoroutine(VIPRequest req)
+        {
+            if (_vipVideoDisplay == null || _vipCanvasGroup == null)
+            {
+                Debug.LogWarning("[GiftAnimationUI] VIP显示引用未设置，请在Inspector拖入_vipVideoDisplay和_vipCanvasGroup");
+                yield break;
+            }
+
+            // 创建 RenderTexture（与礼物 WebM 完全相同的流程）
+            int texW = req.clip.width  > 0 ? (int)req.clip.width  : 1080;
+            int texH = req.clip.height > 0 ? (int)req.clip.height : 1920;
+            _vipRenderTex = new RenderTexture(texW, texH, 0, RenderTextureFormat.ARGB32);
+            _vipRenderTex.Create();
+
+            var prev = RenderTexture.active;
+            RenderTexture.active = _vipRenderTex;
+            GL.Clear(true, true, Color.clear);
+            RenderTexture.active = prev;
+
+            // 配置 VideoPlayer（复用 GiftAnimationUI 对象上的组件，避免多余 AddComponent）
+            if (_vipPlayer == null)
+                _vipPlayer = gameObject.AddComponent<VideoPlayer>();
+
+            _vipPlayer.clip            = req.clip;
+            _vipPlayer.renderMode      = VideoRenderMode.RenderTexture;
+            _vipPlayer.targetTexture   = _vipRenderTex;
+            _vipPlayer.isLooping       = false;
+            _vipPlayer.playOnAwake     = false;
+            _vipPlayer.audioOutputMode = VideoAudioOutputMode.None;
+            _vipPlayer.skipOnDrop      = true;
+
+            _vipVideoDisplay.texture = _vipRenderTex;
+            _vipVideoDisplay.color   = Color.white;
+            _vipVideoDisplay.enabled = true;
+
+            _vipPlayer.Play();
+
+            // 淡入
+            yield return FadeVIPCanvasGroup(0f, 1f, _vipFadeIn);
+
+            // 等待播放（不超过 maxDuration）
+            float waited = 0f;
+            while (_vipPlayer != null && _vipPlayer.isPlaying && waited < req.maxDuration)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            // 淡出
+            yield return FadeVIPCanvasGroup(1f, 0f, _vipFadeOut);
+
+            CleanupVIPVideo();
+        }
+
+        private void CleanupVIPVideo()
+        {
+            _vipPlaying = false;
+
+            if (_vipPlayer != null)
+            {
+                _vipPlayer.Stop();
+                _vipPlayer.clip          = null;
+                _vipPlayer.targetTexture = null;
+            }
+            if (_vipRenderTex != null)
+            {
+                _vipRenderTex.Release();
+                Destroy(_vipRenderTex);
+                _vipRenderTex = null;
+            }
+            if (_vipVideoDisplay != null)
+            {
+                _vipVideoDisplay.texture = null;
+                _vipVideoDisplay.enabled = false;
+            }
+            if (_vipCanvasGroup != null)
+                _vipCanvasGroup.alpha = 0f;
+        }
+
+        private IEnumerator FadeVIPCanvasGroup(float from, float to, float duration)
+        {
+            if (_vipCanvasGroup == null) yield break;
+            float elapsed = 0f;
+            while (elapsed < duration)
+            {
+                elapsed += Time.deltaTime;
+                _vipCanvasGroup.alpha = Mathf.Lerp(from, to, Mathf.Clamp01(elapsed / duration));
+                yield return null;
+            }
+            _vipCanvasGroup.alpha = to;
         }
     }
 }

@@ -1,0 +1,125 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1800" viewBox="0 0 1200 1800" fill="none">
+  <defs>
+    <linearGradient id="woodBase" x1="120" y1="80" x2="1080" y2="1720" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3E291C"/>
+      <stop offset="0.52" stop-color="#25170F"/>
+      <stop offset="1" stop-color="#170E0A"/>
+    </linearGradient>
+    <linearGradient id="woodVarnish" x1="600" y1="100" x2="600" y2="1700" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5B3B2A" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#0F0A08" stop-opacity="0.75"/>
+    </linearGradient>
+    <radialGradient id="centerGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(600 900) rotate(90) scale(860 560)">
+      <stop stop-color="#F4EBD7" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#F4EBD7" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="goldSilver" x1="100" y1="90" x2="1100" y2="1710" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D4B06A"/>
+      <stop offset="0.2" stop-color="#E8D7A3"/>
+      <stop offset="0.38" stop-color="#C8C7C6"/>
+      <stop offset="0.58" stop-color="#F3E5B8"/>
+      <stop offset="0.78" stop-color="#B0AFB0"/>
+      <stop offset="1" stop-color="#D6B470"/>
+    </linearGradient>
+    <linearGradient id="goldSilverDark" x1="200" y1="180" x2="1000" y2="1600" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8F6D36"/>
+      <stop offset="0.22" stop-color="#A4A3A5"/>
+      <stop offset="0.44" stop-color="#7A5D2D"/>
+      <stop offset="0.72" stop-color="#8A8888"/>
+      <stop offset="1" stop-color="#7C5B2D"/>
+    </linearGradient>
+    <linearGradient id="parchment" x1="240" y1="235" x2="960" y2="1565" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F0E2C4"/>
+      <stop offset="0.5" stop-color="#E6D4B1"/>
+      <stop offset="1" stop-color="#D8C197"/>
+    </linearGradient>
+    <radialGradient id="parchmentVignette" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(600 900) rotate(90) scale(760 455)">
+      <stop offset="0.73" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#583E1F" stop-opacity="0.34"/>
+    </radialGradient>
+    <pattern id="woodGrain" width="180" height="64" patternUnits="userSpaceOnUse">
+      <path d="M0 18C24 12 51 31 80 22C112 12 133 24 180 17" stroke="#120B08" stroke-opacity="0.46" stroke-width="3.2"/>
+      <path d="M0 38C34 47 57 28 85 41C116 55 141 36 180 44" stroke="#5D402C" stroke-opacity="0.34" stroke-width="2.8"/>
+      <path d="M0 56C42 45 70 69 108 54C140 43 158 56 180 52" stroke="#23150E" stroke-opacity="0.44" stroke-width="2.4"/>
+    </pattern>
+    <filter id="softShadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#080403" flood-opacity="0.8"/>
+    </filter>
+    <filter id="innerGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="3.5" result="blur"/>
+      <feComposite in="blur" in2="SourceGraphic" operator="atop"/>
+    </filter>
+    <filter id="filigreeGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="0" stdDeviation="2.5" flood-color="#F2E2B8" flood-opacity="0.45"/>
+    </filter>
+    <g id="cornerFlourish" filter="url(#filigreeGlow)">
+      <path d="M130 0C86 22 46 64 28 114C16 147 8 190 0 246L17 246C24 186 33 148 48 121C70 81 103 50 145 27L130 0Z" fill="url(#goldSilverDark)"/>
+      <path d="M20 244C48 210 72 184 94 162C116 140 142 116 170 98C196 81 220 72 246 68L246 86C224 90 206 99 185 113C161 128 138 148 115 171C88 199 60 232 31 269L20 244Z" fill="url(#goldSilver)"/>
+      <path d="M12 250C41 198 76 160 125 128C156 107 194 90 246 76" stroke="#E9D6A4" stroke-width="8" stroke-linecap="round" stroke-opacity="0.64"/>
+      <path d="M64 216C88 181 114 157 149 135C174 119 204 104 244 92" stroke="#A5A4A4" stroke-width="5.5" stroke-linecap="round" stroke-opacity="0.58"/>
+      <path d="M126 66C112 98 92 123 68 145C52 160 32 173 0 184L6 204C43 192 66 177 84 160C112 134 133 104 148 67L126 66Z" fill="url(#goldSilverDark)"/>
+      <path d="M156 78C145 110 128 136 106 158C89 176 68 190 40 203" stroke="#F0DFB6" stroke-width="7" stroke-linecap="round" stroke-opacity="0.62"/>
+      <circle cx="78" cy="206" r="22" fill="#B99B60" fill-opacity="0.55"/>
+      <circle cx="78" cy="206" r="13" fill="#C9C8C8" fill-opacity="0.54"/>
+      <path d="M76 190C95 187 110 176 120 158" stroke="#6D522A" stroke-width="5" stroke-linecap="round"/>
+      <path d="M152 47C143 55 136 62 130 71C125 79 121 90 116 105" stroke="#D9C28E" stroke-width="6.2" stroke-linecap="round" stroke-opacity="0.73"/>
+      <circle cx="165" cy="81" r="16" fill="#CFB275" fill-opacity="0.58"/>
+      <circle cx="165" cy="81" r="9" fill="#B5B4B5" fill-opacity="0.6"/>
+    </g>
+    <g id="midFloral" filter="url(#filigreeGlow)">
+      <path d="M0 0C22 30 55 48 98 56C55 64 22 82 0 112C-22 82 -55 64 -98 56C-55 48 -22 30 0 0Z" fill="url(#goldSilver)"/>
+      <path d="M0 14C14 33 37 46 68 54C37 62 14 76 0 95C-14 76 -37 62 -68 54C-37 46 -14 33 0 14Z" fill="#C4A265" fill-opacity="0.56"/>
+      <circle cx="0" cy="56" r="18" fill="#B5B4B4" fill-opacity="0.62"/>
+      <circle cx="0" cy="56" r="9" fill="#F1E1BC" fill-opacity="0.62"/>
+    </g>
+  </defs>
+
+  <g filter="url(#softShadow)">
+    <rect x="92" y="72" width="1016" height="1656" rx="84" fill="url(#woodBase)"/>
+    <rect x="92" y="72" width="1016" height="1656" rx="84" fill="url(#woodGrain)" opacity="0.8"/>
+    <rect x="92" y="72" width="1016" height="1656" rx="84" fill="url(#woodVarnish)"/>
+    <rect x="92" y="72" width="1016" height="1656" rx="84" fill="url(#centerGlow)"/>
+  </g>
+
+  <rect x="108" y="88" width="984" height="1624" rx="70" stroke="url(#goldSilverDark)" stroke-width="24"/>
+  <rect x="130" y="110" width="940" height="1580" rx="62" stroke="url(#goldSilver)" stroke-width="11"/>
+  <rect x="154" y="134" width="892" height="1532" rx="54" stroke="#DCC394" stroke-opacity="0.55" stroke-width="4"/>
+
+  <rect x="184" y="164" width="832" height="1472" rx="42" stroke="#8F6A35" stroke-opacity="0.76" stroke-width="10"/>
+  <rect x="201" y="181" width="798" height="1438" rx="36" stroke="#BAB9B8" stroke-opacity="0.54" stroke-width="4.5"/>
+
+  <g filter="url(#innerGlow)">
+    <rect x="228" y="208" width="744" height="1384" rx="30" fill="url(#parchment)"/>
+    <rect x="228" y="208" width="744" height="1384" rx="30" fill="url(#woodGrain)" opacity="0.13"/>
+    <rect x="228" y="208" width="744" height="1384" rx="30" fill="url(#parchmentVignette)"/>
+    <rect x="228.5" y="208.5" width="743" height="1383" rx="29.5" stroke="#8B6A3A" stroke-opacity="0.55" stroke-width="3"/>
+  </g>
+
+  <use href="#cornerFlourish" x="108" y="88"/>
+  <use href="#cornerFlourish" x="1092" y="88" transform="scale(-1 1)"/>
+  <use href="#cornerFlourish" x="108" y="1712" transform="scale(1 -1)"/>
+  <use href="#cornerFlourish" x="1092" y="1712" transform="scale(-1 -1)"/>
+
+  <use href="#midFloral" x="600" y="124"/>
+  <use href="#midFloral" x="600" y="1676" transform="scale(1 -1)"/>
+  <use href="#midFloral" x="144" y="900" transform="rotate(-90 144 900)"/>
+  <use href="#midFloral" x="1056" y="900" transform="rotate(90 1056 900)"/>
+
+  <g stroke-linecap="round" stroke-linejoin="round" filter="url(#filigreeGlow)">
+    <path d="M252 246C287 216 332 198 388 190" stroke="#D8BE8B" stroke-opacity="0.7" stroke-width="7"/>
+    <path d="M948 246C913 216 868 198 812 190" stroke="#D8BE8B" stroke-opacity="0.7" stroke-width="7"/>
+    <path d="M252 1554C287 1584 332 1602 388 1610" stroke="#D8BE8B" stroke-opacity="0.7" stroke-width="7"/>
+    <path d="M948 1554C913 1584 868 1602 812 1610" stroke="#D8BE8B" stroke-opacity="0.7" stroke-width="7"/>
+    <path d="M195 312C177 364 170 425 170 495" stroke="#B1B0B1" stroke-opacity="0.62" stroke-width="6"/>
+    <path d="M1005 312C1023 364 1030 425 1030 495" stroke="#B1B0B1" stroke-opacity="0.62" stroke-width="6"/>
+    <path d="M195 1488C177 1436 170 1375 170 1305" stroke="#B1B0B1" stroke-opacity="0.62" stroke-width="6"/>
+    <path d="M1005 1488C1023 1436 1030 1375 1030 1305" stroke="#B1B0B1" stroke-opacity="0.62" stroke-width="6"/>
+  </g>
+
+  <g stroke-linecap="round" stroke-linejoin="round" opacity="0.78">
+    <path d="M262 332C302 286 356 260 426 252" stroke="#9A763F" stroke-width="3.2"/>
+    <path d="M938 332C898 286 844 260 774 252" stroke="#9A763F" stroke-width="3.2"/>
+    <path d="M262 1468C302 1514 356 1540 426 1548" stroke="#9A763F" stroke-width="3.2"/>
+    <path d="M938 1468C898 1514 844 1540 774 1548" stroke="#9A763F" stroke-width="3.2"/>
+  </g>
+</svg>

@@ -350,18 +350,20 @@ namespace DrscfZ.Survival
                 case State.Idle:
                     transform.localRotation = Quaternion.identity;
                     if (_bubble != null) _bubble.Hide();
-                    SetAnimatorState(false, false);  // T010
 
                     // 平滑返回待机位（T007：Worker工作结束后回到HomePosition）
                     Vector3 home = HomePosition != Vector3.zero ? HomePosition : transform.position;
                     if (Vector3.Distance(transform.position, home) > 0.1f)
                     {
+                        // 先播行走动画，协程结束后切回 Idle
+                        SetAnimatorState(true, false);
                         if (_returnHomeCoroutine != null) StopCoroutine(_returnHomeCoroutine);
                         _returnHomeCoroutine = StartCoroutine(ReturnHomeCoroutine(home));
                     }
                     else
                     {
                         _basePos = home;
+                        SetAnimatorState(false, false);
                     }
                     break;
 
@@ -495,15 +497,20 @@ namespace DrscfZ.Survival
                     if (target == null) break;  // 怪物全灭 → 退出循环
 
                     // 2. 追到攻击范围内
+                    bool wasChasing = false;
                     while (target != null && target.gameObject.activeInHierarchy &&
                            Vector3.Distance(transform.position, target.position) > ATTACK_RANGE &&
                            _state == State.Work)
                     {
+                        if (!wasChasing)
+                        {
+                            SetAnimatorState(true, false);   // 只在开始追击时切一次行走动画
+                            wasChasing = true;
+                        }
                         var dir = (target.position - transform.position).normalized;
                         dir.y = 0f;
                         Vector3 newPos = transform.position + dir * MOVE_SPEED * Time.deltaTime;
                         transform.position = WallBarrier.ClampMovement(transform.position, newPos);
-                        SetAnimatorState(true, false);
                         if (dir.sqrMagnitude > 0.001f)
                             transform.rotation = Quaternion.LookRotation(dir);
                         yield return null;
@@ -532,15 +539,11 @@ namespace DrscfZ.Survival
                         if (Vector3.Distance(transform.position, target.position) > ATTACK_RANGE + 1.5f)
                             break;
 
-                        // 面朝目标 + Z轴摆动叠加（不覆盖朝向）
+                        // 面朝目标（3D 骨骼攻击动画已包含挥砍效果，不叠加 Z 轴旋转）
                         Vector3 toTarget = target.position - transform.position;
                         toTarget.y = 0f;
                         if (toTarget.sqrMagnitude > 0.001f)
-                        {
-                            Quaternion facingRot = Quaternion.LookRotation(toTarget);
-                            float swing = Mathf.Sin(Time.time * BOB_FREQ) * 30f;
-                            transform.rotation = facingRot * Quaternion.Euler(0f, 0f, swing);
-                        }
+                            transform.rotation = Quaternion.LookRotation(toTarget);
 
                         // 定时命中
                         if (Time.time >= nextHitTime)
@@ -577,14 +580,7 @@ namespace DrscfZ.Survival
 
             while (Time.time < endTime && _state == State.Work)
             {
-                // cmd=4（围炉）和 cmd=1（渔场站立）：不做 Z 轴摆动，朝向由 UpdateFireIdle 控制
-                if (CurrentCmd != 4 && CurrentCmd != 1)
-                {
-                    // Z轴摆动：模拟工具挥动 ±30° @ 1Hz（煤矿/矿山）
-                    float swing = Mathf.Sin(Time.time * BOB_FREQ) * 30f;
-                    transform.localRotation = Quaternion.Euler(0f, 0f, swing);
-                }
-
+                // 3D 骨骼动画已包含工具挥动效果（IsMining 状态），不需要额外 Z 轴旋转
                 yield return null;
             }
 
@@ -603,16 +599,29 @@ namespace DrscfZ.Survival
             float   duration = Mathf.Clamp(distance / RETURN_HOME_SPEED, 0.2f, 30f);
             float   elapsed  = 0f;
 
-            while (elapsed < duration)
+            while (elapsed < duration && _state == State.Idle)
             {
                 elapsed += Time.deltaTime;
                 float t = EaseInOutCubic(Mathf.Clamp01(elapsed / duration));
                 _basePos = Vector3.Lerp(startPos, homePos, t);
+
+                // 面朝移动方向
+                Vector3 dir = new Vector3(homePos.x - transform.position.x, 0f, homePos.z - transform.position.z);
+                if (dir.sqrMagnitude > 0.01f)
+                    transform.rotation = Quaternion.Lerp(transform.rotation, Quaternion.LookRotation(dir), Time.deltaTime * 8f);
+
                 yield return null;
             }
 
             _basePos = homePos;
-            _returnHomeCoroutine = null; // #4 协程结束，清空句柄保持状态一致
+            _returnHomeCoroutine = null;
+
+            // 到达后切 Idle 动画 + 重置朝向
+            if (_state == State.Idle)
+            {
+                transform.localRotation = Quaternion.identity;
+                SetAnimatorState(false, false);
+            }
         }
 
         /// <summary>死亡倒计时协程：显示泡泡倒计时直到 _respawnAt（由服务器 worker_revived 提前打断）</summary>
@@ -738,6 +747,7 @@ namespace DrscfZ.Survival
             StopAllCoroutines();
             _moveCoroutine       = null;
             _returnHomeCoroutine = null;
+            _deadCoroutine       = null;
 
             // 若该 Worker 持有围炉槽位，归还计数（静态计数器由 WorkerManager.ClearAll 统一清零）
             _myFireSlot = -1;

@@ -33,7 +33,7 @@ namespace DrscfZ.Editor
                 new Color(0.05f, 0.08f, 0.15f, 0.92f));  // 深蓝半透明背景
 
             // LobbyPanel 子元素
-            var titleGO     = CreateTMPText(lobbyPanel.transform, "TitleText",     "冬日生存法则",
+            var titleGO     = CreateTMPText(lobbyPanel.transform, "TitleText",     "极地生存法则",
                                             new Vector2(0, 180),  new Vector2(600, 80),  40, Color.white);
             var serverStat  = CreateTMPText(lobbyPanel.transform, "ServerStatus",  "已连接 ✓",
                                             new Vector2(0, 120),  new Vector2(400, 40),  22, new Color(0.4f, 1f, 0.5f));

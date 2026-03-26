@@ -1,4 +1,4 @@
-# 冬日生存法则 — 音效规格 v1.0
+# 极地生存法则 — 音效规格 v1.0
 
 > 技术：Unity AudioMixer（Master → BGM/SFX/UI三轨）
 > 格式：OGG Vorbis，44100Hz，单声道（SFX）/ 立体声（BGM）

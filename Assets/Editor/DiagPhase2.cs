@@ -49,57 +49,8 @@ public class DiagPhase2
         }
 
         // ── GiftNotificationUI ────────────────────────────────────────────
-        var gn = Object.FindObjectOfType<GiftNotificationUI>();
-        if (gn == null)
-        {
-            Debug.LogError("[Diag] ❌ GiftNotificationUI NOT FOUND");
-            fail++;
-        }
-        else
-        {
-            var gnSo = new SerializedObject(gn);
-            string[] fields = {
-                "_canvasRoot", "_t1Particle",
-                "_t2Panel", "_t2TopLeftPS", "_t2CenterRing",
-                "_t3Panel", "_t3GiftIcon",
-                "_t4Panel", "_t4OrangeOverlay", "_t4ChargingSlider",
-                "_t5Panel", "_t5BlackOverlay", "_t5PlayerNameText"
-            };
-            int gnFail = 0;
-            foreach (var f in fields)
-            {
-                var prop = gnSo.FindProperty(f);
-                if (prop == null || prop.objectReferenceValue == null)
-                {
-                    Debug.LogWarning($"[Diag] ⚠️ GiftNotificationUI.{f} = null");
-                    gnFail++;
-                }
-            }
-            // BannerSlots
-            var slots = gnSo.FindProperty("_bannerSlots");
-            int slotFail = 0;
-            if (slots != null && slots.arraySize == 3)
-            {
-                for (int i = 0; i < 3; i++)
-                {
-                    var root = slots.GetArrayElementAtIndex(i).FindPropertyRelative("root");
-                    if (root == null || root.objectReferenceValue == null)
-                        slotFail++;
-                }
-            }
-            else slotFail = 3;
-
-            if (gnFail == 0 && slotFail == 0)
-            {
-                Debug.Log("[Diag] ✅ GiftNotificationUI: all fields wired");
-                pass++;
-            }
-            else
-            {
-                Debug.LogWarning($"[Diag] ⚠️ GiftNotificationUI: {gnFail} field(s) null, {slotFail} banner slot root(s) null");
-                fail++;
-            }
-        }
+        // GiftNotificationUI class has been removed; skipping this check.
+        // var gn = Object.FindObjectOfType<GiftNotificationUI>();
 
         // ── BroadcasterPanel ─────────────────────────────────────────────
         var bp = Object.FindObjectOfType<DrscfZ.UI.BroadcasterPanel>();

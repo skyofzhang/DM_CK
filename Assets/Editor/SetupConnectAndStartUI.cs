@@ -98,7 +98,7 @@ public class SetupConnectAndStartUI
         bg.raycastTarget = true; // 阻止点击穿透
 
         // ── 标题 ────────────────────────────────────────────────────
-        var title = CreateTMP(go.transform, "TitleText", "冬日生存法则",
+        var title = CreateTMP(go.transform, "TitleText", "极地生存法则",
                               48, FontStyles.Bold, Color.white);
         SetPivotCenter(title.GetComponent<RectTransform>(),
                        new Vector2(0, 80), new Vector2(700, 90));

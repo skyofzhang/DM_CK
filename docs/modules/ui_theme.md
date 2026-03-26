@@ -1,4 +1,4 @@
-# 冬日生存法则 — UI 全局主题变量 v1.0
+# 极地生存法则 — UI 全局主题变量 v1.0
 
 > **基准**: 1080×1920 竖屏 (9:16) | CanvasScaler: Scale With Screen Size, Match=0.5
 > 命名约定: C_=颜色, F_=字体, A_=动画, S_=尺寸, L_=Canvas层级

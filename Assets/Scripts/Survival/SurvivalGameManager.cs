@@ -554,10 +554,7 @@ namespace DrscfZ.Survival
             OnPlayerActivityMessage?.Invoke($"{gift.playerName} 送出 {gift.giftName}！");
             UI.HorizontalMarqueeUI.Instance?.AddMessage(gift.playerName, gift.avatarUrl, $"打赏了 {gift.giftName}");
 
-            // 触发礼物视觉特效（T1-T5 分级效果）
-            // 优先用giftId做中文名/效果查询，fallback到giftName（服务器可能直接给中文名）
-            string effectKey = !string.IsNullOrEmpty(gift.giftId) ? gift.giftId : gift.giftName;
-            UI.GiftNotificationUI.Instance?.ShowGiftEffect(effectKey, gift.playerName, gift.giftTier);
+            // 礼物视觉特效由 GiftAnimationUI 统一通过 OnGiftReceived 事件处理（WebM视频，无需手动调用）
 
             // T5 神秘空投 → 顶部金色飘字
             if (gift.giftTier >= 5)

@@ -1,0 +1,569 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>极地生存法则 · 空闲大厅</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      background: #000;
+      font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      overflow: hidden;
+    }
+
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 20px 0;
+    }
+
+    .screen {
+      position: relative;
+      width: 1080px;
+      height: 1920px;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 50% 18%, rgba(126, 200, 227, 0.14), transparent 28%),
+        radial-gradient(circle at 18% 72%, rgba(74, 158, 204, 0.12), transparent 22%),
+        radial-gradient(circle at 82% 78%, rgba(74, 158, 204, 0.08), transparent 18%),
+        linear-gradient(180deg, #0D1F33 0%, #061020 100%);
+      border: 1px solid rgba(126, 200, 227, 0.32);
+      box-shadow:
+        0 0 0 1px rgba(74, 158, 204, 0.18),
+        0 30px 80px rgba(0, 0, 0, 0.55);
+    }
+
+    .screen::before,
+    .screen::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .screen::before {
+      background:
+        linear-gradient(90deg, rgba(255, 255, 255, 0.03) 0, rgba(255, 255, 255, 0.03) 1px, transparent 1px, transparent 120px),
+        linear-gradient(rgba(255, 255, 255, 0.025) 0, rgba(255, 255, 255, 0.025) 1px, transparent 1px, transparent 120px);
+      opacity: 0.14;
+    }
+
+    .screen::after {
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 18%, transparent 82%, rgba(255, 255, 255, 0.03));
+      mix-blend-mode: screen;
+    }
+
+    .snow-layer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      overflow: hidden;
+    }
+
+    .snowflake {
+      position: absolute;
+      top: -20px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.9);
+      box-shadow: 0 0 10px rgba(255, 255, 255, 0.4);
+      animation-name: snowfall;
+      animation-timing-function: linear;
+      animation-iteration-count: infinite;
+    }
+
+    .title-area {
+      position: absolute;
+      top: 80px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 920px;
+      text-align: center;
+    }
+
+    .flake-deco {
+      position: absolute;
+      top: 28px;
+      width: 60px;
+      height: 60px;
+      color: rgba(126, 200, 227, 0.6);
+      filter: drop-shadow(0 0 14px rgba(126, 200, 227, 0.28));
+    }
+
+    .flake-left {
+      left: 94px;
+    }
+
+    .flake-right {
+      right: 94px;
+    }
+
+    .main-title {
+      margin: 0;
+      font-size: 88px;
+      font-weight: 900;
+      line-height: 1.1;
+      color: transparent;
+      background: linear-gradient(180deg, #ffffff 0%, #93C5FD 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      text-shadow: 0 0 40px rgba(74, 158, 204, 0.8);
+      letter-spacing: 4px;
+    }
+
+    .sub-title {
+      margin-top: 16px;
+      font-size: 36px;
+      color: #7EC8E3;
+      letter-spacing: 6px;
+    }
+
+    .title-line {
+      width: 600px;
+      height: 1px;
+      margin: 24px auto 0;
+      background: linear-gradient(90deg, rgba(74, 158, 204, 0), rgba(74, 158, 204, 1) 50%, rgba(74, 158, 204, 0));
+      box-shadow: 0 0 16px rgba(74, 158, 204, 0.5);
+    }
+
+    .panel {
+      background: rgba(13, 31, 51, 0.85);
+      border: 1.5px solid #4A9ECC;
+      box-shadow:
+        inset 0 0 20px rgba(74, 158, 204, 0.2),
+        0 18px 45px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(14px);
+    }
+
+    .wait-panel {
+      position: absolute;
+      top: 500px;
+      left: 80px;
+      width: 760px;
+      height: 480px;
+      border-radius: 24px;
+      padding: 48px 56px;
+    }
+
+    .stats-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .stat-item {
+      flex: 1;
+      text-align: center;
+      color: #fff;
+    }
+
+    .stat-icon {
+      display: block;
+      font-size: 48px;
+      margin-bottom: 10px;
+      filter: drop-shadow(0 0 12px rgba(74, 158, 204, 0.35));
+    }
+
+    .stat-text {
+      font-size: 28px;
+      color: #cfe9ff;
+      letter-spacing: 1px;
+    }
+
+    .status-main {
+      margin-top: 94px;
+      text-align: center;
+      font-size: 52px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: 2px;
+      animation: breathe 2s ease-in-out infinite;
+    }
+
+    .status-sub {
+      margin-top: 34px;
+      text-align: center;
+      font-size: 30px;
+      color: #93C5FD;
+      letter-spacing: 1px;
+    }
+
+    .board {
+      position: absolute;
+      right: 0;
+      top: 520px;
+      width: 240px;
+      height: 520px;
+      background: rgba(6, 16, 32, 0.92);
+      border-left: 2px solid #4A9ECC;
+      border-radius: 16px 0 0 16px;
+      box-shadow:
+        inset 0 0 20px rgba(74, 158, 204, 0.15),
+        -12px 16px 32px rgba(0, 0, 0, 0.35);
+      overflow: hidden;
+    }
+
+    .board-title {
+      padding: 16px;
+      font-size: 28px;
+      color: #7EC8E3;
+      border-bottom: 1px solid rgba(74, 158, 204, 0.3);
+      letter-spacing: 1px;
+    }
+
+    .board-list {
+      padding: 10px 10px 0;
+    }
+
+    .board-item {
+      display: grid;
+      grid-template-columns: 38px 1fr auto;
+      align-items: center;
+      gap: 8px;
+      height: 78px;
+      margin-bottom: 8px;
+      padding: 0 12px;
+      border-radius: 14px;
+      color: #fff;
+      background: linear-gradient(135deg, rgba(11, 36, 60, 0.95), rgba(10, 25, 43, 0.9));
+      border: 1px solid rgba(74, 158, 204, 0.18);
+      transition: transform 0.25s ease, box-shadow 0.25s ease;
+    }
+
+    .board-item.active {
+      transform: translateX(-4px);
+      box-shadow: 0 0 20px rgba(74, 158, 204, 0.2);
+    }
+
+    .board-item.top1 {
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.35), rgba(120, 74, 12, 0.9));
+      border-color: rgba(245, 158, 11, 0.55);
+    }
+
+    .board-item.top2 {
+      background: linear-gradient(135deg, rgba(148, 163, 184, 0.38), rgba(71, 85, 105, 0.92));
+      border-color: rgba(148, 163, 184, 0.48);
+    }
+
+    .board-item.top3 {
+      background: linear-gradient(135deg, rgba(217, 119, 6, 0.34), rgba(120, 61, 10, 0.92));
+      border-color: rgba(217, 119, 6, 0.48);
+    }
+
+    .rank {
+      font-size: 26px;
+      font-weight: 800;
+      text-align: center;
+    }
+
+    .player {
+      font-size: 22px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .score {
+      font-size: 22px;
+      font-weight: 800;
+      color: #dbefff;
+    }
+
+    .board-item.top1 .score {
+      color: #FCD34D;
+    }
+
+    .board-foot {
+      position: absolute;
+      bottom: 14px;
+      left: 16px;
+      font-size: 20px;
+      color: #93C5FD;
+      opacity: 0.5;
+      letter-spacing: 1px;
+    }
+
+    .bottom-area {
+      position: absolute;
+      left: 50%;
+      bottom: 120px;
+      transform: translateX(-50%);
+      width: 520px;
+      text-align: center;
+    }
+
+    .start-btn {
+      width: 520px;
+      height: 110px;
+      border: 2px solid #4A9ECC;
+      border-radius: 20px;
+      background: linear-gradient(135deg, #1a4a7a, #2563a8);
+      color: #fff;
+      font-size: 52px;
+      font-weight: 900;
+      letter-spacing: 4px;
+      text-shadow: 0 0 20px #4A9ECC;
+      box-shadow:
+        inset 0 0 18px rgba(255, 255, 255, 0.08),
+        0 0 26px rgba(74, 158, 204, 0.38),
+        0 16px 32px rgba(0, 0, 0, 0.38);
+      cursor: pointer;
+      transition: transform 0.2s ease, filter 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .start-btn:hover {
+      transform: scale(1.03);
+      filter: brightness(1.15);
+      box-shadow:
+        inset 0 0 22px rgba(255, 255, 255, 0.12),
+        0 0 34px rgba(74, 158, 204, 0.54),
+        0 18px 34px rgba(0, 0, 0, 0.45);
+    }
+
+    .start-btn:active {
+      transform: scale(1.01);
+    }
+
+    .host-note {
+      margin-top: 16px;
+      font-size: 24px;
+      color: #7EC8E3;
+      opacity: 0.6;
+      letter-spacing: 2px;
+    }
+
+    .ice-ridge {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 360px;
+      background:
+        radial-gradient(circle at 14% 78%, rgba(126, 200, 227, 0.3), transparent 18%),
+        radial-gradient(circle at 82% 62%, rgba(126, 200, 227, 0.22), transparent 14%),
+        linear-gradient(180deg, rgba(8, 20, 34, 0) 0%, rgba(9, 24, 42, 0.38) 28%, rgba(9, 24, 42, 0.9) 100%);
+      pointer-events: none;
+    }
+
+    .ice-ridge::before,
+    .ice-ridge::after {
+      content: "";
+      position: absolute;
+      bottom: -40px;
+      background: linear-gradient(180deg, rgba(147, 197, 253, 0.2), rgba(6, 16, 32, 0.9));
+      filter: blur(1px);
+      opacity: 0.65;
+    }
+
+    .ice-ridge::before {
+      left: -60px;
+      width: 480px;
+      height: 220px;
+      clip-path: polygon(0 100%, 14% 56%, 30% 70%, 44% 28%, 58% 55%, 72% 22%, 100% 100%);
+    }
+
+    .ice-ridge::after {
+      right: -40px;
+      width: 420px;
+      height: 250px;
+      clip-path: polygon(0 100%, 20% 42%, 38% 68%, 56% 25%, 70% 54%, 86% 34%, 100% 100%);
+    }
+
+    @keyframes breathe {
+      0%, 100% {
+        opacity: 0.6;
+        text-shadow: 0 0 12px rgba(255, 255, 255, 0.08);
+      }
+      50% {
+        opacity: 1;
+        text-shadow: 0 0 24px rgba(126, 200, 227, 0.28);
+      }
+    }
+
+    @keyframes snowfall {
+      0% {
+        transform: translate3d(0, 0, 0);
+      }
+      100% {
+        transform: translate3d(var(--drift), 1980px, 0);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="screen">
+    <div class="snow-layer" id="snowLayer"></div>
+
+    <section class="title-area">
+      <svg class="flake-deco flake-left" viewBox="0 0 100 100" aria-hidden="true">
+        <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="4">
+          <path d="M50 10v80M15 30l70 40M15 70l70-40"/>
+          <path d="M50 10l-10 10M50 10l10 10M50 90l-10-10M50 90l10-10"/>
+          <path d="M15 30l14 1M15 30l4 13M85 70l-14-1M85 70l-4-13"/>
+          <path d="M15 70l14-1M15 70l4-13M85 30l-14 1M85 30l-4 13"/>
+        </g>
+      </svg>
+      <svg class="flake-deco flake-right" viewBox="0 0 100 100" aria-hidden="true">
+        <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="4">
+          <path d="M50 10v80M15 30l70 40M15 70l70-40"/>
+          <path d="M50 10l-10 10M50 10l10 10M50 90l-10-10M50 90l10-10"/>
+          <path d="M15 30l14 1M15 30l4 13M85 70l-14-1M85 70l-4-13"/>
+          <path d="M15 70l14-1M15 70l4-13M85 30l-14 1M85 30l-4 13"/>
+        </g>
+      </svg>
+      <h1 class="main-title">极地生存法则</h1>
+      <div class="sub-title">直播生存挑战</div>
+      <div class="title-line"></div>
+    </section>
+
+    <section class="panel wait-panel">
+      <div class="stats-row">
+        <div class="stat-item">
+          <span class="stat-icon">⛄</span>
+          <div class="stat-text">在线 1,024人</div>
+        </div>
+        <div class="stat-item">
+          <span class="stat-icon">❄</span>
+          <div class="stat-text">活跃 388人</div>
+        </div>
+        <div class="stat-item">
+          <span class="stat-icon">🏰</span>
+          <div class="stat-text">今日场次 12</div>
+        </div>
+      </div>
+
+      <div class="status-main">等待主播开始游戏</div>
+      <div class="status-sub">发送弹幕或送礼物加入战队</div>
+    </section>
+
+    <aside class="board">
+      <div class="board-title">⚔ 贡献榜</div>
+      <div class="board-list" id="boardList">
+        <div class="board-item top1">
+          <div class="rank">👑</div>
+          <div class="player">凛冬战士</div>
+          <div class="score">8,888</div>
+        </div>
+        <div class="board-item top2">
+          <div class="rank">🥈</div>
+          <div class="player">极地猎人</div>
+          <div class="score">6,200</div>
+        </div>
+        <div class="board-item top3">
+          <div class="rank">🥉</div>
+          <div class="player">雪原守卫</div>
+          <div class="score">4,100</div>
+        </div>
+        <div class="board-item">
+          <div class="rank">4</div>
+          <div class="player">行路者A</div>
+          <div class="score">2,800</div>
+        </div>
+        <div class="board-item">
+          <div class="rank">5</div>
+          <div class="player">行路者B</div>
+          <div class="score">1,500</div>
+        </div>
+      </div>
+      <div class="board-foot">每3秒更新</div>
+    </aside>
+
+    <section class="bottom-area">
+      <button class="start-btn" type="button">开始游戏</button>
+      <div class="host-note">（主播专属）</div>
+    </section>
+
+    <div class="ice-ridge"></div>
+  </div>
+
+  <script>
+    (function () {
+      var snowLayer = document.getElementById('snowLayer');
+      var flakeCount = 30;
+
+      for (var i = 0; i < flakeCount; i += 1) {
+        var flake = document.createElement('span');
+        var size = 2 + Math.random() * 4;
+        var left = Math.random() * 1080;
+        var duration = 12 + Math.random() * 12;
+        var delay = Math.random() * -18;
+        var opacity = 0.3 + Math.random() * 0.4;
+        var drift = (Math.random() * 120 - 60).toFixed(2) + 'px';
+
+        flake.className = 'snowflake';
+        flake.style.width = size.toFixed(2) + 'px';
+        flake.style.height = size.toFixed(2) + 'px';
+        flake.style.left = left.toFixed(2) + 'px';
+        flake.style.opacity = opacity.toFixed(2);
+        flake.style.animationDuration = duration.toFixed(2) + 's';
+        flake.style.animationDelay = delay.toFixed(2) + 's';
+        flake.style.setProperty('--drift', drift);
+        snowLayer.appendChild(flake);
+      }
+
+      var rotations = [
+        [
+          ['👑', '凛冬战士', '8,888', 'top1'],
+          ['🥈', '极地猎人', '6,200', 'top2'],
+          ['🥉', '雪原守卫', '4,100', 'top3'],
+          ['4', '行路者A', '2,800', ''],
+          ['5', '行路者B', '1,500', '']
+        ],
+        [
+          ['👑', '凛冬战士', '8,960', 'top1'],
+          ['🥈', '极地猎人', '6,380', 'top2'],
+          ['🥉', '雪原守卫', '4,250', 'top3'],
+          ['4', '风暴余烬', '2,940', ''],
+          ['5', '行路者A', '2,810', '']
+        ],
+        [
+          ['👑', '凛冬战士', '9,120', 'top1'],
+          ['🥈', '极地猎人', '6,540', 'top2'],
+          ['🥉', '雪原守卫', '4,380', 'top3'],
+          ['4', '风暴余烬', '3,060', ''],
+          ['5', '北境旅人', '2,240', '']
+        ]
+      ];
+
+      var boardList = document.getElementById('boardList');
+      var stateIndex = 0;
+
+      function renderBoard(index) {
+        var rows = boardList.children;
+        var data = rotations[index];
+
+        for (var i = 0; i < rows.length; i += 1) {
+          var row = rows[i];
+          row.className = 'board-item';
+          if (data[i][3]) {
+            row.classList.add(data[i][3]);
+          }
+          row.classList.add('active');
+          row.children[0].textContent = data[i][0];
+          row.children[1].textContent = data[i][1];
+          row.children[2].textContent = data[i][2];
+        }
+
+        window.setTimeout(function () {
+          for (var j = 0; j < rows.length; j += 1) {
+            rows[j].classList.remove('active');
+          }
+        }, 700);
+      }
+
+      window.setInterval(function () {
+        stateIndex = (stateIndex + 1) % rotations.length;
+        renderBoard(stateIndex);
+      }, 3000);
+    }());
+  </script>
+</body>
+</html>

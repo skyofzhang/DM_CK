@@ -401,18 +401,9 @@ namespace DrscfZ.Editor
                     EditorUtility.SetDirty(playerListUI);
                 }
 
-                // GiftNotificationUI
-                var giftNotifGO = gameUI.Find("GiftNotification");
-                if (giftNotifGO != null)
-                {
-                    var gn = EnsureComponentOnExisting<GiftNotificationUI>(giftNotifGO.gameObject, ref updated, ref added);
-                    if (gn != null)
-                    {
-                        // GiftNotificationUI v2: _canvasRoot and panel refs wired via Inspector
-                        wired++;
-                        EditorUtility.SetDirty(gn);
-                    }
-                }
+                // GiftNotificationUI has been removed; skipping.
+                // var giftNotifGO = gameUI.Find("GiftNotification");
+                // if (giftNotifGO != null) { var gn = EnsureComponentOnExisting<GiftNotificationUI>(...); }
 
                 // GiftAnimationUI
                 var giftAnimGO = gameUI.Find("GiftAnimation");
@@ -480,21 +471,10 @@ namespace DrscfZ.Editor
                     var vip = EnsureComponentOnExisting<VIPAnnouncementUI>(vipGO.gameObject, ref updated, ref added);
                     if (vip != null)
                     {
-                        if (vip.announcementText == null)
-                        {
-                            vip.announcementText = vipGO.Find("VIPText")?.GetComponent<TextMeshProUGUI>();
-                            if (vip.announcementText != null) wired++;
-                        }
-                        if (vip.backgroundOverlay == null)
-                        {
-                            vip.backgroundOverlay = vipGO.GetComponent<Image>();
-                            if (vip.backgroundOverlay != null) wired++;
-                        }
-                        if (vip.canvasGroup == null)
-                        {
-                            vip.canvasGroup = vipGO.GetComponent<CanvasGroup>();
-                            if (vip.canvasGroup != null) wired++;
-                        }
+                        // Fields announcementText, backgroundOverlay, canvasGroup removed from VIPAnnouncementUI.
+                        // if (vip.announcementText == null) { vip.announcementText = ...; }
+                        // if (vip.backgroundOverlay == null) { vip.backgroundOverlay = ...; }
+                        // if (vip.canvasGroup == null) { vip.canvasGroup = ...; }
                         EditorUtility.SetDirty(vip);
                     }
                 }

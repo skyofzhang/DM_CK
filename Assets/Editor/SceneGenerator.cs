@@ -298,13 +298,9 @@ namespace DrscfZ.Editor
             playerListUI.leftListContainer = gameUI.transform.Find("LeftPlayerList");
             playerListUI.rightListContainer = gameUI.transform.Find("RightPlayerList");
 
-            // GiftNotification 组件
-            var giftNotifGO = gameUI.transform.Find("GiftNotification")?.gameObject;
-            if (giftNotifGO != null)
-            {
-                var giftNotifUI = giftNotifGO.AddComponent<GiftNotificationUI>();
-                // GiftNotificationUI v2: panel refs must be wired in Inspector after Gift_Canvas hierarchy is created
-            }
+            // GiftNotification 组件 — GiftNotificationUI has been removed; skipping.
+            // var giftNotifGO = gameUI.transform.Find("GiftNotification")?.gameObject;
+            // if (giftNotifGO != null) { var giftNotifUI = giftNotifGO.AddComponent<GiftNotificationUI>(); }
 
             // GiftAnimationUI 组件（礼物GIF动画，锚定在屏幕下方）
             var giftAnimGO = new GameObject("GiftAnimation");
@@ -330,9 +326,10 @@ namespace DrscfZ.Editor
             if (vipAnnouncementGO != null)
             {
                 var vipUI = vipAnnouncementGO.AddComponent<VIPAnnouncementUI>();
-                vipUI.announcementText = vipAnnouncementGO.transform.Find("VIPText")?.GetComponent<TextMeshProUGUI>();
-                vipUI.backgroundOverlay = vipAnnouncementGO.GetComponent<Image>();
-                vipUI.canvasGroup = vipAnnouncementGO.GetComponent<CanvasGroup>();
+                // Fields announcementText, backgroundOverlay, canvasGroup removed from VIPAnnouncementUI.
+                // vipUI.announcementText = vipAnnouncementGO.transform.Find("VIPText")?.GetComponent<TextMeshProUGUI>();
+                // vipUI.backgroundOverlay = vipAnnouncementGO.GetComponent<Image>();
+                // vipUI.canvasGroup = vipAnnouncementGO.GetComponent<CanvasGroup>();
             }
 
             // MainMenuUI 组件（主界面按钮功能）

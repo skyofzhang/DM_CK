@@ -1,4 +1,4 @@
-# 冬日生存法则 (drscfz) — 开发进度存档
+# 极地生存法则 (drscfz) — 开发进度存档
 
 > 最后更新：2026-02-26 #123
 > Unity 2022.3.47f1 | URP | 项目路径：D:\claude\drscfz
@@ -445,7 +445,7 @@ SettingsBtn → OnSettingsClicked() → FindObjectOfType<SurvivalSettingsUI>(tru
 Canvas
 ├── ConnectPanel          (已有)
 ├── LobbyPanel            ← 新增，inactive，全屏深蓝
-│   ├── TitleText         "冬日生存法则"（TMP，40px）
+│   ├── TitleText         "极地生存法则"（TMP，40px）
 │   ├── ServerStatus      "已连接"（TMP，22px，绿色）
 │   ├── StatusText        "等待主播开始游戏..."（TMP，20px）
 │   ├── StartBtn          "▶ 开始玩法" → RequestStartGame()
@@ -530,7 +530,7 @@ _bodyRenderer = GetComponent<Renderer>()
 [ConnectPanel] ← 自动连接
       ↓ OnConnected
 [LobbyPanel = Idle状态]
-  "冬日生存法则" + "▶ 开始玩法"
+  "极地生存法则" + "▶ 开始玩法"
       ↓ 主播点击"▶ 开始玩法"
 [LoadingPanel "准备进入战场..."]
   发 start_game → 等服务器 survival_game_state(day/night)

@@ -24,7 +24,7 @@ namespace DrscfZ.Editor
             if (lobbyPanel == null) { Debug.LogError("[FixText] LobbyPanel not found"); return; }
 
             // 修复 TitleText
-            FixTextGO(lobbyPanel.transform, "TitleText",    "冬日生存法则",      40, Color.white);
+            FixTextGO(lobbyPanel.transform, "TitleText",    "极地生存法则",      40, Color.white);
             // 修复 ServerStatus
             FixTextGO(lobbyPanel.transform, "ServerStatus", "已连接 ✓",         22, new Color(0.4f,1f,0.5f,1f));
             // 修复 StatusText

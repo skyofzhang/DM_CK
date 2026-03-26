@@ -6,10 +6,12 @@ using TMPro;
 namespace DrscfZ.UI
 {
     /// <summary>
-    /// 礼物特效辅助工具 - 通用动画 Coroutine 集合
+    /// 通用 UI 动画 Coroutine 工具集（static，无生命周期依赖）
     ///
-    /// 所有方法均为 static IEnumerator，由 GiftNotificationUI 的 StartCoroutine 驱动。
-    /// 不挂载到 GameObject，无生命周期依赖。
+    /// 当前使用方：
+    ///   SurvivalTopBarUI — 数值弹跳动画（ShakeScale）
+    ///
+    /// 礼物/VIP 入场特效统一由 GiftAnimationUI 通过 WebM 视频实现，不再使用本工具集。
     /// </summary>
     public static class GiftEffectSystem
     {

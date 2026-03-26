@@ -1,4 +1,4 @@
-# 冬日生存法则 — 美术资源需求清单 v1.0
+# 极地生存法则 — 美术资源需求清单 v1.0
 
 > Phase 2 表现层所需美术资源全清单
 > 来源优先级：①可用的现有资源 ②Coplay AI生成 ③Unity Asset Store免费 ④纯代码实现（ProceduralArt）

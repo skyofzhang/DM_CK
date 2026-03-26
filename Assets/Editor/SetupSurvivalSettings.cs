@@ -468,7 +468,7 @@ namespace DrscfZ.Editor
             rt.sizeDelta        = new Vector2(0f, 40f);
 
             var tmp = go.AddComponent<TextMeshProUGUI>();
-            tmp.text      = "冬日生存法则  v0.1";
+            tmp.text      = "极地生存法则  v0.1";
             tmp.fontSize  = 15f;
             tmp.color     = new Color(0.55f, 0.65f, 0.75f, 1f);
             tmp.alignment = TextAlignmentOptions.Center;

@@ -68,19 +68,10 @@ namespace DrscfZ.Editor
 
         private static void EnsureSubStructure(GameObject canvasGo)
         {
-            // GiftNotificationUI 组件
-            var ui = canvasGo.GetComponent<GiftNotificationUI>();
+            // GiftNotificationUI has been removed; skipping component setup.
+            // var ui = canvasGo.GetComponent<GiftNotificationUI>();
             bool uiNew = false;
-            if (ui == null)
-            {
-                ui = canvasGo.AddComponent<GiftNotificationUI>();
-                uiNew = true;
-                Debug.Log("[SetupGiftCanvas] GiftNotificationUI 已挂载 ✅");
-            }
-            else
-            {
-                Debug.Log("[SetupGiftCanvas] GiftNotificationUI 已存在，跳过");
-            }
+            // if (ui == null) { ui = canvasGo.AddComponent<GiftNotificationUI>(); uiNew = true; }
 
             var t = canvasGo.transform;
 
@@ -252,77 +243,10 @@ namespace DrscfZ.Editor
             Debug.Log("[SetupGiftCanvas] GiftBannerQueue 创建 ✅");
 
             // ── 自动绑定 GiftNotificationUI 字段 ────────────────────────────
-            if (uiNew || true) // 每次都重新绑定
-            {
-                var so = new SerializedObject(ui);
-                var canvasRT = canvasGo.GetComponent<RectTransform>();
-                so.FindProperty("_canvasRoot").objectReferenceValue = canvasRT;
-
-                // T1
-                so.FindProperty("_t1Particle").objectReferenceValue =
-                    canvasGo.transform.Find("T1_StarParticle")?.GetComponent<ParticleSystem>();
-
-                // T2
-                var t2 = canvasGo.transform.Find("T2_BorderEffect");
-                so.FindProperty("_t2Panel").objectReferenceValue = t2?.gameObject;
-                so.FindProperty("_t2TopLeftPS").objectReferenceValue  = t2?.Find("TopLeft_PS")?.GetComponent<ParticleSystem>();
-                so.FindProperty("_t2TopRightPS").objectReferenceValue = t2?.Find("TopRight_PS")?.GetComponent<ParticleSystem>();
-                so.FindProperty("_t2BotLeftPS").objectReferenceValue  = t2?.Find("BotLeft_PS")?.GetComponent<ParticleSystem>();
-                so.FindProperty("_t2BotRightPS").objectReferenceValue = t2?.Find("BotRight_PS")?.GetComponent<ParticleSystem>();
-                so.FindProperty("_t2CenterRing").objectReferenceValue = t2?.Find("CenterRing_Image")?.GetComponent<Image>();
-
-                // T3
-                var t3 = canvasGo.transform.Find("T3_GiftBounce");
-                so.FindProperty("_t3Panel").objectReferenceValue    = t3?.gameObject;
-                so.FindProperty("_t3GiftIcon").objectReferenceValue = t3?.Find("GiftIcon_Image")?.GetComponent<Image>();
-                so.FindProperty("_t3ExplodePS").objectReferenceValue = t3?.Find("Explode_PS")?.GetComponent<ParticleSystem>();
-
-                // T4
-                var t4 = canvasGo.transform.Find("T4_FullscreenGlow");
-                so.FindProperty("_t4Panel").objectReferenceValue           = t4?.gameObject;
-                so.FindProperty("_t4OrangeOverlay").objectReferenceValue   = t4?.Find("OrangeOverlay")?.GetComponent<Image>();
-                so.FindProperty("_t4BatteryIcon").objectReferenceValue     = t4?.Find("BatteryIcon")?.GetComponent<Image>();
-                so.FindProperty("_t4ChargingSlider").objectReferenceValue  = t4?.Find("ChargingSlider")?.GetComponent<Slider>();
-
-                // T5
-                var t5 = canvasGo.transform.Find("T5_EpicAirdrop");
-                so.FindProperty("_t5Panel").objectReferenceValue          = t5?.gameObject;
-                so.FindProperty("_t5BlackOverlay").objectReferenceValue   = t5?.Find("BlackOverlay")?.GetComponent<Image>();
-                so.FindProperty("_t5AirdropBox").objectReferenceValue     = t5?.Find("AirdropBox")?.GetComponent<RectTransform>();
-                so.FindProperty("_t5FireworksPS").objectReferenceValue    = t5?.Find("Fireworks_PS")?.GetComponent<ParticleSystem>();
-                so.FindProperty("_t5ResourceIcons").objectReferenceValue  = t5?.Find("ResourceIcons")?.GetComponent<RectTransform>();
-                so.FindProperty("_t5PlayerNameText").objectReferenceValue = t5?.Find("PlayerNameText")?.GetComponent<TextMeshProUGUI>();
-
-                // GiftBannerSlots（_bannerSlots 数组，每个元素含5个字段）
-                var queue = canvasGo.transform.Find("GiftBannerQueue");
-                var slotsArr = so.FindProperty("_bannerSlots");
-                if (slotsArr != null && queue != null)
-                {
-                    slotsArr.arraySize = 3;
-                    for (int i = 0; i < 3; i++)
-                    {
-                        var slotName = $"BannerSlot_{i}";
-                        var slotTf = queue.Find(slotName);
-                        if (slotTf == null) continue;
-
-                        var elem = slotsArr.GetArrayElementAtIndex(i);
-                        elem.FindPropertyRelative("root").objectReferenceValue
-                            = slotTf.gameObject;
-                        elem.FindPropertyRelative("colorBar").objectReferenceValue
-                            = slotTf.Find("ColorBar")?.GetComponent<Image>();
-                        elem.FindPropertyRelative("giftIcon").objectReferenceValue
-                            = slotTf.Find("GiftIcon")?.GetComponent<Image>();
-                        elem.FindPropertyRelative("infoText").objectReferenceValue
-                            = slotTf.Find("InfoText")?.GetComponent<TextMeshProUGUI>();
-                        elem.FindPropertyRelative("tierTag").objectReferenceValue
-                            = slotTf.Find("TierTag")?.GetComponent<TextMeshProUGUI>();
-                    }
-                }
-
-                so.ApplyModifiedProperties();
-                EditorUtility.SetDirty(canvasGo);
-                Debug.Log("[SetupGiftCanvas] GiftNotificationUI 字段自动绑定完成 ✅");
-            }
+            // GiftNotificationUI has been removed; skipping auto-wiring.
+            // if (uiNew || true) { ... }
+            EditorUtility.SetDirty(canvasGo);
+            Debug.Log("[SetupGiftCanvas] Gift_Canvas 子结构已创建 ✅ (GiftNotificationUI 已移除，跳过绑定)");
         }
 
         // ==================== 子结构辅助方法 ====================
