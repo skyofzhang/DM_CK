@@ -1937,7 +1937,7 @@ MonoBehaviour:
   _attackRange: 4
   _attackInterval: 1.5
   _monsterType: 0
-  _hpFillImage: {fileID: 0}
+  _hpFillImage: {fileID: 635225008297298588}
 --- !u!205 &9216922578357992370
 LODGroup:
   m_ObjectHideFlags: 0

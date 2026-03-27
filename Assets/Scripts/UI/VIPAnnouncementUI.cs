@@ -84,7 +84,7 @@ namespace DrscfZ.UI
         /// <summary>根据 vipType / vipRank 选择对应视频及播放时长</summary>
         private VideoClip GetEntryClip(string vipType, int vipRank, out float playDuration)
         {
-            playDuration = 8f;
+            playDuration = 3f;
             if (vipRank <= 0 || vipRank > 20 || string.IsNullOrEmpty(vipType))
                 return null;
 
@@ -92,27 +92,27 @@ namespace DrscfZ.UI
 
             if (vipRank == 1)
             {
-                playDuration = isMonthly ? 11f : 14f;
+                playDuration = 5f;
                 return isMonthly ? monthlyRank1Clip : weeklyRank1Clip;
             }
             if (vipRank == 2)
             {
-                playDuration = 13f;
+                playDuration = 4.5f;
                 return isMonthly ? monthlyRank2Clip : weeklyRank2Clip;
             }
             if (vipRank == 3)
             {
-                playDuration = isMonthly ? 9f : 11f;
+                playDuration = 4f;
                 return isMonthly ? monthlyRank3Clip : weeklyRank3Clip;
             }
             if (vipRank <= 10)
             {
-                playDuration = 6f;
+                playDuration = 3f;
                 return isMonthly ? monthlyRank4_10Clip : weeklyRank4_10Clip;
             }
             if (vipRank <= 20)
             {
-                playDuration = isMonthly ? 5f : 7f;
+                playDuration = 2.5f;
                 return isMonthly ? monthlyRank11_20Clip : weeklyRank11_20Clip;
             }
             return null;

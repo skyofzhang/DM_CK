@@ -288,8 +288,7 @@ namespace DrscfZ.UI
             };
 
             // 根据视频实际宽高比计算宽度，避免拉伸
-            // tier6 降级使用 tier5 视频（index=4），无独立 tier6 视频
-            int clipIdx = Mathf.Clamp(tier - 1, 0, 4);
+            int clipIdx = Mathf.Clamp(tier - 1, 0, 5);
             VideoClip clip = (tierVideoClips != null && clipIdx < tierVideoClips.Length)
                 ? tierVideoClips[clipIdx] : null;
 
@@ -310,16 +309,10 @@ namespace DrscfZ.UI
             Vector2 size = new Vector2(finalHeight * aspectRatio, finalHeight);
             rt.sizeDelta = size;
 
-            // 位置：根据阵营从左/右侧弹出
-            float containerW = animationContainer.rect.width;
-            float xPos;
-            if (camp == "left")
-                xPos = -containerW * 0.25f + Random.Range(-30f, 30f);
-            else
-                xPos = containerW * 0.25f + Random.Range(-30f, 30f);
+            // 位置：X轴居中（0），Y轴由 yPos 控制
+            float xPos = 0f;
 
-            // Y位置：屏幕中下部（屏幕中心往下12%），负值=往下
-            // screenH 已在上方定义（用于最大尺寸限制），此处复用
+            // Y位置：屏幕中下部（屏幕中心往下12%）
             float yPos = -Screen.height * 0.12f;
             rt.anchoredPosition = new Vector2(xPos, yPos);
 
@@ -463,9 +456,9 @@ namespace DrscfZ.UI
             var outerGo = new GameObject("PlayerInfoOuter", typeof(RectTransform));
             outerGo.transform.SetParent(parent, false);
             var outerRT = outerGo.GetComponent<RectTransform>();
-            // 锚定在视频中下部（约30%高度处），覆盖在视频上
-            outerRT.anchorMin = new Vector2(0.5f, 0.25f);
-            outerRT.anchorMax = new Vector2(0.5f, 0.25f);
+            // 锚定在视频底部偏内（10%高度处），文字悬浮在视频效果下方
+            outerRT.anchorMin = new Vector2(0.5f, 0.08f);
+            outerRT.anchorMax = new Vector2(0.5f, 0.08f);
             outerRT.pivot = new Vector2(0.5f, 0.5f);
             outerRT.sizeDelta = new Vector2(0f, 0f);
             outerRT.anchoredPosition = new Vector2(0f, 0f);
@@ -611,33 +604,7 @@ namespace DrscfZ.UI
                 descLE.preferredHeight = 26f;
             }
 
-            // === 第三行：推力值 ===
-            if (gift.forceValue > 0)
-            {
-                var row2Go = new GameObject("Row2_Force", typeof(RectTransform));
-                row2Go.transform.SetParent(outerGo.transform, false);
-
-                var forceText = row2Go.AddComponent<TextMeshProUGUI>();
-                string forceStr = gift.forceValue >= 1000
-                    ? $"+{gift.forceValue / 1000f:F1}K推力"
-                    : $"+{gift.forceValue:F0}推力";
-                if (gift.isSummon) forceStr += " ★召唤";
-                forceText.text = forceStr;
-                forceText.fontSize = 20;
-                forceText.fontStyle = FontStyles.Bold;
-                forceText.alignment = TextAlignmentOptions.Center;
-                forceText.color = GetTierInfoColor(tier);
-                forceText.enableWordWrapping = false;
-                forceText.overflowMode = TextOverflowModes.Overflow;
-                forceText.raycastTarget = false;
-
-                if (chFont != null) forceText.font = chFont;
-                forceText.outlineWidth = 0.25f;
-                forceText.outlineColor = new Color32(0, 0, 0, 200);
-
-                var row2LE = row2Go.AddComponent<LayoutElement>();
-                row2LE.preferredHeight = 26f;
-            }
+            // 推力值行已移除（用户不需要显示推力数值）
         }
 
         /// <summary>获取tier对应的信息条颜色</summary>
@@ -665,8 +632,7 @@ namespace DrscfZ.UI
             if (rt == null) rt = t.GetComponent<RectTransform>();
 
             Vector2 targetPos = rt.anchoredPosition;
-            float slideX = camp == "left" ? -200f : 200f;
-            Vector2 startPos = targetPos + new Vector2(slideX, -300f);
+            Vector2 startPos = targetPos + new Vector2(0f, -300f); // 从下方弹入，X轴居中不偏移
             rt.anchoredPosition = startPos;
             t.localScale = Vector3.one * 0.2f;
 
@@ -778,9 +744,9 @@ namespace DrscfZ.UI
                 case 1:  return 2.5f;
                 case 2:  return 3f;
                 case 3:  return 3.5f;
-                case 4:  return 4.5f;
-                case 5:  return 5.5f;
-                case 6:  return 7f;
+                case 4:  return 4f;
+                case 5:  return 4.5f;
+                case 6:  return 5f;
                 default: return 3f;
             }
         }

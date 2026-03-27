@@ -374,7 +374,7 @@ MonoBehaviour:
   _attackRange: 4
   _attackInterval: 1.5
   _monsterType: 2
-  _hpFillImage: {fileID: 0}
+  _hpFillImage: {fileID: 3686057512416279930}
 --- !u!1 &2441438445257975128
 GameObject:
   m_ObjectHideFlags: 0

@@ -428,18 +428,11 @@ namespace DrscfZ.Survival
 
         /// <summary>
         /// 怪物出现时，全员（非死亡）Worker 全部参与防守攻击，不受工位槽数量限制。
-        /// 与 EnterNightDefense 逻辑一致，确保无论 phase_changed 是否先到，
-        /// 怪物真正出现时所有矿工都投入战斗。
+        /// ⚠️ 已在 cmd=6 Work/Move 状态的 Worker 不重复分配，避免打断正在进行的攻击协程。
         /// </summary>
         public void OnMonstersAppear()
         {
             if (_activeWorkers.Count == 0) return;
-
-            // 清除所有槽位占用，允许重新分配
-            if (_stationSlots != null)
-                foreach (var slot in _stationSlots)
-                    slot.occupyingPlayerId = "";
-            _workerToSlot.Clear();
 
             // 统计参战人数（用于均匀铺开站位）
             int total = 0;
@@ -450,6 +443,16 @@ namespace DrscfZ.Survival
             foreach (var w in _activeWorkers)
             {
                 if (w == null || w.IsDead) continue;
+
+                // 已经在执行 cmd=6（防守/攻击中） → 不重新分配，避免打断攻击协程
+                // IsWorking = State.Work || State.Move；CurrentCmd==6 代表正在前往或战斗中
+                if (w.CurrentCmd == 6 && w.IsWorking)
+                {
+                    w.SetHpBarVisible(true);
+                    assigned++;
+                    continue;
+                }
+
                 w.AssignWork(6, GetDefensePosition(assigned, total));
                 w.SetHpBarVisible(true);
                 assigned++;

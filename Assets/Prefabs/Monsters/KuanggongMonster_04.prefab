@@ -2262,7 +2262,7 @@ MonoBehaviour:
   _attackRange: 4
   _attackInterval: 1.5
   _monsterType: 0
-  _hpFillImage: {fileID: 0}
+  _hpFillImage: {fileID: 2204002552938272965}
 --- !u!205 &5275194193391192416
 LODGroup:
   m_ObjectHideFlags: 0

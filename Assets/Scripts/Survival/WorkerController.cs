@@ -218,11 +218,17 @@ namespace DrscfZ.Survival
             {
                 // 强制重置血条 Canvas 缩放（与 MonsterController 保持一致）
                 _hpBarCanvas.localScale = new Vector3(0.01f, 0.01f, 0.01f);
-                if (_hpFillImage == null)
-                    _hpFillImage = _hpBarCanvas.Find("HPFill")?.GetComponent<UnityEngine.UI.Image>();
+                // 每次 Initialize 都强制重新绑定，防止 Prefab 实例化时 Inspector 引用丢失
+                var hpFillTr = _hpBarCanvas.Find("HPFill");
+                if (hpFillTr != null)
+                    _hpFillImage = hpFillTr.GetComponent<UnityEngine.UI.Image>();
             }
             // 白天默认隐藏血条
             SetHpBarVisible(false);
+            // 初始化时立即置满（跳过 Lerp，避免从0渐变到满血）
+            _hpBarTargetFill = 1f;
+            if (_hpFillImage != null)
+                _hpFillImage.fillAmount = 1f;
 
             TransitionTo(State.Idle);
         }
@@ -238,9 +244,12 @@ namespace DrscfZ.Survival
         public void SetHp(int current, int max)
         {
             _hpBarTargetFill = max > 0 ? Mathf.Clamp01((float)current / max) : 1f;
-            // 颜色随血量变化
+            RebindHpFillIfNeeded();
+            // 立即同步 fillAmount（不等 Lerp 下帧生效）
             if (_hpFillImage != null)
             {
+                _hpFillImage.fillAmount = _hpBarTargetFill;
+                // 颜色随血量变化
                 float ratio = _hpBarTargetFill;
                 UnityEngine.Color c = ratio > 0.5f
                     ? UnityEngine.Color.Lerp(_hpColorMid, _hpColorFull, (ratio - 0.5f) * 2f)
@@ -249,9 +258,26 @@ namespace DrscfZ.Survival
             }
         }
 
+        /// <summary>兜底重绑定：若 _hpFillImage 意外为 null，尝试从层次结构中重新查找</summary>
+        private void RebindHpFillIfNeeded()
+        {
+            if (_hpFillImage != null) return;
+            if (_hpBarCanvas == null)
+                _hpBarCanvas = transform.Find("HPBarCanvas");
+            if (_hpBarCanvas != null)
+            {
+                var hpFillTr = _hpBarCanvas.Find("HPFill");
+                if (hpFillTr != null)
+                    _hpFillImage = hpFillTr.GetComponent<UnityEngine.UI.Image>();
+                if (_hpFillImage != null)
+                    Debug.LogWarning($"[WorkerController] {name}: _hpFillImage was null, rebound to {_hpFillImage.name}");
+            }
+        }
+
         /// <summary>每帧平滑推进血条 fillAmount（在 Update 中调用）</summary>
         private void UpdateHpBarSmooth()
         {
+            RebindHpFillIfNeeded();
             if (_hpFillImage == null) return;
             _hpFillImage.fillAmount = Mathf.Lerp(_hpFillImage.fillAmount, _hpBarTargetFill, Time.deltaTime * 10f);
         }
@@ -494,7 +520,13 @@ namespace DrscfZ.Survival
                 {
                     // 1. 找最近活跃怪物
                     var target = FindNearestActiveMonster();
-                    if (target == null) break;  // 怪物全灭 → 退出循环
+                    if (target == null)
+                    {
+                        // 暂时无怪（波次间隔 / 怪物正在生成）→ 在防守位待命，不退出
+                        SetAnimatorState(false, false);  // 切回 Idle 姿势（原地待命）
+                        yield return new WaitForSeconds(0.3f);
+                        continue;
+                    }
 
                     // 2. 追到攻击范围内
                     bool wasChasing = false;

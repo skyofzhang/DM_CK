@@ -29,9 +29,12 @@ namespace DrscfZ.Monster
 
         [Header("HP 条（World Space Canvas）")]
         [SerializeField] private UnityEngine.UI.Image _hpFillImage;
+        [SerializeField] private float _hpBarHeightOffset = 1.5f; // 血条距脚底高度（世界单位）
 
         // 血条平滑动画
         private float _hpBarTargetFill = 1f;
+        private Transform _hpBarCanvas;  // 缓存引用，LateUpdate 中每帧更新位置
+        private Camera _mainCam;
 
         // 运行时状态
         private int   _currentHp;
@@ -70,21 +73,26 @@ namespace DrscfZ.Monster
                 smr.updateWhenOffscreen = false;
             }
 
-            // ── 始终重置 HPBarCanvas 缩放（无论 _hpFillImage 是否已绑定）──────
-            var hpCanvas = transform.Find("HPBarCanvas");
+            // ── HPBarCanvas：缓存、激活、缩放、绑定 _hpFillImage ──────────────────
+            _mainCam = Camera.main;
+            _hpBarCanvas = transform.Find("HPBarCanvas");
+            if (_hpBarCanvas != null)
+            {
+                _hpBarCanvas.gameObject.SetActive(true);          // 确保激活（默认可能是关闭的）
+                _hpBarCanvas.localScale = new Vector3(0.01f, 0.01f, 0.01f);
+                foreach (Transform child in _hpBarCanvas)
+                    child.localScale = Vector3.one;
+
+                // 强制重新绑定 HPFill（按名称查找，不用 GetComponentInChildren 避免拿到 Background）
+                var hpFillTr = _hpBarCanvas.Find("HPFill");
+                if (hpFillTr != null)
+                    _hpFillImage = hpFillTr.GetComponent<UnityEngine.UI.Image>();
+            }
+            var hpCanvas = _hpBarCanvas; // 兼容下方代码
+
+            // ── 绑定中文字体到 HP 数字文本组件 ───────────────────────────────────
             if (hpCanvas != null)
             {
-                hpCanvas.localScale = new Vector3(0.01f, 0.01f, 0.01f);
-                foreach (Transform child in hpCanvas)
-                    child.localScale = Vector3.one;  // 强制子对象归 (1,1,1)
-            }
-
-            // ── 仅在 _hpFillImage 未绑定时查找组件引用 ─────────────────────────
-            if (_hpFillImage == null && hpCanvas != null)
-            {
-                _hpFillImage = hpCanvas.Find("HPFill")?.GetComponent<UnityEngine.UI.Image>();
-
-                // 绑定中文字体到 HP 数字文本组件
                 var hpText = hpCanvas.GetComponentInChildren<TMPro.TextMeshProUGUI>();
                 if (hpText != null)
                 {
@@ -94,6 +102,9 @@ namespace DrscfZ.Monster
                 }
             }
             UpdateHpBar();
+            // 初始化时立即设置 fillAmount=1（跳过 Lerp，避免从0渐变到满血的视觉错误）
+            if (_hpFillImage != null)
+                _hpFillImage.fillAmount = 1f;
 
             PlayAnim("Run");
         }
@@ -110,6 +121,19 @@ namespace DrscfZ.Monster
         }
 
         // ==================== 更新 ====================
+
+        private void LateUpdate()
+        {
+            // 血条 Canvas 位置：始终锁定在脚底正上方 + 朝向摄像机（Billboard）
+            if (_hpBarCanvas != null && _hpBarCanvas.gameObject.activeSelf)
+            {
+                if (_mainCam == null) _mainCam = Camera.main;
+                _hpBarCanvas.position = transform.position + Vector3.up * _hpBarHeightOffset;
+                if (_mainCam != null)
+                    _hpBarCanvas.rotation = Quaternion.LookRotation(
+                        _hpBarCanvas.position - _mainCam.transform.position);
+            }
+        }
 
         private void Update()
         {
@@ -261,10 +285,31 @@ namespace DrscfZ.Monster
         private void UpdateHpBar()
         {
             _hpBarTargetFill = _maxHp > 0 ? Mathf.Clamp01((float)_currentHp / _maxHp) : 0f;
+            // 立即同步 fillAmount（不等 Lerp 下帧生效），确保受击瞬间可见
+            RebindHpFillIfNeeded();
+            if (_hpFillImage != null)
+                _hpFillImage.fillAmount = _hpBarTargetFill;
+        }
+
+        /// <summary>兜底重绑定：若 _hpFillImage 意外为 null，尝试从层次结构中重新查找</summary>
+        private void RebindHpFillIfNeeded()
+        {
+            if (_hpFillImage != null) return;
+            if (_hpBarCanvas == null)
+                _hpBarCanvas = transform.Find("HPBarCanvas");
+            if (_hpBarCanvas != null)
+            {
+                var hpFillTr = _hpBarCanvas.Find("HPFill");
+                if (hpFillTr != null)
+                    _hpFillImage = hpFillTr.GetComponent<UnityEngine.UI.Image>();
+                if (_hpFillImage != null)
+                    Debug.LogWarning($"[MonsterController] {name}: _hpFillImage was null, rebound to {_hpFillImage.name}");
+            }
         }
 
         private void UpdateHpBarSmooth()
         {
+            RebindHpFillIfNeeded();
             if (_hpFillImage == null) return;
             _hpFillImage.fillAmount = Mathf.Lerp(_hpFillImage.fillAmount, _hpBarTargetFill, Time.deltaTime * 10f);
         }
