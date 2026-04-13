@@ -276,6 +276,12 @@ namespace DrscfZ.Survival
                 case "gate_upgraded":
                     HandleGateUpgraded(type, dataJson);
                     break;
+                case "gate_upgrade_failed":
+                    HandleGateUpgradeFailed(dataJson);
+                    break;
+                case "game_paused":
+                    Debug.Log("[SGM] game_paused received (GM command)");
+                    break;
                 case "boss_appeared":
                     HandleBossAppeared(type, dataJson);
                     break;
@@ -933,6 +939,17 @@ namespace DrscfZ.Survival
                 $"最大HP提升至 {data.newMaxHp}",
                 new Color(0.2f, 0.8f, 1f), 2f);
             OnPlayerActivityMessage?.Invoke($"城门已升级至 Lv.{data.newLevel}（最大HP:{data.newMaxHp}）");
+        }
+
+        private void HandleGateUpgradeFailed(string dataJson)
+        {
+            var data = JsonUtility.FromJson<GateUpgradeFailedData>(dataJson);
+            if (data == null) return;
+            string msg = data.reason == "max_level"
+                ? "城门已达最高等级！"
+                : $"矿石不足！需要 {data.required}，当前 {data.available}";
+            UI.AnnouncementUI.Instance?.ShowAnnouncement("城门升级失败", msg, new Color(1f, 0.4f, 0.2f), 2f);
+            Debug.Log($"[SGM] gate_upgrade_failed: {data.reason}");
         }
 
         private void HandleBossAppeared(string type, string dataJson)

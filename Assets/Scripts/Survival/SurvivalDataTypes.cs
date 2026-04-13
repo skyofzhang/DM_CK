@@ -166,6 +166,16 @@ namespace DrscfZ.Survival
         public string upgradedBy;    // 触发升级的玩家ID
     }
 
+    /// <summary>城门升级失败（矿石不足或已满级）</summary>
+    [Serializable]
+    public class GateUpgradeFailedData
+    {
+        public string reason;        // "max_level" | "insufficient_ore"
+        public int    currentLevel;  // 当前等级（max_level时）
+        public int    required;      // 需要矿石数（insufficient_ore时）
+        public int    available;     // 当前矿石数（insufficient_ore时）
+    }
+
     // ==================== 矿工HP系统 ====================
 
     /// <summary>矿工死亡通知（type=worker_died）</summary>
