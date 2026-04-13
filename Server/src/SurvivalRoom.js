@@ -371,6 +371,41 @@ class SurvivalRoom {
       case 'broadcaster_action':
         this._handleBroadcasterAction(ws, data);
         break;
+
+      // ==================== GM 测试指令 ====================
+      case 'pause_game':
+        // 暂停/恢复游戏（仅限调试）
+        if (this.survivalEngine.state === 'day' || this.survivalEngine.state === 'night') {
+          this.survivalEngine._clearAllTimers();
+          this.broadcast({ type: 'game_paused', data: { paused: true } });
+          console.log(`[SurvivalRoom:${this.roomId}] GM: game paused`);
+        }
+        break;
+
+      case 'simulate_gift': {
+        // 模拟礼物（tier 1-6，默认 tier=2）
+        const tierMap = { 1: 'fairy_wand', 2: 'ability_pill', 3: 'donut', 4: 'energy_battery', 5: 'love_explosion', 6: 'mystery_airdrop' };
+        const tier    = (data && data.tier && tierMap[data.tier]) ? data.tier : 2;
+        const giftId  = tierMap[tier];
+        this.survivalEngine.handleGift('gm_test', 'GM测试', '', giftId, 0, `GM礼物T${tier}`);
+        console.log(`[SurvivalRoom:${this.roomId}] GM: simulate_gift tier=${tier} (${giftId})`);
+        break;
+      }
+
+      case 'simulate_freeze':
+        // 模拟冻结特效（广播 special_effect freeze_all，不触发游戏结束）
+        this.broadcast({ type: 'special_effect', timestamp: Date.now(), data: { effect: 'frozen_all', duration: 5 } });
+        console.log(`[SurvivalRoom:${this.roomId}] GM: simulate_freeze`);
+        break;
+
+      case 'simulate_monster':
+        // 模拟刷怪（立即追加1只普通怪物）
+        if (this.survivalEngine.state === 'night') {
+          this.survivalEngine._spawnWave({ type: 'normal', count: 1 }, this.survivalEngine.day, 99);
+          console.log(`[SurvivalRoom:${this.roomId}] GM: simulate_monster`);
+        }
+        break;
+
       default:
         console.log(`[SurvivalRoom:${this.roomId}] Unknown client message: ${msgType}`);
     }
@@ -443,7 +478,7 @@ class SurvivalRoom {
     if (Math.floor(this.survivalEngine.totalLikes / 50) > Math.floor((this.survivalEngine.totalLikes - count) / 50)) {
       const bonusCount = Math.floor(this.survivalEngine.totalLikes / 50) - Math.floor((this.survivalEngine.totalLikes - count) / 50);
       this.survivalEngine.food = Math.min(2000, this.survivalEngine.food + 10 * bonusCount);
-      this.broadcast({ type: 'bobao', message: `❤️ 点赞破${Math.floor(this.survivalEngine.totalLikes / 50) * 50}！食物+${10 * bonusCount}！` });
+      this.broadcast({ type: 'bobao', data: { message: `点赞破${Math.floor(this.survivalEngine.totalLikes / 50) * 50}！食物+${10 * bonusCount}！` } });
       console.log(`[SurvivalRoom:${this.roomId}] Like milestone: total=${this.survivalEngine.totalLikes}, food+${10 * bonusCount}`);
     }
   }

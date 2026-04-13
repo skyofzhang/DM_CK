@@ -869,24 +869,24 @@ namespace DrscfZ.Survival
             if (data == null) return;
 
             // 找到目标怪物，播放受击特效（服务器已计算实际伤害）
-            var monster = monsterWaveSpawner?.FindMonsterById(data.monsterId);
+            var monster = monsterWaveSpawner?.FindMonsterById(data.targetId);
             if (monster != null)
                 monster.ShowHitEffect();
 
             // 怪物受击 → 轻微相机抖动
             SurvivalCameraController.OnMonsterAttack();
 
-            // 追踪贡献（内部 float dict，用于结算总分统计）
-            int combatScore = data.score > 0 ? data.score : 1;
-            TrackContribution(data.playerId, combatScore);
+            // 追踪贡献（内部 float dict，用于结算总分统计；服务端不再下发 score，固定计 1）
+            const int combatScore = 1;
+            TrackContribution(data.attackerId, combatScore);
 
             // 同步到 RankingSystem（供 SurvivalLiveRankingUI 实时榜读取）
             RankingSystem.Instance?.TrackSurvivalScore(
-                data.playerId,
-                string.IsNullOrEmpty(data.playerName) ? "匿名" : data.playerName,
+                data.attackerId,
+                string.IsNullOrEmpty(data.attackerName) ? "匿名" : data.attackerName,
                 combatScore);
 
-            OnPlayerActivityMessage?.Invoke($"{data.playerName} 攻击怪物 +{combatScore}分");
+            OnPlayerActivityMessage?.Invoke($"{data.attackerName} 攻击怪物 +{combatScore}分");
         }
 
         private void HandleMonsterDied(string type, string dataJson)
@@ -907,7 +907,7 @@ namespace DrscfZ.Survival
                     new Color(1f, 0.85f, 0.1f), 3f);
             }
 
-            Debug.Log($"[SurvivalGM] 怪物死亡: {data.monsterId} ({data.monsterType}) 击杀者:{data.killedBy}");
+            Debug.Log($"[SurvivalGM] 怪物死亡: {data.monsterId} ({data.monsterType}) 击杀者:{data.killerId}");
         }
 
         private void HandleNightCleared(string type, string dataJson)
@@ -927,12 +927,12 @@ namespace DrscfZ.Survival
             if (data == null) return;
 
             // 更新城门最大HP
-            cityGateSystem?.HandleUpgrade(data.level, data.newMaxHp);
+            cityGateSystem?.HandleUpgrade(data.newLevel, data.newMaxHp);
             UI.AnnouncementUI.Instance?.ShowAnnouncement(
-                $"城门升级至 Lv.{data.level}!",
+                $"城门升级至 Lv.{data.newLevel}!",
                 $"最大HP提升至 {data.newMaxHp}",
                 new Color(0.2f, 0.8f, 1f), 2f);
-            OnPlayerActivityMessage?.Invoke($"城门已升级至 Lv.{data.level}（最大HP:{data.newMaxHp}）");
+            OnPlayerActivityMessage?.Invoke($"城门已升级至 Lv.{data.newLevel}（最大HP:{data.newMaxHp}）");
         }
 
         private void HandleBossAppeared(string type, string dataJson)

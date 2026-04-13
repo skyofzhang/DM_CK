@@ -18,7 +18,10 @@ namespace DrscfZ.Survival
         public float  furnaceTemp;   // -100 ~ 100
         public int    gateHp;
         public int    gateMaxHp;
+        public int    gateLevel;     // 城门当前等级（1-4）
         public int    scorePool;     // 当前积分池总量
+        // 注：服务端还发送 workerHp（dict），因 JsonUtility 不支持 Dictionary，
+        //     由独立的 worker_hp_update 消息负责同步，此处忽略
     }
 
     /// <summary>资源状态更新（服务器定时推送）</summary>
@@ -31,6 +34,7 @@ namespace DrscfZ.Survival
         public float furnaceTemp;
         public int   gateHp;
         public int   gateMaxHp;
+        public int   gateLevel;      // 城门当前等级（1-4）
         public float remainingTime;
         public int   scorePool;      // 当前积分池总量
     }
@@ -75,7 +79,7 @@ namespace DrscfZ.Survival
         public string avatarUrl;
         public string giftId;    // 礼物英文ID（如 "fairy_wand"），用于客户端效果/名称查询
         public string giftName;  // 礼物展示名（服务器设置，通常是中文）
-        public int    giftTier;    // 1-7
+        public int    giftTier;    // 1-6
         public float  giftValue;   // 礼物价值（分）
         public int    addFood;
         public int    addCoal;
@@ -135,12 +139,12 @@ namespace DrscfZ.Survival
     [Serializable]
     public class CombatAttackData
     {
-        public string playerId;
-        public string playerName;
-        public string monsterId;   // 目标怪物ID（服务器分配）
-        public float  damage;      // 造成的伤害值
-        public bool   isKill;      // 是否一击击杀
-        public int    score;       // 获得积分
+        public string attackerId;          // 攻击者玩家ID（原 playerId）
+        public string attackerName;        // 攻击者昵称（原 playerName）
+        public string targetId;            // 目标怪物ID（原 monsterId）
+        public string targetType;          // 怪物类型 "normal"|"elite"|"boss"
+        public float  damage;              // 造成的伤害值
+        public float  targetHpRemaining;   // 攻击后怪物剩余HP
     }
 
     /// <summary>怪物死亡数据（服务器广播）</summary>
@@ -149,17 +153,17 @@ namespace DrscfZ.Survival
     {
         public string monsterId;    // 死亡怪物ID
         public string monsterType;  // "normal" | "elite" | "boss"
-        public string killedBy;     // 击杀玩家ID（可为空=被动死亡）
-        public int    day;          // 第几天
+        public string killerId;     // 击杀玩家ID（可为空=被动死亡）（原 killedBy，已对齐服务端字段名）
     }
 
     /// <summary>城门升级数据（消耗矿石升级城门）</summary>
     [Serializable]
     public class GateUpgradedData
     {
-        public int level;           // 升级后等级 (2-4)
-        public int newMaxHp;        // 新的最大HP
-        public int cost;            // 消耗的矿石数量
+        public int    newLevel;      // 升级后等级 (2-4)（原 level，已对齐服务端字段名）
+        public int    newMaxHp;      // 新的最大HP
+        public int    oreRemaining;  // 升级后剩余矿石（原 cost，已对齐服务端字段名）
+        public string upgradedBy;    // 触发升级的玩家ID
     }
 
     // ==================== 矿工HP系统 ====================
