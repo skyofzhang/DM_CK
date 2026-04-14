@@ -24,6 +24,9 @@ namespace DrscfZ.Survival
         public const string GateUpgraded = "gate_upgraded";
         public const string BossAppeared = "boss_appeared";
 
+        // ----- 城门系统 -----
+        public const string GateUpgradeFailed = "gate_upgrade_failed";
+
         // ----- 矿工HP系统 -----
         public const string WorkerDied      = "worker_died";
         public const string WorkerRevived   = "worker_revived";
