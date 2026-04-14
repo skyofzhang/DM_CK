@@ -61,6 +61,9 @@ const EVENT_NAMES = {
 // ==================== SurvivalGameEngine ====================
 
 class SurvivalGameEngine {
+  // 参与玩家上限 = 客户端矿工模型池大小（WorkerManager.MAX_WORKERS=12）
+  static MAX_PLAYERS = 12;
+
   /**
    * @param {object} config        - 游戏配置（来自 config/default.json）
    * @param {function} broadcast   - 广播给所有客户端
@@ -313,6 +316,8 @@ class SurvivalGameEngine {
    */
   handleComment(playerId, playerName, avatarUrl, content) {
     if (this.state !== 'day' && this.state !== 'night') return;
+    // 未注册玩家满员时拒绝参与
+    if (playerId && !this.contributions[playerId] && this.totalPlayers >= SurvivalGameEngine.MAX_PLAYERS) return;
     const content_trim = (content || '').trim();
 
     const cmd = parseInt(content_trim);
@@ -360,6 +365,8 @@ class SurvivalGameEngine {
    * giftValue — 礼物价格，单位：分（1分=0.01元=0.1抖币）
    */
   handleGift(playerId, playerName, avatarUrl, giftId, giftValue, giftName) {
+    // 未注册玩家满员时拒绝参与（礼物效果不生效，不进入贡献榜）
+    if (playerId && !this.contributions[playerId] && this.totalPlayers >= SurvivalGameEngine.MAX_PLAYERS) return;
     // 注册/更新送礼玩家的名字（排行榜结算时使用）
     if (playerId && !this.playerNames[playerId])
       this.playerNames[playerId] = playerName || playerId;
@@ -520,6 +527,8 @@ class SurvivalGameEngine {
    */
   handlePlayerJoined(playerId, playerName, avatarUrl) {
     if (!this.contributions[playerId]) {
+      // 满员时拒绝新玩家加入（上限 = 客户端矿工模型池 MAX_WORKERS）
+      if (this.totalPlayers >= SurvivalGameEngine.MAX_PLAYERS) return;
       this.contributions[playerId] = 0;
       this.playerNames[playerId] = playerName || playerId;  // 记录玩家名，结算时填入排行榜
       this.totalPlayers++;
