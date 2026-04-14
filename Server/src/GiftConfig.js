@@ -38,7 +38,7 @@ const GIFTS = {
     douyin_id: 'TBD',
     price_fen: 100,
     tier:      'T2',
-    effect:    '全局食物+50，召唤守卫攻击当前波次怪物（持续30秒）',
+    effect:    '全员采矿效率+50%（持续30秒）',
     score:     100,
   },
 
@@ -60,7 +60,7 @@ const GIFTS = {
     douyin_id: 'TBD',
     price_fen: 990,
     tier:      'T4',
-    effect:    '炉温+30℃，全局效率+30%（持续180秒）',  // M-NUMERIC: 60s → 180s
+    effect:    '炉温+30℃，发送者效率+30%（持续180秒）',  // M-NUMERIC: 60s → 180s
     score:     1000,
   },
 
@@ -71,7 +71,7 @@ const GIFTS = {
     douyin_id: 'TBD',
     price_fen: 1990,
     tier:      'T5',
-    effect:    '全体怪物受200点AOE伤害、所有矿工HP全满恢复、城门+200HP',
+    effect:    '全体怪物受200点AOE伤害、发送者矿工满血复活、城门+200HP',
     score:     2000,
   },
 
