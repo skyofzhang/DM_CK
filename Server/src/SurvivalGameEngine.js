@@ -50,6 +50,30 @@ function getWaveConfig(day) {
 const GATE_UPGRADE_COSTS   = [100, 250, 500]; // index: lv1→idx0=100, lv2→idx1=250, lv3→idx2=500
 const GATE_MAX_HP_BY_LEVEL = [1000, 1500, 2200, 3000]; // 城门HP：1级/2级/3级/4级
 
+// ==================== §38 探险系统（Expedition） ====================
+// 总时长 90s = 40s 外出 + 15s 外域事件 + 35s 返回（白天 120s 内完成）
+// 最多 3 名矿工同时在外
+const EXPEDITION_MAX_CONCURRENT = 3;
+const EXPEDITION_OUTBOUND_SEC   = 40;
+const EXPEDITION_EVENT_SEC      = 15;
+const EXPEDITION_RETURN_SEC     = 35;
+const EXPEDITION_TOTAL_SEC      = EXPEDITION_OUTBOUND_SEC + EXPEDITION_EVENT_SEC + EXPEDITION_RETURN_SEC; // 90
+const EXPEDITION_EVENT_WEIGHTS  = [
+  { id: 'lost_cache',      w: 0.25  },
+  { id: 'wild_beasts',     w: 0.25  },
+  { id: 'trader_caravan',  w: 0.25  },
+  { id: 'meteor_fragment', w: 0.083 },
+  { id: 'bandit_raid',     w: 0.083 },
+  { id: 'mystic_rune',     w: 0.084 }, // 0.083 + 0.001 凑 1.0
+];
+const RUNE_CHARGE_DAILY_CAP = 3;           // 24h 内最多 3 次响应（§38.3 mystic_rune 硬上限）
+const RUNE_CHARGE_WINDOW_MS = 24 * 3600 * 1000;
+const WILD_BEASTS_DEATH_RATE = 0.30;        // wild_beasts 30% 死亡概率
+const WILD_BEASTS_CONTRIB    = 200;         // wild_beasts 击杀贡献
+const LOST_CACHE_RES         = { food: 0, coal: 50, ore: 80 };
+const TRADER_COST_FOOD       = 200;
+const TRADER_COST_ORE        = 50;
+
 // 矿工成长系统常量（策划案 §30.10）
 // TIER_THRESHOLDS[tierIdx]：进入该阶段所需的最小累计终身贡献值
 // TIER_COST_PER_LV[tierIdx]：该阶段内每级所需贡献值增量
@@ -332,6 +356,14 @@ class SurvivalGameEngine {
     this._meteorTimers          = [];    // meteor_shower：15 次 setTimeout 句柄
     this._rouletteRunningInited = false; // Running 首次进入 onReadyAtRunningStart 防止重复触发
 
+    // ── §38 探险系统（Expedition，MVP）────────────────────────────────
+    // expeditionId -> { playerId, workerIdx, startAt, returnsAt, eventId, eventEndsAt, options, outcome, outboundTimer, eventTimer, returnTimer, userChoice }
+    this._expeditions           = new Map();
+    this._expeditionIdCounter   = 0;
+    this._meteorFragmentPending = false; // 下次 666 触发 efficiency666Bonus ×2.0（单次消费）
+    // mystic_rune 24h 滑动窗口（最多 3 次）——MVP 内存 Map，TODO 接入 RoomPersistence 避免主播刷重启
+    this._runeChargeLog         = [];
+
     // 点赞统计
     this.totalLikes = 0;
 
@@ -489,6 +521,12 @@ class SurvivalGameEngine {
     this._roulette.reset();
     this._rouletteRunningInited = false;
 
+    // §38 探险系统重置：所有 expedition 视作 recall（无资源回馈），清定时器
+    // _runeChargeLog 跨局永续（24h 滑动窗口，MVP 重启丢失；TODO 接入 RoomPersistence）
+    this._cancelAllExpeditions('reset');
+    this._expeditionIdCounter   = 0;
+    this._meteorFragmentPending = false;
+
     this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
   }
 
@@ -583,13 +621,16 @@ class SurvivalGameEngine {
     // - 已是正式守护者（contributions[playerId] !== undefined）→ 刷新活跃时间，走现有逻辑
     // - 还有守护者名额（totalPlayers < MAX_PLAYERS） → 绑定为守护者，走现有逻辑
     // - 名额已满 → 进入助威者分支（_handleSupporterComment 内幂等注册 + 推 supporter_joined）
+    // §38：助威者/非 666 情况下，`探`/`召回` 也需要走到下方分支（_handleExpeditionSend 内部会返 supporter_not_allowed）
+    const isExpeditionCmd = (content_trim === '探' || content_trim === '召回');
     if (playerId) {
       if (this._supporters.has(playerId)) {
         if (cmd >= 1 && cmd <= 6) {
           this._handleSupporterComment(playerId, playerName, cmd);
         }
         // 助威者 666 与守护者一致（效果本身就是全局的）→ 继续下方 666 分支
-        if (content_trim !== '666') return;
+        // 助威者 `探`/`召回` 也放行到下方，由 _handleExpeditionSend 返回 supporter_not_allowed
+        if (content_trim !== '666' && !isExpeditionCmd) return;
       } else if (this.contributions[playerId] !== undefined) {
         // 已是正式守护者
         this._guardianLastActive[playerId] = Date.now();
@@ -605,7 +646,8 @@ class SurvivalGameEngine {
         if (cmd >= 1 && cmd <= 6) {
           this._handleSupporterComment(playerId, playerName, cmd);
         }
-        if (content_trim !== '666') return;
+        // 同上：`探`/`召回` 放行到下方发 supporter_not_allowed
+        if (content_trim !== '666' && !isExpeditionCmd) return;
       }
     }
 
@@ -637,13 +679,27 @@ class SurvivalGameEngine {
       if (this.state === 'night') {
         this._handleAttack(playerId, playerName);
       }
+    } else if (content_trim === '探') {
+      // §38 探险指令：派出自己的矿工外出探险
+      if (!playerId) return;
+      this._handleExpeditionSend(playerId, playerName);
+    } else if (content_trim === '召回') {
+      // §38 召回指令：仅主播可用，立即拉回在外探险矿工（空手而归）
+      if (!playerId) return;
+      this._handleExpeditionRecall(playerId, playerName);
     } else if (content_trim === '666') {
       // 666弹幕：全员效率+15%，持续30秒（策划案 §4.3）
       this.efficiency666Bonus = 1.15;
+      // §38 meteor_fragment：若 pending，本次 666 ×2.0（单次消费）
+      if (this._meteorFragmentPending) {
+        this.efficiency666Bonus = this.efficiency666Bonus * 2.0;
+        this._meteorFragmentPending = false;
+        console.log(`[SurvivalEngine] meteor_fragment consumed: 666 bonus boosted to ${this.efficiency666Bonus}`);
+      }
       this.efficiency666Timer = 30;
       this._trackContribution(playerId, 2, 'barrage');
       this.broadcast({ type: 'special_effect', timestamp: Date.now(), data: { effect: 'glow_all', duration: 3 } });
-      console.log(`[SurvivalEngine] 666 bonus activated by ${playerName}, efficiency +15% for 30s`);
+      console.log(`[SurvivalEngine] 666 bonus activated by ${playerName}, efficiency +${Math.round((this.efficiency666Bonus-1)*100)}% for 30s`);
     }
   }
 
@@ -1054,11 +1110,20 @@ class SurvivalGameEngine {
     const now = Date.now();
     const AFK_THRESHOLD = 60000; // 60s
 
+    // §38.6 兼容：预计算在外探险中的玩家集合，这些玩家不走 AFK 替补
+    // （探险中矿工 gameObject 已 SetActive(false)，AFK 替换会污染 _expeditions 与 contributions）
+    const expeditionPlayers = new Set();
+    for (const exp of this._expeditions.values()) {
+      if (exp && exp.playerId) expeditionPlayers.add(exp.playerId);
+    }
+
     for (const [pid, lastActive] of Object.entries(this._guardianLastActive)) {
       // 豁免：主播永不替换（_roomCreatorId 未注入时视为无主播豁免）
       if (this._roomCreatorId && pid === this._roomCreatorId) continue;
       // 豁免：夜晚死亡等待复活中的矿工不替换
       if (this._workerHp[pid]?.isDead) continue;
+      // §38 豁免：在外探险的玩家不替换（返程前矿工不在场，替补会导致幽灵 contributions）
+      if (expeditionPlayers.has(pid)) continue;
       // 未到 AFK 阈值
       if (now - lastActive < AFK_THRESHOLD) continue;
 
@@ -1205,6 +1270,9 @@ class SurvivalGameEngine {
 
     // 初始化矿工HP（夜晚开始时全员满血上阵）
     this._initWorkerHp();
+
+    // §38.6 夜晚兜底 KIA：必须在 _initWorkerHp 之后执行，否则 died=true 写入会被满血重建覆盖
+    this._sweepExpeditionsOnNightStart(Date.now());
 
     // 初始化当天怪物追踪
     this._initActiveMonsters(day);
@@ -2608,6 +2676,499 @@ class SurvivalGameEngine {
 
   // ==================== end §24.4 ====================
 
+  // ==================== §38 探险系统（Expedition） ====================
+
+  /**
+   * 弹幕入口：`探` — 派出自己的矿工外出探险
+   * 前置检查：day / 活跃 < 3 / 不在 expedition 中 / 矿工存活 / 非助威者
+   */
+  _handleExpeditionSend(playerId, playerName) {
+    const failReason = this._startExpedition(playerId, Date.now());
+    if (failReason) {
+      this._broadcast({
+        type: 'expedition_failed',
+        data: {
+          playerId,
+          reason: failReason,
+          unlockDay: 0, // MVP §36.12 不做解锁门槛，默认 0
+        },
+      });
+      console.log(`[SurvivalEngine] expedition_failed: ${playerName} (${playerId}) reason=${failReason}`);
+    }
+  }
+
+  /**
+   * 弹幕入口：`召回` — 仅主播（MVP 放开给任意玩家，TODO _roomCreatorId 校验）
+   * 扫描该玩家名下（PM 决策 MVP 简化：召回第一个匹配的）活跃 expedition，立即回城空手
+   */
+  _handleExpeditionRecall(playerId, playerName) {
+    // TODO: _roomCreatorId 未注入 → 放开；等主播鉴权接入后限制非主播拒绝
+    // if (this._roomCreatorId && playerId !== this._roomCreatorId) return;
+    this._recallExpedition(playerId);
+  }
+
+  /**
+   * 启动一次探险
+   * @returns {string|null} 失败原因字符串（'wrong_phase'/'max_concurrent'/...），成功返回 null
+   */
+  _startExpedition(playerId, nowMs) {
+    // §36.12 feature_locked 检查（MVP 不做，TODO）
+    // if (!this.room?.isVeteran && this.room?.seasonDay < FEATURE_UNLOCK_DAY.expedition.minDay) return 'feature_locked';
+
+    // 状态必须为白天（§38.5 wrong_phase；不含 recovery，MVP 无此状态）
+    if (this.state !== 'day') return 'wrong_phase';
+
+    // §33 助威者不能发 send（避免无限消耗守护者名额）
+    if (this._supporters.has(playerId)) return 'supporter_not_allowed';
+
+    // 必须有贡献条目（即正式守护者）
+    if (this.contributions[playerId] === undefined) return 'supporter_not_allowed';
+
+    // 已在外探险 → duplicate
+    for (const exp of this._expeditions.values()) {
+      if (exp.playerId === playerId) return 'duplicate';
+    }
+
+    // 活跃 expedition 上限 3
+    if (this._expeditions.size >= EXPEDITION_MAX_CONCURRENT) return 'max_concurrent';
+
+    // 矿工必须存活（白天默认存活，但夜晚死亡未复活的矿工 _workerHp[pid].isDead 仍为 true，白天会被 _reviveAllWorkers 清掉）
+    const w = this._workerHp[playerId];
+    if (w && w.isDead) return 'worker_dead';
+
+    // ── 成功：创建 expedition ──
+    const expeditionId = `exp_${++this._expeditionIdCounter}`;
+    const workerIdx    = this._getWorkerIndex(playerId);
+
+    // 白天剩余时间 (s) — remainingTime 是当前状态剩余秒
+    const dayRemainingSec = Math.max(0, this.remainingTime);
+    let totalSec = EXPEDITION_TOTAL_SEC;
+    let outboundSec = EXPEDITION_OUTBOUND_SEC;
+    let eventSec    = EXPEDITION_EVENT_SEC;
+    let returnSec   = EXPEDITION_RETURN_SEC;
+    let forceDied   = false;
+
+    // §38.6 白天兜底加速：若 remainingTime < 90s → 线性压缩
+    if (dayRemainingSec > 0 && dayRemainingSec < EXPEDITION_TOTAL_SEC) {
+      if (dayRemainingSec < 10) {
+        // 剩余 < 10s：抵达时即 died，无法享受事件收益
+        forceDied = true;
+        totalSec = dayRemainingSec;
+        outboundSec = Math.max(1, Math.floor(dayRemainingSec * (40/90)));
+        eventSec    = Math.max(1, Math.floor(dayRemainingSec * (15/90)));
+        returnSec   = Math.max(0, dayRemainingSec - outboundSec - eventSec);
+      } else {
+        const ratio = dayRemainingSec / EXPEDITION_TOTAL_SEC;
+        outboundSec = Math.max(1, Math.round(EXPEDITION_OUTBOUND_SEC * ratio));
+        eventSec    = Math.max(1, Math.round(EXPEDITION_EVENT_SEC * ratio));
+        returnSec   = Math.max(1, dayRemainingSec - outboundSec - eventSec);
+        totalSec    = outboundSec + eventSec + returnSec;
+      }
+    }
+
+    const returnsAt = nowMs + totalSec * 1000;
+
+    const exp = {
+      expeditionId,
+      playerId,
+      playerName: this._getPlayerName(playerId),
+      workerIdx,
+      startAt:       nowMs,
+      returnsAt,
+      outboundSec, eventSec, returnSec,
+      eventId:       null,
+      eventEndsAt:   0,
+      options:       null,
+      userChoice:    null,
+      outcome:       null,
+      forceDied,
+      outboundTimer: null,
+      eventTimer:    null,
+      returnTimer:   null,
+    };
+
+    exp.outboundTimer = setTimeout(() => this._triggerExpeditionEvent(expeditionId, Date.now()), outboundSec * 1000);
+    this._expeditions.set(expeditionId, exp);
+
+    this._broadcast({
+      type: 'expedition_started',
+      data: { playerId, workerIdx, expeditionId, returnsAt },
+    });
+    console.log(`[SurvivalEngine] expedition_started: ${this._getPlayerName(playerId)} id=${expeditionId} returnsAt=+${totalSec}s forceDied=${forceDied}`);
+
+    return null;
+  }
+
+  /**
+   * 40s 外出完成 → 抽取事件卡并广播 expedition_event（15s 等待主播/观众决策）
+   */
+  _triggerExpeditionEvent(expeditionId, nowMs) {
+    const exp = this._expeditions.get(expeditionId);
+    if (!exp) return;
+
+    // 若 forceDied（白天末段发起 → 抵达即判死），事件阶段仍跑一个短流程以保持协议连贯
+    // 选 lost_cache（空奖励）作为中性事件，返回阶段会覆盖为 died=true
+    let eventId;
+    if (exp.forceDied) {
+      eventId = 'lost_cache';
+    } else {
+      eventId = this._rollExpeditionEvent(nowMs);
+    }
+
+    exp.eventId     = eventId;
+    exp.eventEndsAt = nowMs + exp.eventSec * 1000;
+    exp.options     = (eventId === 'trader_caravan') ? ['accept', 'cancel'] : null;
+
+    this._broadcast({
+      type: 'expedition_event',
+      data: {
+        expeditionId,
+        eventId,
+        eventEndsAt: exp.eventEndsAt,
+        options:     exp.options,
+      },
+    });
+    console.log(`[SurvivalEngine] expedition_event: id=${expeditionId} event=${eventId}`);
+
+    exp.eventTimer = setTimeout(() => this._resolveExpeditionEvent(expeditionId, exp.userChoice), exp.eventSec * 1000);
+  }
+
+  /**
+   * 按权重抽选事件卡；mystic_rune 24h 内最多 3 次，超限退化为 lost_cache
+   */
+  _rollExpeditionEvent(nowMs) {
+    // mystic_rune 上限判定（剔除 24h 外的记录再计数）
+    this._runeChargeLog = this._runeChargeLog.filter(ts => nowMs - ts < RUNE_CHARGE_WINDOW_MS);
+
+    let r = Math.random();
+    let picked = null;
+    for (const { id, w } of EXPEDITION_EVENT_WEIGHTS) {
+      if (r < w) { picked = id; break; }
+      r -= w;
+    }
+    if (!picked) picked = 'lost_cache'; // fallback（浮点误差兜底）
+
+    if (picked === 'mystic_rune' && this._runeChargeLog.length >= RUNE_CHARGE_DAILY_CAP) {
+      console.log(`[SurvivalEngine] mystic_rune cap reached (${this._runeChargeLog.length}/${RUNE_CHARGE_DAILY_CAP}), downgraded to lost_cache`);
+      picked = 'lost_cache';
+    } else if (picked === 'mystic_rune') {
+      this._runeChargeLog.push(nowMs);
+    }
+    return picked;
+  }
+
+  /**
+   * 15s 事件窗口结束 → 计算 outcome，设返回定时器
+   * @param userChoice trader_caravan 时的玩家决策（'accept'/'cancel'/null 超时）
+   */
+  _resolveExpeditionEvent(expeditionId, userChoice) {
+    const exp = this._expeditions.get(expeditionId);
+    if (!exp) return;
+
+    const outcome = { type: 'success', resources: null, contributions: 0, died: false };
+
+    if (exp.forceDied) {
+      outcome.type = 'died';
+      outcome.died = true;
+    } else {
+      switch (exp.eventId) {
+        case 'lost_cache':
+          outcome.resources = { food: 0, coal: LOST_CACHE_RES.coal, ore: LOST_CACHE_RES.ore };
+          outcome.type = 'success';
+          break;
+
+        case 'wild_beasts': {
+          // 30% 概率死亡；击杀 +200 贡献（死亡也入账，视作"死前战功"）
+          const died = Math.random() < WILD_BEASTS_DEATH_RATE;
+          outcome.contributions = WILD_BEASTS_CONTRIB;
+          outcome.died = died;
+          outcome.type = died ? 'died' : 'success';
+          break;
+        }
+
+        case 'trader_caravan': {
+          // accept 且资源足够 → 扣 food+ore，城门直升 Lv+1（PM 决策：简化直接升级）
+          if (userChoice === 'accept' && this.food >= TRADER_COST_FOOD && this.ore >= TRADER_COST_ORE) {
+            if (this.gateLevel < GATE_MAX_HP_BY_LEVEL.length) {
+              this.food = Math.max(0, this.food - TRADER_COST_FOOD);
+              this.ore  = Math.max(0, this.ore  - TRADER_COST_ORE);
+              this.gateLevel = this.gateLevel + 1;
+              this.gateMaxHp = GATE_MAX_HP_BY_LEVEL[this.gateLevel - 1];
+              this.gateHp    = this.gateMaxHp;
+              this._broadcast({
+                type: 'gate_upgraded',
+                data: {
+                  newLevel:     this.gateLevel,
+                  newMaxHp:     this.gateMaxHp,
+                  oreRemaining: Math.round(this.ore),
+                  upgradedBy:   exp.playerId || '',
+                  reason:       'trader_caravan',
+                },
+              });
+              this._broadcastResourceUpdate();
+              console.log(`[SurvivalEngine] trader_caravan accepted: gate Lv→${this.gateLevel}`);
+              outcome.type = 'success';
+            } else {
+              outcome.type = 'empty'; // 已满级，空手
+            }
+          } else {
+            // cancel / 超时 / 资源不足 → 空手
+            outcome.type = 'empty';
+          }
+          break;
+        }
+
+        case 'meteor_fragment':
+          // 下次 666 触发时 efficiency666Bonus ×2.0（单次）
+          this._meteorFragmentPending = true;
+          outcome.type = 'success';
+          console.log(`[SurvivalEngine] meteor_fragment pending: next 666 will double`);
+          break;
+
+        case 'bandit_raid':
+          outcome.type = 'empty';
+          break;
+
+        case 'mystic_rune':
+          // §24.4 轮盘充能立即补满（不生成 pending）
+          if (this._roulette) {
+            const ro = this._roulette;
+            const alreadyReady = (ro._readyAt === 0);
+            const hasPending   = !!ro._pending;
+            if (!alreadyReady && !hasPending) {
+              ro._readyAt = 0;
+              this._broadcast({
+                type: 'broadcaster_roulette_ready',
+                data: { readyAt: -1, source: 'mystic_rune' },
+              });
+              console.log(`[SurvivalEngine] mystic_rune: roulette charged to ready`);
+            } else {
+              console.log(`[SurvivalEngine] mystic_rune: no effect (ready=${alreadyReady} pending=${hasPending})`);
+            }
+          }
+          outcome.type = 'success';
+          break;
+
+        default:
+          outcome.type = 'empty';
+      }
+    }
+
+    exp.outcome = outcome;
+
+    // 设返回定时器
+    exp.returnTimer = setTimeout(() => this._returnExpedition(expeditionId, Date.now()), exp.returnSec * 1000);
+  }
+
+  /**
+   * 35s 返回 → 应用 outcome 到 engine 状态 + 广播 expedition_returned + 清理
+   */
+  _returnExpedition(expeditionId, nowMs) {
+    const exp = this._expeditions.get(expeditionId);
+    if (!exp) return;
+    const { playerId, outcome } = exp;
+
+    // 清理定时器（防 double-fire）
+    if (exp.outboundTimer) clearTimeout(exp.outboundTimer);
+    if (exp.eventTimer)    clearTimeout(exp.eventTimer);
+    if (exp.returnTimer)   clearTimeout(exp.returnTimer);
+
+    // 应用资源
+    if (outcome.resources) {
+      const r = outcome.resources;
+      if (r.food) this.food = Math.min(2000, this.food + r.food);
+      if (r.coal) this.coal = Math.min(1500, this.coal + r.coal);
+      if (r.ore)  this.ore  = Math.min(800,  this.ore  + r.ore);
+      this._broadcastResourceUpdate();
+    }
+
+    // 应用贡献（§30 双轨制：_trackContribution 同步累加 contributions + _lifetimeContrib）
+    if (outcome.contributions > 0) {
+      this._trackContribution(playerId, outcome.contributions, 'combat');
+    }
+
+    // 应用死亡
+    if (outcome.died) {
+      // 若矿工 HP 记录存在 → 标记为 dead + 设复活时刻；否则初始化一份
+      if (!this._workerHp[playerId]) {
+        const maxHp = this._getWorkerMaxHp(playerId);
+        this._workerHp[playerId] = { hp: 0, maxHp, isDead: true, respawnAt: 0 };
+      }
+      const w = this._workerHp[playerId];
+      w.hp = 0;
+      w.isDead = true;
+      // 白天抵达 → 下次 _enterNight 之前由 _reviveAllWorkers('day_started') 复活（§2.2 既有路径）
+      // 已入夜抵达 → 进入 §30 30s 复活倒计时（按 tier 可能为 20s）
+      if (this.state === 'night') {
+        const respawnSec = this._getWorkerRespawnSec(playerId);
+        w.respawnAt = nowMs + respawnSec * 1000;
+        // 设复活定时器（与 _spawnWave 中的路径一致）
+        const respawnTimer = setTimeout(() => {
+          if (this._workerHp[playerId]?.isDead) this._reviveWorker(playerId);
+        }, respawnSec * 1000);
+        this._waveTimers.push(respawnTimer);
+        this._broadcast({
+          type: 'worker_died',
+          data: { playerId, respawnAt: w.respawnAt, reason: 'expedition_died' },
+        });
+      } else {
+        w.respawnAt = 0;
+        this._broadcast({
+          type: 'worker_died',
+          data: { playerId, respawnAt: 0, reason: 'expedition_died' },
+        });
+      }
+      this._broadcastWorkerHp();
+    }
+
+    // 广播 returned
+    this._broadcast({
+      type: 'expedition_returned',
+      data: {
+        playerId,
+        expeditionId,
+        outcome: {
+          type:          outcome.type,
+          resources:     outcome.resources || null,
+          contributions: outcome.contributions || 0,
+          died:          !!outcome.died,
+        },
+      },
+    });
+    console.log(`[SurvivalEngine] expedition_returned: ${exp.playerName} id=${expeditionId} type=${outcome.type} died=${outcome.died} contrib=${outcome.contributions}`);
+
+    this._expeditions.delete(expeditionId);
+  }
+
+  /**
+   * 召回（主播专用 MVP 放开）：取消该玩家所有 expedition 定时器，立即发 expedition_returned 空手
+   */
+  _recallExpedition(playerId) {
+    let recalled = 0;
+    for (const [expId, exp] of [...this._expeditions.entries()]) {
+      if (exp.playerId !== playerId) continue;
+      if (exp.outboundTimer) clearTimeout(exp.outboundTimer);
+      if (exp.eventTimer)    clearTimeout(exp.eventTimer);
+      if (exp.returnTimer)   clearTimeout(exp.returnTimer);
+      this._broadcast({
+        type: 'expedition_returned',
+        data: {
+          playerId,
+          expeditionId: expId,
+          outcome: { type: 'empty', resources: null, contributions: 0, died: false },
+        },
+      });
+      this._expeditions.delete(expId);
+      recalled++;
+    }
+    if (recalled > 0) {
+      console.log(`[SurvivalEngine] expedition recalled: ${this._getPlayerName(playerId)} count=${recalled}`);
+    }
+  }
+
+  /**
+   * C→S 入口：主播/观众对 expedition_event（trader_caravan）投票
+   * MVP：仅 trader_caravan 有 accept/cancel 分支；其他 eventId 无需交互
+   */
+  handleExpeditionEventVote(playerId, expeditionId, choice) {
+    const exp = this._expeditions.get(expeditionId);
+    if (!exp) return;
+    if (!exp.eventId || exp.eventId !== 'trader_caravan') return;
+    if (choice !== 'accept' && choice !== 'cancel') return;
+    // MVP：不限制只有主播，幂等记录最新选择；到 eventEndsAt 时决议
+    exp.userChoice = choice;
+  }
+
+  /**
+   * C→S 入口：expedition_command { action: 'send' | 'recall' }
+   */
+  handleExpeditionCommand(playerId, action) {
+    if (!playerId) return;
+    if (action === 'send') {
+      this._handleExpeditionSend(playerId, this._getPlayerName(playerId));
+    } else if (action === 'recall') {
+      this._handleExpeditionRecall(playerId, this._getPlayerName(playerId));
+    }
+  }
+
+  /**
+   * 取消所有在外探险（reset / 失败降级 / 攻防战打断时调用），无资源回馈
+   */
+  _cancelAllExpeditions(reason) {
+    const count = this._expeditions.size;
+    for (const exp of this._expeditions.values()) {
+      if (exp.outboundTimer) clearTimeout(exp.outboundTimer);
+      if (exp.eventTimer)    clearTimeout(exp.eventTimer);
+      if (exp.returnTimer)   clearTimeout(exp.returnTimer);
+    }
+    this._expeditions.clear();
+    if (count > 0) {
+      console.log(`[SurvivalEngine] All expeditions cancelled (${count}) reason=${reason}`);
+    }
+  }
+
+  /**
+   * §38.6 夜晚到来兜底：扫描在外探险，若 returnsAt 晚于夜晚到来时刻 → 强制立即归来且 died=true
+   * _enterNight 开头调用
+   */
+  _sweepExpeditionsOnNightStart(nowMs) {
+    for (const [expId, exp] of [...this._expeditions.entries()]) {
+      // 夜晚到来时仍在外：强制死亡归来
+      if (exp.returnsAt > nowMs) {
+        if (exp.outboundTimer) clearTimeout(exp.outboundTimer);
+        if (exp.eventTimer)    clearTimeout(exp.eventTimer);
+        if (exp.returnTimer)   clearTimeout(exp.returnTimer);
+        exp.outcome = exp.outcome || { type: 'died', resources: null, contributions: 0, died: true };
+        exp.outcome.died = true;
+        exp.outcome.type = 'died';
+        // 立即 return（会标记矿工死亡 + 进入 §30 30s 倒计时，因已进入夜晚）
+        // 注意：_returnExpedition 读 this.state；此处尚未切换到 night，先存起来延迟 1ms 执行
+        // 但 _enterNight 调用在 state 切换之前 → 直接调用会走白天路径，不进入 respawn 倒计时
+        // 故手动实现对等逻辑（死亡 + 广播 worker_died / expedition_returned），避开 state 依赖
+        this._applyExpeditionDeathNow(exp, nowMs);
+        this._expeditions.delete(expId);
+      }
+    }
+  }
+
+  /**
+   * 夜晚兜底专用：立即应用 expedition 死亡（不依赖 state），广播 worker_died + expedition_returned
+   * 调用时机：_enterNight 开头，此时 state 仍为 'day'，但夜晚即将到来 → 走夜晚死亡路径
+   */
+  _applyExpeditionDeathNow(exp, nowMs) {
+    const playerId = exp.playerId;
+    if (!this._workerHp[playerId]) {
+      const maxHp = this._getWorkerMaxHp(playerId);
+      this._workerHp[playerId] = { hp: 0, maxHp, isDead: true, respawnAt: 0 };
+    }
+    const w = this._workerHp[playerId];
+    w.hp = 0;
+    w.isDead = true;
+    const respawnSec = this._getWorkerRespawnSec(playerId);
+    w.respawnAt = nowMs + respawnSec * 1000;
+    const respawnTimer = setTimeout(() => {
+      if (this._workerHp[playerId]?.isDead) this._reviveWorker(playerId);
+    }, respawnSec * 1000);
+    this._waveTimers.push(respawnTimer);
+
+    this._broadcast({
+      type: 'worker_died',
+      data: { playerId, respawnAt: w.respawnAt, reason: 'expedition_night_kia' },
+    });
+    this._broadcast({
+      type: 'expedition_returned',
+      data: {
+        playerId,
+        expeditionId: exp.expeditionId,
+        outcome: { type: 'died', resources: null, contributions: 0, died: true },
+      },
+    });
+    this._broadcastWorkerHp();
+    console.log(`[SurvivalEngine] expedition KIA at night start: ${this._getPlayerName(playerId)} id=${exp.expeditionId}`);
+  }
+
+  // ==================== end §38 ====================
+
   _clearTick() {
     if (this._tickTimer) { clearInterval(this._tickTimer); this._tickTimer = null; }
     if (this._resourceSyncTimer) { clearInterval(this._resourceSyncTimer); this._resourceSyncTimer = null; }
@@ -2632,6 +3193,14 @@ class SurvivalGameEngine {
     if (this._traderTimer)      { clearTimeout(this._traderTimer);      this._traderTimer      = null; }
     for (const t of (this._meteorTimers || [])) clearTimeout(t);
     this._meteorTimers = [];
+
+    // §38 探险系统定时器：由 _cancelAllExpeditions 清理；此处保险兜底
+    for (const exp of this._expeditions.values()) {
+      if (exp.outboundTimer) clearTimeout(exp.outboundTimer);
+      if (exp.eventTimer)    clearTimeout(exp.eventTimer);
+      if (exp.returnTimer)   clearTimeout(exp.returnTimer);
+    }
+    // 不清 _expeditions Map（由 reset() / _cancelAllExpeditions 决定清时机）
   }
 }
 
