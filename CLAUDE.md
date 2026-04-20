@@ -6,6 +6,7 @@
 > 2. 确认 Coplay MCP 可用（调用 `get_unity_editor_state`，若多 Unity 实例先调 `set_unity_project_root` 设为 `E:\AIProject\DM_CK`）
 > 3. 编译检查（`check_compile_errors`）
 > 4. 向用户汇报当前状态 + 待完成列表，等待指示
+> 5. 若用户请求"Multi-Agent 流程跑 §XX"或类似 → 读取 `docs/multi_agent_workflow.md` 按流程执行（PM 由主对话担任）
 
 ## 项目概述
 抖音直播间互动游戏：观众刷礼物让矿工采集资源、抵御怪物入侵，坚持到天亮即胜利。
