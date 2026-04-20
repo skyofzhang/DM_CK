@@ -66,6 +66,11 @@ namespace DrscfZ.Survival
         public event Action<LiveRankingData>     OnLiveRankingReceived;     // 实时贡献榜（游戏中防抖推送）
         public event Action<StreamerRankingData> OnStreamerRankingReceived; // 主播排行榜（服务器推送）
 
+        // §30 矿工成长系统事件
+        public event Action<WorkerLevelUpData>       OnWorkerLevelUp;
+        public event Action<LegendReviveData>        OnLegendReviveTriggered;
+        public event Action<WorkerSkinChangedData>   OnWorkerSkinChanged;
+
         // 贡献追踪
         private System.Collections.Generic.Dictionary<string, float> _contributions
             = new System.Collections.Generic.Dictionary<string, float>();
@@ -302,6 +307,27 @@ namespace DrscfZ.Survival
                 case "live_ranking":
                     var lr = JsonUtility.FromJson<LiveRankingData>(dataJson);
                     if (lr != null) OnLiveRankingReceived?.Invoke(lr);
+                    break;
+
+                // ----- §30 矿工成长系统 -----
+                case "worker_level_up":
+                    var wlu = JsonUtility.FromJson<WorkerLevelUpData>(dataJson);
+                    if (wlu != null) HandleWorkerLevelUp(wlu);
+                    break;
+
+                case "legend_revive_triggered":
+                    var lrv = JsonUtility.FromJson<LegendReviveData>(dataJson);
+                    if (lrv != null) HandleLegendReviveTriggered(lrv);
+                    break;
+
+                case "worker_skin_changed":
+                    var wsc = JsonUtility.FromJson<WorkerSkinChangedData>(dataJson);
+                    if (wsc != null) HandleWorkerSkinChanged(wsc);
+                    break;
+
+                case "worker_blocked":
+                    var wbk = JsonUtility.FromJson<WorkerBlockedData>(dataJson);
+                    if (wbk != null) HandleWorkerBlocked(wbk);
                     break;
             }
         }
@@ -950,6 +976,110 @@ namespace DrscfZ.Survival
                 : $"矿石不足！需要 {data.required}，当前 {data.available}";
             UI.AnnouncementUI.Instance?.ShowAnnouncement("城门升级失败", msg, new Color(1f, 0.4f, 0.2f), 2f);
             Debug.Log($"[SGM] gate_upgrade_failed: {data.reason}");
+        }
+
+        // ==================== §30 矿工成长系统 ====================
+
+        private void HandleWorkerLevelUp(WorkerLevelUpData data)
+        {
+            // 路由到 WorkerManager 刷新对应 Worker 的显示
+            WorkerManager.Instance?.HandleWorkerLevelUp(data);
+
+            // 阶段10（传奇）→ 特殊相机震撼（TODO §30：未来替换为镜头推近 + 全场金红粒子爆发）
+            if (data.newTier >= 10)
+            {
+                SurvivalCameraController.Shake(0.3f, 0.8f);
+                // TODO §30：传奇镜头——镜头缓慢推近该矿工 1s，金红色粒子全场爆发
+            }
+            else
+            {
+                // 阶段 2~9：彩色公告横幅
+                UI.AnnouncementUI.Instance?.ShowAnnouncement(
+                    $"{data.playerName} 晋升{GetTierTitle(data.newTier)}！",
+                    $"Lv.{data.newLevel}",
+                    GetTierColor(data.newTier),
+                    2f);
+            }
+
+            // 跑马灯消息（所有阶段都推送）
+            UI.HorizontalMarqueeUI.Instance?.AddMessage(
+                data.playerName, null, $"矿工升至阶{data.newTier}！");
+
+            OnWorkerLevelUp?.Invoke(data);
+            Debug.Log($"[SGM] worker_level_up: {data.playerName} Lv.{data.newLevel} tier={data.newTier} skin={data.skinId}");
+        }
+
+        private void HandleLegendReviveTriggered(LegendReviveData data)
+        {
+            WorkerManager.Instance?.HandleLegendRevive(data.playerId);
+            UI.HorizontalMarqueeUI.Instance?.AddMessage(
+                data.playerName, null, "传奇之力！免于死亡！");
+            OnLegendReviveTriggered?.Invoke(data);
+            Debug.Log($"[SGM] legend_revive_triggered: {data.playerName}");
+        }
+
+        private void HandleWorkerSkinChanged(WorkerSkinChangedData data)
+        {
+            WorkerManager.Instance?.HandleSkinChanged(data);
+            OnWorkerSkinChanged?.Invoke(data);
+            Debug.Log($"[SGM] worker_skin_changed: {data.playerName} tier={data.tier} skin={data.skinId}");
+        }
+
+        /// <summary>§30.3 阶6 15% 格挡触发（worker_blocked）→ 矿工一闪金光 + 跑马灯</summary>
+        private void HandleWorkerBlocked(WorkerBlockedData data)
+        {
+            // 占位视觉：借用 WorkerVisual.TriggerSpecial 的金色光晕表达"格挡生效"
+            var worker = WorkerManager.Instance?.ActiveWorkers;
+            if (worker != null)
+            {
+                foreach (var w in worker)
+                {
+                    if (w != null && w.PlayerId == data.playerId)
+                    {
+                        w.GetComponent<WorkerVisual>()?.TriggerSpecial();
+                        break;
+                    }
+                }
+            }
+            OnPlayerActivityMessage?.Invoke($"[格挡] {data.playerName} 免于伤害");
+        }
+
+        /// <summary>阶段 1~10 对应的称号（§30.3 表）</summary>
+        private static string GetTierTitle(int tier)
+        {
+            switch (Mathf.Clamp(tier, 1, 10))
+            {
+                case 1:  return "见习矿工";
+                case 2:  return "老练矿工";
+                case 3:  return "骨干矿工";
+                case 4:  return "精英矿工";
+                case 5:  return "强袭矿工";
+                case 6:  return "铁卫矿工";
+                case 7:  return "统帅矿工";
+                case 8:  return "战神矿工";
+                case 9:  return "神话矿工";
+                case 10: return "传奇矿工";
+                default: return "矿工";
+            }
+        }
+
+        /// <summary>阶段 1~10 对应的主题色（§30.8 表，用于公告横幅）</summary>
+        private static Color GetTierColor(int tier)
+        {
+            switch (Mathf.Clamp(tier, 1, 10))
+            {
+                case 1:  return new Color(0.70f, 0.70f, 0.70f); // 灰
+                case 2:  return new Color(0.72f, 0.45f, 0.20f); // 铜
+                case 3:  return new Color(0.75f, 0.75f, 0.78f); // 银
+                case 4:  return new Color(1.00f, 0.84f, 0.00f); // 金
+                case 5:  return new Color(1.00f, 0.55f, 0.10f); // 橙
+                case 6:  return new Color(0.25f, 0.55f, 1.00f); // 蓝
+                case 7:  return new Color(0.68f, 0.35f, 1.00f); // 紫
+                case 8:  return new Color(0.65f, 0.10f, 0.10f); // 深红
+                case 9:  return new Color(0.30f, 0.05f, 0.45f); // 深紫
+                case 10: return new Color(1.00f, 0.30f, 0.10f); // 金红
+                default: return Color.white;
+            }
         }
 
         private void HandleBossAppeared(string type, string dataJson)

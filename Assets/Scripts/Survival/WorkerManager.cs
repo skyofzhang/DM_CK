@@ -539,6 +539,51 @@ namespace DrscfZ.Survival
             Debug.Log($"[WorkerManager] Worker '{playerId}' 已复活");
         }
 
+        // ==================== §30 矿工成长系统 ====================
+
+        /// <summary>服务器通知矿工升级（worker_level_up）→ 路由到对应 WorkerController</summary>
+        public void HandleWorkerLevelUp(WorkerLevelUpData data)
+        {
+            if (data == null) return;
+            var worker = FindWorkerByPlayerId(data.playerId);
+            if (worker == null)
+            {
+                Debug.LogWarning($"[WorkerManager] HandleWorkerLevelUp: playerId={data.playerId} 未找到对应Worker");
+                return;
+            }
+            worker.HandleWorkerLevelUp(data);
+            Debug.Log($"[WorkerManager] Worker '{data.playerId}' 升级到 Lv.{data.newLevel} (阶{data.newTier})");
+        }
+
+        /// <summary>服务器通知传奇矿工触发免死（legend_revive_triggered）</summary>
+        public void HandleLegendRevive(string playerId)
+        {
+            var worker = FindWorkerByPlayerId(playerId);
+            if (worker == null)
+            {
+                Debug.LogWarning($"[WorkerManager] HandleLegendRevive: playerId={playerId} 未找到对应Worker");
+                return;
+            }
+            worker.HandleLegendRevive();
+            Debug.Log($"[WorkerManager] Worker '{playerId}' 传奇免死触发");
+        }
+
+        /// <summary>服务器通知矿工皮肤切换（worker_skin_changed）</summary>
+        public void HandleSkinChanged(WorkerSkinChangedData data)
+        {
+            if (data == null) return;
+            var worker = FindWorkerByPlayerId(data.playerId);
+            if (worker == null)
+            {
+                Debug.LogWarning($"[WorkerManager] HandleSkinChanged: playerId={data.playerId} 未找到对应Worker");
+                return;
+            }
+            worker.SetTierSkin(data.tier);
+            var tag = worker.GetComponentInChildren<PlayerNameTag>(true);
+            if (tag != null) tag.SetTier(data.tier);
+            Debug.Log($"[WorkerManager] Worker '{data.playerId}' 皮肤切换至 tier={data.tier} skinId={data.skinId}");
+        }
+
         /// <summary>服务器推送矿工HP全量快照 → 更新各Worker血条显示</summary>
         public void HandleWorkerHpUpdate(WorkerHpEntry[] entries)
         {

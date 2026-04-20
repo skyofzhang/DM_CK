@@ -31,5 +31,11 @@ namespace DrscfZ.Survival
         public const string WorkerDied      = "worker_died";
         public const string WorkerRevived   = "worker_revived";
         public const string WorkerHpUpdate  = "worker_hp_update";
+
+        // ----- §30 矿工成长系统 -----
+        public const string WorkerLevelUp         = "worker_level_up";
+        public const string LegendReviveTriggered = "legend_revive_triggered";
+        public const string WorkerSkinChanged     = "worker_skin_changed";
+        public const string WorkerBlocked         = "worker_blocked";   // 阶6 15% 格挡视觉反馈
     }
 }

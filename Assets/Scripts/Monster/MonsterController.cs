@@ -148,8 +148,9 @@ namespace DrscfZ.Monster
 
         private void UpdateMoving()
         {
-            // 优先攻击最近的存活矿工（黑夜防守模式）
-            var workerTarget = FindNearestAliveWorker();
+            // §30.5 威胁值加权寻目标：阶段越高的矿工越容易被锁定
+            // Boss 目标选择更均衡（threat 权重减半），防止一直盯传奇矿工
+            var workerTarget = FindTargetWorker(Type == MonsterType.Boss);
 
             Vector3 targetPos;
             if (workerTarget != null)
@@ -179,22 +180,43 @@ namespace DrscfZ.Monster
             }
         }
 
-        /// <summary>查找最近的存活矿工（#7 用 WorkerManager 缓存列表，避免每帧 FindObjectsOfType）</summary>
-        private Survival.WorkerController FindNearestAliveWorker()
+        /// <summary>
+        /// §30.5 威胁值加权选目标（阶段越高的矿工越容易被锁定）。
+        /// score = threat / sqrt(dist)，最大 score 胜出。
+        /// Boss 使用 1 + threat*0.5 平衡权重（普通怪物则直接用 threat）。
+        /// 使用 WorkerManager 缓存列表（#7 避免每帧 FindObjectsOfType）。
+        /// </summary>
+        private Survival.WorkerController FindTargetWorker(bool isBoss)
         {
             var mgr     = Survival.WorkerManager.Instance;
             var workers = mgr != null
                 ? (System.Collections.Generic.IReadOnlyList<Survival.WorkerController>)mgr.ActiveWorkers
                 : System.Array.Empty<Survival.WorkerController>();
-            Survival.WorkerController nearest = null;
-            float minD = float.MaxValue;
+
+            Survival.WorkerController best = null;
+            float bestScore = -1f;
             foreach (var w in workers)
             {
                 if (w == null || !w.gameObject.activeInHierarchy || w.IsDead) continue;
-                float d = Vector3.Distance(transform.position, w.transform.position);
-                if (d < minD) { minD = d; nearest = w; }
+                float threat = isBoss
+                    ? (1f + w.ThreatMultiplier * 0.5f)
+                    : w.ThreatMultiplier;
+                float dist  = Vector3.Distance(transform.position, w.transform.position);
+                float score = threat / Mathf.Sqrt(Mathf.Max(dist, 0.1f));
+                if (score > bestScore) { bestScore = score; best = w; }
             }
-            return nearest;
+            return best;
+        }
+
+        /// <summary>
+        /// 查找最近的存活矿工（保留兼容接口，内部转调 FindTargetWorker）。
+        /// 旧代码（若有）继续可用；新代码请用 FindTargetWorker(Type == MonsterType.Boss)。
+        /// </summary>
+        [System.Obsolete("§30: 请改用 FindTargetWorker(bool isBoss) 以获得威胁值加权效果")]
+        // ReSharper disable once UnusedMember.Local
+        private Survival.WorkerController FindNearestAliveWorker()
+        {
+            return FindTargetWorker(Type == MonsterType.Boss);
         }
 
         private void UpdateAttacking()
