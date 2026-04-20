@@ -77,6 +77,12 @@ namespace DrscfZ.Survival
         public event Action<LegendReviveData>        OnLegendReviveTriggered;
         public event Action<WorkerSkinChangedData>   OnWorkerSkinChanged;
 
+        // §24.4 主播事件轮盘
+        public event Action<RouletteReadyData>       OnRouletteReady;
+        public event Action<RouletteResultData>      OnRouletteResult;
+        public event Action<RouletteEffectEndedData> OnRouletteEffectEnded;
+        public event Action<TraderOfferData>         OnTraderOffer;
+
         // 贡献追踪
         private System.Collections.Generic.Dictionary<string, float> _contributions
             = new System.Collections.Generic.Dictionary<string, float>();
@@ -345,6 +351,24 @@ namespace DrscfZ.Survival
                 case "worker_blocked":
                     var wbk = JsonUtility.FromJson<WorkerBlockedData>(dataJson);
                     if (wbk != null) HandleWorkerBlocked(wbk);
+                    break;
+
+                // ----- §24.4 主播事件轮盘 -----
+                case "broadcaster_roulette_ready":
+                    var rrd = JsonUtility.FromJson<RouletteReadyData>(dataJson);
+                    if (rrd != null) HandleRouletteReady(rrd);
+                    break;
+                case "broadcaster_roulette_result":
+                    var rrs = JsonUtility.FromJson<RouletteResultData>(dataJson);
+                    if (rrs != null) HandleRouletteResult(rrs);
+                    break;
+                case "broadcaster_roulette_effect_ended":
+                    var ree = JsonUtility.FromJson<RouletteEffectEndedData>(dataJson);
+                    if (ree != null) HandleRouletteEffectEnded(ree);
+                    break;
+                case "broadcaster_trader_offer":
+                    var tof = JsonUtility.FromJson<TraderOfferData>(dataJson);
+                    if (tof != null) HandleTraderOffer(tof);
                     break;
             }
         }
@@ -1180,6 +1204,38 @@ namespace DrscfZ.Survival
                 666 => "全员效率+15%(30s)",
                 _   => $"cmd={cmd}"
             };
+        }
+
+        // ==================== §24.4 主播事件轮盘（🆕 v1.27）====================
+
+        /// <summary>轮盘充能完成/剩余秒数同步（RouletteUI 订阅后自行处理）</summary>
+        private void HandleRouletteReady(RouletteReadyData data)
+        {
+            OnRouletteReady?.Invoke(data);
+            Debug.Log($"[SGM] broadcaster_roulette_ready: readyAt={data.readyAt}");
+        }
+
+        /// <summary>服务端已定格 cardId，客户端播转轴动画</summary>
+        private void HandleRouletteResult(RouletteResultData data)
+        {
+            // 轮盘启动震屏（轻微 0.1 强度 0.3 秒）
+            SurvivalCameraController.Shake(0.1f, 0.3f);
+            OnRouletteResult?.Invoke(data);
+            Debug.Log($"[SGM] broadcaster_roulette_result: cardId={data.cardId} displayed=[{string.Join(",", data.displayedCards ?? new string[0])}]");
+        }
+
+        /// <summary>轮盘效果结束，UI 清理倒计时条</summary>
+        private void HandleRouletteEffectEnded(RouletteEffectEndedData data)
+        {
+            OnRouletteEffectEnded?.Invoke(data);
+            Debug.Log($"[SGM] broadcaster_roulette_effect_ended: cardId={data.cardId}");
+        }
+
+        /// <summary>神秘商人 30s 限时二选一邀约</summary>
+        private void HandleTraderOffer(TraderOfferData data)
+        {
+            OnTraderOffer?.Invoke(data);
+            Debug.Log($"[SGM] broadcaster_trader_offer: expiresAt={data.expiresAt}");
         }
     }
 
