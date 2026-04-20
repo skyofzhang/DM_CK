@@ -392,6 +392,23 @@ class SurvivalRoom {
         break;
       }
 
+      // ==================== §38 探险系统 ====================
+      case 'expedition_command': {
+        // { playerId, action: 'send' | 'recall' }
+        const pid    = (data && data.playerId) || ws._playerId || '';
+        const action = (data && data.action)   || '';
+        this.survivalEngine.handleExpeditionCommand(pid, action);
+        break;
+      }
+      case 'expedition_event_vote': {
+        // { expeditionId, choice: 'accept' | 'cancel' }
+        const pid   = (data && data.playerId)     || ws._playerId || '';
+        const expId = (data && data.expeditionId) || '';
+        const choice= (data && data.choice)       || '';
+        this.survivalEngine.handleExpeditionEventVote(pid, expId, choice);
+        break;
+      }
+
       // ==================== GM 测试指令 ====================
       case 'pause_game':
         // 暂停/恢复游戏（仅限调试）
@@ -445,8 +462,12 @@ class SurvivalRoom {
     const trimmed = (content || '').trim();
     const cmd = parseInt(trimmed);
 
-    if ((cmd >= 1 && cmd <= 6) || trimmed === '666') {
-      // 工作/攻击/666指令（1-4 工作，6 攻击，666 全员加速）
+    // §30.7 换肤 / §38 探险 弹幕专用前缀：均需经 handleComment 路由
+    const isSkinCmd      = /^换肤(\d{1,2})?$/.test(trimmed);
+    const isExpeditionCmd = (trimmed === '探' || trimmed === '召回');
+
+    if ((cmd >= 1 && cmd <= 6) || trimmed === '666' || isSkinCmd || isExpeditionCmd) {
+      // 工作/攻击/666/换肤/探险指令 → 引擎解析
       this.survivalEngine.handleComment(secOpenId, nickname, avatarUrl, trimmed);
     } else {
       // 任意评论 = 玩家首次加入（生存游戏不需要阵营选择）
