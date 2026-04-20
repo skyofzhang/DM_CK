@@ -296,6 +296,45 @@ namespace DrscfZ.Survival
         public WeeklyRankingEntry[] rankings;  // Top 10
     }
 
+    // ==================== §30 矿工成长系统 ====================
+
+    /// <summary>矿工升级通知（type=worker_level_up）</summary>
+    [Serializable]
+    public class WorkerLevelUpData
+    {
+        public string playerId;
+        public string playerName;
+        public int    newLevel;    // 1~100
+        public int    newTier;     // 1~10
+        public string skinId;      // 皮肤 ID（MVP 仅改颜色，未来换模型）
+    }
+
+    /// <summary>传奇矿工触发免死（type=legend_revive_triggered）</summary>
+    [Serializable]
+    public class LegendReviveData
+    {
+        public string playerId;
+        public string playerName;
+    }
+
+    /// <summary>矿工皮肤切换通知（type=worker_skin_changed）</summary>
+    [Serializable]
+    public class WorkerSkinChangedData
+    {
+        public string playerId;
+        public string playerName;
+        public int    tier;        // 1~10
+        public string skinId;
+    }
+
+    /// <summary>阶6 矿工触发 15% 格挡（type=worker_blocked）</summary>
+    [Serializable]
+    public class WorkerBlockedData
+    {
+        public string playerId;
+        public string playerName;
+    }
+
     // ==================== 主播排行榜（type=streamer_ranking）====================
 
     /// <summary>主播排行榜单条记录</summary>

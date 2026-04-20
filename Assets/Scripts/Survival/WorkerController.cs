@@ -54,6 +54,27 @@ namespace DrscfZ.Survival
         public string PlayerId   { get; private set; }
         public string PlayerName { get; private set; }
 
+        // ==================== §30 矿工成长系统 ====================
+
+        /// <summary>当前矿工等级（1~100，由服务器 worker_level_up 驱动）</summary>
+        public int CurrentLevel { get; private set; } = 1;
+
+        /// <summary>当前阶段（1~10，由等级派生）</summary>
+        public int CurrentTier => Mathf.Clamp((CurrentLevel - 1) / 10 + 1, 1, 10);
+
+        /// <summary>
+        /// 威胁倍率（§30.5：怪物目标选择的权重）
+        /// 阶段 1~10 的威胁值：1.0 / 1.3 / 1.7 / 2.2 / 2.8 / 3.4 / 4.0 / 4.6 / 5.2 / 6.0
+        /// </summary>
+        public float ThreatMultiplier
+        {
+            get
+            {
+                float[] threats = { 1.0f, 1.3f, 1.7f, 2.2f, 2.8f, 3.4f, 4.0f, 4.6f, 5.2f, 6.0f };
+                return threats[Mathf.Clamp(CurrentTier - 1, 0, 9)];
+            }
+        }
+
         /// <summary>Worker 是否正在移动或工作（影响空闲判定）</summary>
         public bool   IsWorking  => _state == State.Work || _state == State.Move;
 
@@ -770,6 +791,58 @@ namespace DrscfZ.Survival
         public void SetPaused(bool paused)
         {
             _visual?.SetFrozen(paused);
+        }
+
+        // ==================== §30 矿工成长系统 ====================
+
+        /// <summary>
+        /// 服务器通知本矿工升级（worker_level_up）
+        /// - 更新 CurrentLevel / CurrentTier
+        /// - 刷新头顶名字标签（Lv 前缀 + 阶段颜色）
+        /// - 跨阶段时触发白色闪光
+        /// - TODO §30：newTier 达到阶段升级时切皮肤模型（目前仅改 NameTag 颜色）
+        /// </summary>
+        public void HandleWorkerLevelUp(WorkerLevelUpData data)
+        {
+            if (data == null || PlayerId != data.playerId) return;
+
+            int prevTier = CurrentTier;
+            CurrentLevel = Mathf.Clamp(data.newLevel, 1, 100);
+
+            // 刷新头顶名字标签（Lv 前缀 + 阶段颜色）
+            var tag = GetComponentInChildren<PlayerNameTag>(true);
+            if (tag != null) tag.SetLevel(data.newLevel, data.newTier);
+
+            // 跨阶段 → 白色闪光提示（复用现有 AssignmentFlash）
+            if (data.newTier != prevTier && _visual != null)
+                _visual.TriggerAssignmentFlash();
+
+            // 切阶段皮肤（MVP 仅改颜色）
+            SetTierSkin(data.newTier);
+        }
+
+        /// <summary>
+        /// 服务器通知传奇矿工触发免死（legend_revive_triggered）
+        /// MVP：复用现有金色光晕（TriggerSpecial）作为免死特效占位
+        /// </summary>
+        public void HandleLegendRevive()
+        {
+            // 金色光晕（3s）作为免死闪光
+            if (_state != State.Special && _state != State.Frozen)
+            {
+                _stateBeforeSpecial = _state;
+                TransitionTo(State.Special);
+            }
+        }
+
+        /// <summary>
+        /// 切换阶段皮肤（MVP：仅刷新 NameTag 颜色；实际模型切换待策划案 §30.11 SwapSkinModel）
+        /// TODO §30：未来挂载 Assets/Prefabs/WorkerSkins/WorkerSkin_T{tier:D2}.prefab（美术待制作）
+        /// </summary>
+        public void SetTierSkin(int tier)
+        {
+            var tag = GetComponentInChildren<PlayerNameTag>(true);
+            if (tag != null) tag.SetTier(tier);
         }
 
         /// <summary>重置Worker到Idle状态（归还对象池时调用）</summary>
