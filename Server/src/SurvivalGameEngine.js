@@ -71,6 +71,145 @@ const EVENT_NAMES = {
   E05_ore_vein:     '矿脉发现',
 };
 
+// ==================== §24.4 主播事件轮盘（Broadcaster Event Roulette） ====================
+// 充能 300s；6 张事件卡随机抽 3 展示，从 3 张中随机定格 1；spin→apply 两步防客户端跳过动画
+// PM 决策（MVP）：堡垒日 ≥30 黄金版 +20% 不实现（TODO §36.5）；
+//   aurora 与 T5 love_explosion 的情形 A/B/C 时序细分 → 简化为"两者独立生效、各自 clamp 至上限"
+//   elite_raid 客户端端不计入 maxAliveMonsters 由 monsterType='elite_raid' 路由，前端另行处理
+// 参考策划案 §24.4（第 2673-2756 行）
+const ROULETTE_CARD_IDS  = ['elite_raid', 'time_freeze', 'double_contrib', 'mystery_trader', 'meteor_shower', 'aurora'];
+const ROULETTE_COOLDOWN_MS = 300 * 1000;    // 300s 充能
+const ROULETTE_AUTO_APPLY_MS = 10 * 1000;   // 10s 未 apply 自动兜底
+
+class BroadcasterRoulette {
+  /** @param {SurvivalGameEngine} engine */
+  constructor(engine) {
+    this._engine       = engine;
+    this._readyAt      = 0;     // 0 = 已就绪且未抽；>0 = 下次就绪时刻（Unix ms）
+    this._pending      = null;  // { cardId, displayedCards, spunAt, autoApplyAt }
+    this._effectActive = null;  // { cardId, endsAt }
+  }
+
+  /** reset：清空 pending/effect；readyAt 归 -1 表示未进入 Running（需 onReadyAtRunningStart 点亮） */
+  reset() {
+    this._readyAt      = -1;
+    this._pending      = null;
+    this._effectActive = null;
+  }
+
+  /** Running 状态首次进入：立即就绪（策划案 §24.4.2 "避免新主播 5 分钟空窗"） */
+  onReadyAtRunningStart() {
+    this._readyAt      = 0;    // 0 = ready
+    this._pending      = null;
+    this._effectActive = null;
+    // 广播首次就绪（新客户端可据此点亮按钮）
+    this._engine._broadcast({
+      type: 'broadcaster_roulette_ready',
+      data: { readyAt: -1 },   // -1 = 已就绪
+    });
+  }
+
+  /** 每秒 tick：检查 readyAt / pending autoApplyAt / effect endsAt */
+  tick(nowMs) {
+    // ① 充能完成 → 广播就绪
+    if (this._readyAt > 0 && nowMs >= this._readyAt) {
+      this._readyAt = 0;
+      this._engine._broadcast({
+        type: 'broadcaster_roulette_ready',
+        data: { readyAt: -1 },
+      });
+    }
+    // ② 主播未点 apply 兜底（10s 后自动执行，防止刷新页面导致效果永不触发）
+    if (this._pending && nowMs >= this._pending.autoApplyAt) {
+      console.log(`[Roulette] auto-apply fallback for ${this._pending.cardId}`);
+      this.apply(nowMs);
+    }
+    // ③ 持续 buff 到期 → 广播 effect_ended 并清理
+    if (this._effectActive && nowMs >= this._effectActive.endsAt) {
+      const cardId = this._effectActive.cardId;
+      this._effectActive = null;
+      this._engine._broadcast({
+        type: 'broadcaster_roulette_effect_ended',
+        data: { cardId },
+      });
+      console.log(`[Roulette] effect ended: ${cardId}`);
+    }
+  }
+
+  /** 当前是否可以 spin（按钮点亮 = readyAt==0 且无 pending） */
+  canSpin() {
+    return this._readyAt === 0 && !this._pending;
+  }
+
+  /** 抽卡（从 6 张随机抽 3 张展示，再从 3 张中定格 1 张） */
+  spin(nowMs) {
+    if (!this.canSpin()) return false;
+
+    // Fisher-Yates 洗牌前 3 张
+    const pool = ROULETTE_CARD_IDS.slice();
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    const displayedCards = pool.slice(0, 3);
+    const cardId = displayedCards[Math.floor(Math.random() * 3)];
+
+    this._pending = {
+      cardId,
+      displayedCards,
+      spunAt:       nowMs,
+      autoApplyAt:  nowMs + ROULETTE_AUTO_APPLY_MS,
+    };
+    // 立即重置充能（避免 apply 前再次 spin 叠加）
+    this._readyAt = nowMs + ROULETTE_COOLDOWN_MS;
+
+    this._engine._broadcast({
+      type: 'broadcaster_roulette_result',
+      data: {
+        cardId,
+        displayedCards,
+        spunAt: nowMs,
+      },
+    });
+    console.log(`[Roulette] spin: displayed=[${displayedCards.join(',')}] → locked=${cardId}`);
+    return true;
+  }
+
+  /** 执行效果（spin 后动画结束时客户端回调 broadcaster_roulette_apply 触发） */
+  apply(nowMs) {
+    if (!this._pending) return false;
+    const cardId = this._pending.cardId;
+    this._pending = null;
+
+    // 调度到对应 _applyXxx（若返回 endsAt，则记录 effectActive）
+    const endsAt = this._dispatch(cardId, nowMs);
+    if (endsAt && endsAt > nowMs) {
+      this._effectActive = { cardId, endsAt };
+    } else {
+      // 即时生效卡（elite_raid / mystery_trader 等），不设 endsAt
+      this._effectActive = null;
+    }
+    console.log(`[Roulette] apply: ${cardId}${endsAt ? ` (endsAt +${Math.round((endsAt-nowMs)/1000)}s)` : ''}`);
+    return true;
+  }
+
+  /** dispatch 到具体卡实现（返回 endsAt > 0 表示持续 buff，0/undefined 表示瞬时） */
+  _dispatch(cardId, nowMs) {
+    const e = this._engine;
+    switch (cardId) {
+      case 'elite_raid':      return e._applyEliteRaid(nowMs);
+      case 'time_freeze':     return e._applyTimeFreeze(nowMs);
+      case 'double_contrib':  return e._applyDoubleContrib(nowMs);
+      case 'mystery_trader':  return e._applyMysteryTrader(nowMs);
+      case 'meteor_shower':   return e._applyMeteorShower(nowMs);
+      case 'aurora':          return e._applyAurora(nowMs);
+      default:
+        console.warn(`[Roulette] unknown cardId: ${cardId}`);
+        return 0;
+    }
+  }
+}
+
 // ==================== SurvivalGameEngine ====================
 
 class SurvivalGameEngine {
@@ -178,6 +317,20 @@ class SurvivalGameEngine {
     this._playerSkinCooldown = {};   // 换肤弹幕冷却（60s）
     this._dynamicHpMult      = 1.0;  // 动态难度怪物HP倍率
     this._dynamicCountMult   = 1.0;  // 动态难度怪物数量倍率
+
+    // ── §24.4 主播事件轮盘（Broadcaster Event Roulette）─────────────────
+    this._roulette              = new BroadcasterRoulette(this);
+    this._contribMult           = 1.0;   // double_contrib：全员贡献 ×2，60s
+    this._contribMultTimer      = null;  // 60s 后归 1.0 的 setTimeout 句柄
+    this._auroraEffMult         = 1.0;   // aurora：全员效率 ×1.5，60s
+    this._auroraTimer           = null;  // 60s 后归 1.0 的 setTimeout 句柄
+    this._freezeUntilMs         = 0;     // time_freeze：所有怪物冻结截止 Unix ms
+    this._eliteRaidEndsAt       = 0;     // elite_raid：精英怪 30s 未击杀则攻击城门
+    this._eliteRaidMonsterId    = null;  // elite_raid：精英怪 monsterId
+    this._traderOffer           = null;  // mystery_trader：{ expiresAt, cardA, cardB }
+    this._traderTimer           = null;  // 30s 超时弃权句柄
+    this._meteorTimers          = [];    // meteor_shower：15 次 setTimeout 句柄
+    this._rouletteRunningInited = false; // Running 首次进入 onReadyAtRunningStart 防止重复触发
 
     // 点赞统计
     this.totalLikes = 0;
@@ -319,6 +472,22 @@ class SurvivalGameEngine {
     this._playerSkinCooldown  = {};
     this._dynamicHpMult       = 1.0;
     this._dynamicCountMult    = 1.0;
+
+    // §24.4 主播事件轮盘重置（buff 归默认 + 清定时器 + 轮盘状态清空）
+    // _clearAllTimers 已清定时器句柄，这里再次清理确保字段归 1.0/0（reset 可能在定时器触发前调用）
+    this._contribMult        = 1.0;
+    if (this._contribMultTimer) { clearTimeout(this._contribMultTimer); this._contribMultTimer = null; }
+    this._auroraEffMult      = 1.0;
+    if (this._auroraTimer)      { clearTimeout(this._auroraTimer);      this._auroraTimer      = null; }
+    this._freezeUntilMs      = 0;
+    this._eliteRaidEndsAt    = 0;
+    this._eliteRaidMonsterId = null;
+    this._traderOffer        = null;
+    if (this._traderTimer)      { clearTimeout(this._traderTimer);      this._traderTimer      = null; }
+    for (const t of (this._meteorTimers || [])) clearTimeout(t);
+    this._meteorTimers       = [];
+    this._roulette.reset();
+    this._rouletteRunningInited = false;
 
     this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
   }
@@ -998,6 +1167,12 @@ class SurvivalGameEngine {
     // 每天开始时重置随机事件计时器（90-120s后触发首次事件）
     this._nextEventTimer = 90 + Math.random() * 30;
 
+    // §24.4 首次进入 Running（day=1）→ 轮盘立即就绪（策划案 §24.4.2）
+    if (!this._rouletteRunningInited) {
+      this._rouletteRunningInited = true;
+      this._roulette.onReadyAtRunningStart();
+    }
+
     console.log(`[SurvivalEngine] ===== Day ${day} Start =====`);
 
     this.broadcast({
@@ -1161,6 +1336,11 @@ class SurvivalGameEngine {
         this._afkCheckCounter = 0;
         this._checkAfkReplacement();
       }
+
+      // §24.4 主播事件轮盘 tick（充能就绪 / 自动 apply / effect 到期）
+      this._roulette.tick(Date.now());
+      // §24.4 elite_raid 精英怪 30s 未击杀 → 穿门打城门
+      this._tickEliteRaid(Date.now());
 
       // 随机事件触发检查（仅白天）
       this._checkRandomEvents();
@@ -1333,7 +1513,8 @@ class SurvivalGameEngine {
     const globalBoost      = this._playerTempBoost[playerId] || 1.0;             // 能量电池 per-player 加成
     const broadcasterBoost = this.broadcasterEfficiencyMultiplier || 1.0;         // 主播紧急加速
     const eff666Boost      = this.efficiency666Bonus || 1.0;                      // 666弹幕加成
-    const totalMult        = Math.min(3.0, levelMult * playerBonus * globalBoost * broadcasterBoost * eff666Boost);
+    const auroraBoost      = this._auroraEffMult || 1.0;                          // §24.4 极光 ×1.5（60s）
+    const totalMult        = Math.min(3.0, levelMult * playerBonus * globalBoost * broadcasterBoost * eff666Boost * auroraBoost);
 
     // 阶3+（Lv.21+）白天采矿 10% 概率双倍产出（策划案 §30.3 阶3 专属被动）
     // 适用 cmd 1/2/3（采食物/挖煤/采矿），不含 cmd=4 添柴
@@ -1475,8 +1656,10 @@ class SurvivalGameEngine {
     if (target.currentHp <= 0) {
       this._activeMonsters.delete(target.id);
 
-      const killScore = target.type === 'normal' ? 20 :
-                        target.type === 'elite'  ? 50 : 200;
+      // §24.4 elite_raid 击杀奖励 +500（策划案明确值）；其余按常规
+      const killScore = target.type === 'normal'     ? 20  :
+                        target.type === 'elite'      ? 50  :
+                        target.type === 'elite_raid' ? 500 : 200;
       this._addScore(secOpenId, nickname, killScore);
       // 阶7+ 击杀怪物贡献值 ×2（策划案 §30.3 阶7 专属被动）：再补一份贡献
       // 仅影响 contributions/_lifetimeContrib，不重复加 scorePool（scorePool 反映游戏产出不按身份倍增）
@@ -1618,6 +1801,12 @@ class SurvivalGameEngine {
     };
 
     this.broadcast({ type: 'monster_wave', timestamp: Date.now(), data: waveData });
+
+    // §24.4 time_freeze：冻结期内怪物对矿工/城门伤害暂停（仅本 wave 结算跳过）
+    if (Date.now() < (this._freezeUntilMs || 0)) {
+      console.log(`[SurvivalEngine] Wave ${waveIndex} damage skipped (time_freeze active)`);
+      return;
+    }
 
     // ── 怪物伤害路由：优先打矿工，矿工全死后才打城门 ──────────────────
     const totalDamage = Math.floor(count * this.monsterGateDamage * this._workerDamageMult);
@@ -1983,6 +2172,11 @@ class SurvivalGameEngine {
       finalAmount = amount * 1.5;
     }
 
+    // §24.4 double_contrib：全员贡献 ×2（60s），仅作用于正值加分；资源产出倍率不受影响
+    if (finalAmount > 0 && this._contribMult > 1.0) {
+      finalAmount = finalAmount * this._contribMult;
+    }
+
     this.contributions[playerId] = (this.contributions[playerId] || 0) + finalAmount;
 
     // ── §30 新玩家追赶加速（×3 仅作用于 _lifetimeContrib，contributions 不受影响）─────
@@ -2047,6 +2241,373 @@ class SurvivalGameEngine {
       }));
   }
 
+  // ==================== §24.4 主播事件轮盘：C→S handlers ====================
+
+  /**
+   * 主播点击"抽卡"按钮：仅当充能就绪且无 pending 时执行
+   * PM 决策（MVP）：_roomCreatorId 未注入 → 放开给任何玩家；TODO: 等 _roomCreatorId 落地后加主播鉴权
+   */
+  handleBroadcasterRouletteSpin(playerId) {
+    // TODO: if (this._roomCreatorId && playerId !== this._roomCreatorId) { broadcast roulette_forbidden; return; }
+    if (this.state !== 'day' && this.state !== 'night') return;
+    const ok = this._roulette.spin(Date.now());
+    if (!ok) {
+      console.log(`[SurvivalEngine] Roulette spin rejected (ready=${this._roulette._readyAt}, pending=${!!this._roulette._pending})`);
+    }
+  }
+
+  /**
+   * 客户端动画结束回调：执行对应卡片效果
+   * cardId 由服务端 pending.cardId 确定，不信任客户端参数
+   */
+  handleBroadcasterRouletteApply(playerId) {
+    // TODO: 主播鉴权（同 Spin）
+    if (this.state !== 'day' && this.state !== 'night') return;
+    const ok = this._roulette.apply(Date.now());
+    if (!ok) {
+      console.log(`[SurvivalEngine] Roulette apply rejected (no pending)`);
+    }
+  }
+
+  /**
+   * 主播在神秘商人面板选择 A/B：执行对应的资源兑换
+   * choice: 'A' | 'B'；无效选项静默忽略
+   */
+  handleBroadcasterTraderAccept(playerId, choice) {
+    // TODO: 主播鉴权（同 Spin）
+    if (!this._traderOffer) {
+      console.log(`[SurvivalEngine] Trader accept ignored: no active offer`);
+      return;
+    }
+    if (Date.now() > this._traderOffer.expiresAt) {
+      console.log(`[SurvivalEngine] Trader accept ignored: offer expired`);
+      return;
+    }
+    if (choice !== 'A' && choice !== 'B') {
+      console.log(`[SurvivalEngine] Trader accept ignored: invalid choice '${choice}'`);
+      return;
+    }
+
+    const offer = this._traderOffer;
+    let success = false;
+    let result  = {};
+
+    if (choice === 'A') {
+      // A: 150 食物 → 100 矿石
+      if (this.food >= offer.cardA.costFood) {
+        this.food = Math.max(0, this.food - offer.cardA.costFood);
+        this.ore  = Math.min(800, this.ore + offer.cardA.gainOre);
+        success = true;
+        result  = { choice: 'A', spent: { food: offer.cardA.costFood }, gained: { ore: offer.cardA.gainOre } };
+      }
+    } else {
+      // B: 80 煤炭 → 城门 +50HP
+      if (this.coal >= offer.cardB.costCoal) {
+        this.coal   = Math.max(0, this.coal - offer.cardB.costCoal);
+        this.gateHp = Math.min(this.gateMaxHp, this.gateHp + offer.cardB.gainGateHp);
+        success = true;
+        result  = { choice: 'B', spent: { coal: offer.cardB.costCoal }, gained: { gateHp: offer.cardB.gainGateHp } };
+      }
+    }
+
+    // 清空 offer + 取消超时
+    this._traderOffer = null;
+    if (this._traderTimer) { clearTimeout(this._traderTimer); this._traderTimer = null; }
+
+    this._broadcast({
+      type: 'broadcaster_trader_result',
+      data: { success, ...result, reason: success ? 'ok' : 'insufficient_resource' },
+    });
+    if (success) {
+      this._broadcastResourceUpdate();
+      console.log(`[SurvivalEngine] Trader: choice=${choice} ok`);
+    } else {
+      console.log(`[SurvivalEngine] Trader: choice=${choice} rejected (insufficient resource)`);
+    }
+  }
+
+  // ==================== §24.4 主播事件轮盘：6 张卡效果实现 ====================
+
+  /**
+   * elite_raid：立即刷 1 只精英怪（HP/ATK 为当日精英的 2 倍；不计入客户端 maxAliveMonsters）
+   * 30s 内未击杀 → 直接扣城门 HP（`_tickEliteRaid` 处理）；击杀后 scorePool +500
+   * 即时效果（无持续 buff），返回 0
+   */
+  _applyEliteRaid(nowMs) {
+    const cfg = getWaveConfig(this.currentDay || 1);
+    // elite 基础（若当日无 elite 配置，用 normal 兜底）
+    const baseHp  = (cfg.elite?.hp  || cfg.normal?.hp  || 300);
+    const baseAtk = (cfg.elite?.atk || cfg.normal?.atk || 5);
+    const hp  = Math.max(1, Math.round(baseHp  * 2));
+    const atk = Math.max(1, Math.round(baseAtk * 2));
+
+    const id = `eliteraid_${++this._monsterIdCounter}`;
+    this._activeMonsters.set(id, {
+      id,
+      type: 'elite_raid', // 特殊 type，客户端据此跳过 maxAliveMonsters 上限
+      maxHp: hp,
+      currentHp: hp,
+      atk,
+    });
+    this._eliteRaidMonsterId = id;
+    this._eliteRaidEndsAt    = nowMs + 30 * 1000;
+
+    // 广播 wave 让客户端生成 Prefab（count=1，spawnSide 随机）
+    const sides = ['left', 'right', 'top'];
+    const spawnSide = sides[Math.floor(Math.random() * sides.length)];
+    this.broadcast({
+      type: 'monster_wave',
+      timestamp: nowMs,
+      data: {
+        waveIndex: 9900,           // elite_raid 专用标记，避免与普通 wave 冲突
+        day:       this.currentDay,
+        monsterId: 'elite_raid',   // 客户端按 monsterType 路由
+        count:     1,
+        spawnSide,
+        monsterType: 'elite_raid', // 冗余字段方便客户端直接读
+        bypassCap: true,           // 前端据此跳过 maxAliveMonsters
+        eliteHp:   hp,
+        eliteAtk:  atk,
+      },
+    });
+
+    this.broadcast({
+      type: 'bobao',
+      timestamp: nowMs,
+      data: { message: '直面精英，方显勇者！30秒内击杀方可脱险' },
+    });
+    console.log(`[SurvivalEngine] elite_raid spawned: id=${id} hp=${hp} atk=${atk} deadline=+30s`);
+    return 0;
+  }
+
+  /** elite_raid tick 检测：30s 内未击杀 → 直接扣城门 30HP（精英"穿门"） */
+  _tickEliteRaid(nowMs) {
+    if (!this._eliteRaidEndsAt || nowMs < this._eliteRaidEndsAt) return;
+    const mid = this._eliteRaidMonsterId;
+    // 已击杀 → 清理状态
+    if (!mid || !this._activeMonsters.has(mid)) {
+      this._eliteRaidEndsAt    = 0;
+      this._eliteRaidMonsterId = null;
+      return;
+    }
+    // 未击杀 → 清理精英怪 + 城门受创 30HP
+    this._activeMonsters.delete(mid);
+    this._eliteRaidEndsAt    = 0;
+    this._eliteRaidMonsterId = null;
+    const dmg = 30;
+    this.gateHp = Math.max(0, this.gateHp - dmg);
+    this._broadcast({
+      type: 'monster_died',
+      data: { monsterId: mid, monsterType: 'elite_raid', killerId: '', reason: 'elite_raid_timeout' },
+    });
+    this.broadcast({
+      type: 'bobao',
+      timestamp: nowMs,
+      data: { message: `精英来袭未能击杀！城门 -${dmg}HP` },
+    });
+    this._broadcastResourceUpdate();
+    this._checkDefeat();
+    console.log(`[SurvivalEngine] elite_raid timeout: gate -${dmg}HP → ${this.gateHp}`);
+  }
+
+  /**
+   * time_freeze：全场存活怪物冻结 8s（对城门伤害暂停）
+   * 复用 special_effect { frozen_all, duration: 8 }，客户端已有冻结动画
+   * 返回 endsAt（effect 结束时广播 effect_ended）
+   */
+  _applyTimeFreeze(nowMs) {
+    const durationMs = 8 * 1000;
+    this._freezeUntilMs = nowMs + durationMs;
+    this.broadcast({
+      type: 'special_effect',
+      timestamp: nowMs,
+      data: { effect: 'frozen_all', duration: 8 },
+    });
+    this.broadcast({
+      type: 'bobao',
+      timestamp: nowMs,
+      data: { message: '时空凝滞，喘息之机' },
+    });
+    return nowMs + durationMs;
+  }
+
+  /**
+   * double_contrib：全员贡献值 ×2，60s（仅贡献值，资源产出倍率不变）
+   * 返回 endsAt
+   */
+  _applyDoubleContrib(nowMs) {
+    const durationMs = 60 * 1000;
+    this._contribMult = 2.0;
+    if (this._contribMultTimer) clearTimeout(this._contribMultTimer);
+    this._contribMultTimer = setTimeout(() => {
+      this._contribMult = 1.0;
+      this._contribMultTimer = null;
+      console.log('[SurvivalEngine] double_contrib expired');
+    }, durationMs);
+    this.broadcast({
+      type: 'bobao',
+      timestamp: nowMs,
+      data: { message: '英雄辈出的时刻！全员贡献×2，持续60秒' },
+    });
+    return nowMs + durationMs;
+  }
+
+  /**
+   * mystery_trader：30s 限时 2 选 1：
+   *   A=150 食物→100 矿石 / B=80 煤炭→城门+50HP / 超时=弃权（不扣不给）
+   * 不走 §5 ResourceSystem 衰减（即时兑换）
+   * 返回 endsAt（offer 到期）
+   */
+  _applyMysteryTrader(nowMs) {
+    const durationMs = 30 * 1000;
+    const expiresAt  = nowMs + durationMs;
+    // 扁平化结构:Unity JsonUtility 不支持嵌套 cost/gain 映射,统一用 costFood/gainOre 等扁平字段
+    const offer = {
+      expiresAt,
+      cardA: { costFood: 150, costCoal: 0,  costOre: 0, gainFood: 0, gainCoal: 0, gainOre: 100, gainGateHp: 0  },
+      cardB: { costFood: 0,   costCoal: 80, costOre: 0, gainFood: 0, gainCoal: 0, gainOre: 0,   gainGateHp: 50 },
+    };
+    this._traderOffer = offer;
+    this._broadcast({
+      type: 'broadcaster_trader_offer',
+      data: { cardA: offer.cardA, cardB: offer.cardB, expiresAt },
+    });
+    this.broadcast({
+      type: 'bobao',
+      timestamp: nowMs,
+      data: { message: '商队路过堡垒，30秒内选择交易' },
+    });
+
+    // 30s 超时兜底：自动弃权（不扣不给）
+    if (this._traderTimer) clearTimeout(this._traderTimer);
+    this._traderTimer = setTimeout(() => {
+      if (!this._traderOffer) return;
+      this._traderOffer = null;
+      this._traderTimer = null;
+      this._broadcast({
+        type: 'broadcaster_trader_result',
+        data: { success: false, reason: 'timeout' },
+      });
+      console.log('[SurvivalEngine] mystery_trader expired without choice');
+    }, durationMs);
+
+    return expiresAt;
+  }
+
+  /**
+   * meteor_shower：15s 内每 1s 随机 30% 存活怪各 -100HP；无怪时城门 +10HP/tick
+   * 使用 1s setTimeout 链（15 次），归一到 _meteorTimers 便于 reset 时清理
+   * 返回 endsAt（最后一击 tick）
+   */
+  _applyMeteorShower(nowMs) {
+    const ticks = 15;
+    const durationMs = ticks * 1000;
+    // 先清理旧计时器（极端情况下 reset 未清干净）
+    for (const t of this._meteorTimers) clearTimeout(t);
+    this._meteorTimers = [];
+
+    for (let i = 1; i <= ticks; i++) {
+      const timer = setTimeout(() => {
+        this._meteorShowerTick();
+      }, i * 1000);
+      this._meteorTimers.push(timer);
+    }
+    this.broadcast({
+      type: 'bobao',
+      timestamp: nowMs,
+      data: { message: '天降陨石！15秒流星雨降临' },
+    });
+    return nowMs + durationMs;
+  }
+
+  /** meteor_shower 的单次 tick：30% 概率伤害每只活怪；无怪时修城门 */
+  _meteorShowerTick() {
+    if (this.state !== 'day' && this.state !== 'night') return;
+    const monsters = [...this._activeMonsters.entries()];
+    if (monsters.length === 0) {
+      // 无怪 → 城门 +10HP（每 tick）
+      const before = this.gateHp;
+      this.gateHp = Math.min(this.gateMaxHp, this.gateHp + 10);
+      if (this.gateHp !== before) this._broadcastResourceUpdate();
+      return;
+    }
+
+    const dmg = 100;
+    const killed = [];
+    for (const [mid, m] of monsters) {
+      if (Math.random() >= 0.30) continue; // 30% 命中
+      m.currentHp -= dmg;
+      this._broadcast({
+        type: 'combat_attack',
+        data: {
+          attackerId:   '',
+          attackerName: '流星雨',
+          targetId:     mid,
+          targetType:   m.type,
+          damage:       dmg,
+          targetHpRemaining: Math.max(0, m.currentHp),
+        },
+      });
+      if (m.currentHp <= 0) killed.push(mid);
+    }
+    for (const mid of killed) {
+      const m = this._activeMonsters.get(mid);
+      this._activeMonsters.delete(mid);
+      this._broadcast({
+        type: 'monster_died',
+        data: { monsterId: mid, monsterType: m.type, killerId: '', reason: 'meteor_shower' },
+      });
+      // elite_raid 被流星雨击杀 → 清 pending 状态
+      if (mid === this._eliteRaidMonsterId) {
+        this._eliteRaidEndsAt    = 0;
+        this._eliteRaidMonsterId = null;
+      }
+    }
+  }
+
+  /**
+   * aurora：全矿工满血 + 效率 ×1.5（60s）+ 城门 +200HP
+   * PM 决策：与 T5 love_explosion 的情形 A/B/C 细分不实现，两者独立生效、各自 clamp
+   * 返回 endsAt
+   */
+  _applyAurora(nowMs) {
+    const durationMs = 60 * 1000;
+
+    // 全矿工满血（已死亡的复活到满血）
+    for (const pid of Object.keys(this._workerHp)) {
+      const w = this._workerHp[pid];
+      if (w.isDead) {
+        this._reviveWorker(pid);
+      } else {
+        w.hp = w.maxHp;
+      }
+    }
+    this._broadcastWorkerHp();
+
+    // 效率 ×1.5（60s）
+    this._auroraEffMult = 1.5;
+    if (this._auroraTimer) clearTimeout(this._auroraTimer);
+    this._auroraTimer = setTimeout(() => {
+      this._auroraEffMult = 1.0;
+      this._auroraTimer = null;
+      console.log('[SurvivalEngine] aurora expired');
+    }, durationMs);
+
+    // 城门 +200HP
+    this.gateHp = Math.min(this.gateMaxHp, this.gateHp + 200);
+    this._broadcastResourceUpdate();
+
+    this.broadcast({
+      type: 'bobao',
+      timestamp: nowMs,
+      data: { message: '极光守护，众神庇佑！效率+50% 持续60秒' },
+    });
+
+    return nowMs + durationMs;
+  }
+
+  // ==================== end §24.4 ====================
+
   _clearTick() {
     if (this._tickTimer) { clearInterval(this._tickTimer); this._tickTimer = null; }
     if (this._resourceSyncTimer) { clearInterval(this._resourceSyncTimer); this._resourceSyncTimer = null; }
@@ -2064,6 +2625,13 @@ class SurvivalGameEngine {
     this._randomEventTimers = [];
     // 清除实时榜防抖定时器
     if (this._liveRankingTimer) { clearTimeout(this._liveRankingTimer); this._liveRankingTimer = null; }
+
+    // §24.4 轮盘相关定时器
+    if (this._contribMultTimer) { clearTimeout(this._contribMultTimer); this._contribMultTimer = null; }
+    if (this._auroraTimer)      { clearTimeout(this._auroraTimer);      this._auroraTimer      = null; }
+    if (this._traderTimer)      { clearTimeout(this._traderTimer);      this._traderTimer      = null; }
+    for (const t of (this._meteorTimers || [])) clearTimeout(t);
+    this._meteorTimers = [];
   }
 }
 

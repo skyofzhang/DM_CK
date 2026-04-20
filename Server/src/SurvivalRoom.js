@@ -372,6 +372,26 @@ class SurvivalRoom {
         this._handleBroadcasterAction(ws, data);
         break;
 
+      // ==================== §24.4 主播事件轮盘 ====================
+      // PM 决策（MVP）：_roomCreatorId 未注入 → 放开给任何玩家；
+      //   TODO: 等 _roomCreatorId 实现后，这里应先校验 `_isRoomCreator(ws)` 再路由
+      case 'broadcaster_roulette_spin': {
+        const pid = ws._playerId || '';
+        this.survivalEngine.handleBroadcasterRouletteSpin(pid);
+        break;
+      }
+      case 'broadcaster_roulette_apply': {
+        const pid = ws._playerId || '';
+        this.survivalEngine.handleBroadcasterRouletteApply(pid);
+        break;
+      }
+      case 'broadcaster_trader_accept': {
+        const pid = ws._playerId || '';
+        const choice = (data && data.choice) || '';
+        this.survivalEngine.handleBroadcasterTraderAccept(pid, choice);
+        break;
+      }
+
       // ==================== GM 测试指令 ====================
       case 'pause_game':
         // 暂停/恢复游戏（仅限调试）
