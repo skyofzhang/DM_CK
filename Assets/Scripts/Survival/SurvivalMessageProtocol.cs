@@ -31,5 +31,11 @@ namespace DrscfZ.Survival
         public const string WorkerDied      = "worker_died";
         public const string WorkerRevived   = "worker_revived";
         public const string WorkerHpUpdate  = "worker_hp_update";
+
+        // ----- 助威模式 §33（🆕 v1.27）-----
+        public const string SupporterJoined   = "supporter_joined";
+        public const string SupporterAction   = "supporter_action";
+        public const string SupporterPromoted = "supporter_promoted";
+        public const string GiftSilentFail    = "gift_silent_fail";
     }
 }

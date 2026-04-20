@@ -230,6 +230,48 @@ namespace DrscfZ.Survival
         public LiveRankingEntry[] rankings; // Top 5
     }
 
+    // ==================== 助威模式 §33（🆕 v1.27，PM MVP：跳过 §36.12 / §30 依赖）====================
+
+    /// <summary>观众注册为助威者（type=supporter_joined）</summary>
+    [Serializable]
+    public class SupporterJoinedData
+    {
+        public string playerId;
+        public string playerName;
+        public int    supporterCount;
+    }
+
+    /// <summary>助威者弹幕生效（type=supporter_action）</summary>
+    [Serializable]
+    public class SupporterActionData
+    {
+        public string playerId;
+        public string playerName;
+        public int    cmd;       // 1/2/3/4/6/666
+    }
+
+    /// <summary>AFK 替补：助威者→守护者 + 旧守护者→助威者（type=supporter_promoted）</summary>
+    [Serializable]
+    public class SupporterPromotedData
+    {
+        public string newPlayerId;
+        public string newPlayerName;
+        public string oldPlayerId;
+        public string oldPlayerName;
+        public int    workerIndex;
+    }
+
+    /// <summary>D1–D5 超员观众礼物扣费但未生效反馈（type=gift_silent_fail，🆕 v1.27）。
+    /// MVP 阶段服务端暂不推送（§36.12 未实现），仅保留协议。</summary>
+    [Serializable]
+    public class GiftSilentFailData
+    {
+        public string giftId;
+        public string reason;    // "before_supporter_unlock"
+        public int    unlockDay; // 6
+        public int    priceFen;
+    }
+
     // ==================== 本周贡献榜（type=weekly_ranking）====================
 
     /// <summary>本周贡献榜单条记录</summary>

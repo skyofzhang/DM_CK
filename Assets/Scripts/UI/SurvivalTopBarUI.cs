@@ -12,6 +12,8 @@ namespace DrscfZ.UI
     /// </summary>
     public class SurvivalTopBarUI : MonoBehaviour
     {
+        public static SurvivalTopBarUI Instance { get; private set; }
+
         [Header("昼夜 & 倒计时")]
         public TextMeshProUGUI phaseText;     // "第1天 · 白天"
         public TextMeshProUGUI timerText;     // "02:30"
@@ -50,6 +52,20 @@ namespace DrscfZ.UI
         private int   _prevFood, _prevCoal, _prevOre;
         private float _prevTemp;
         private int   _prevScorePool;
+
+        // 助威模式 §33（🆕 v1.27）
+        private int _supporterCount = 0;
+
+        private void Awake()
+        {
+            if (Instance != null && Instance != this) { /* 保留先进入的实例 */ return; }
+            Instance = this;
+        }
+
+        private void OnDestroy()
+        {
+            if (Instance == this) Instance = null;
+        }
 
         private void OnEnable()
         {
@@ -244,8 +260,20 @@ namespace DrscfZ.UI
         private void UpdatePlayerCount()
         {
             var sgm = SurvivalGameManager.Instance;
-            if (sgm != null && playerCountText)
+            if (sgm == null || playerCountText == null) return;
+
+            // 助威模式 §33：有助威者时分开显示守护者/助威人数
+            if (_supporterCount > 0)
+                playerCountText.text = $"守护者:{sgm.TotalPlayers}  助威:{_supporterCount}";
+            else
                 playerCountText.text = $"参与:{sgm.TotalPlayers}人";
+        }
+
+        /// <summary>助威模式 §33：服务器推送 supporter_joined 时更新助威人数</summary>
+        public void UpdateSupporterCount(int count)
+        {
+            _supporterCount = count;
+            UpdatePlayerCount();
         }
 
         /// <summary>积分池实时刷新：每5秒由 resource_update 触发</summary>
