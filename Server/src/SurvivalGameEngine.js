@@ -147,6 +147,21 @@ class SurvivalGameEngine {
     this._monsterHpMult    = 1.0;
     this._monsterCntMult   = 1.0;
 
+    // ── §33 助威模式（Supporter Mode） ────────────────────────────────
+    // _supporters: { playerId: { name, joinedAt, totalContrib } } — 助威者注册表
+    // _guardianLastActive: { playerId: timestamp } — AFK 检测用（正式守护者活跃时间）
+    // _supporterCmdCooldown: { cmd: timestamp } — 助威者弹幕全局冷却（各 cmd 独立，2s）
+    // _supporterAtkBuff: 0 ~ 0.20 — 助威者 cmd=6 叠加的全局攻击加成（正式守护者攻击伤害乘以 1+buff）
+    // _supporterAtkBuffTimer: 剩余秒数，归 0 时 buff 重置
+    // _playerSlots: { playerId: slotIndex 0~MAX_PLAYERS-1 } — 稳定的矿工槽位分配，替补时槽位原位继承
+    this._supporters             = new Map();
+    this._guardianLastActive     = {};
+    this._supporterCmdCooldown   = {};
+    this._supporterAtkBuff       = 0;
+    this._supporterAtkBuffTimer  = 0;
+    this._afkCheckCounter        = 0;   // _tick 内每 10s 执行一次 AFK 检测的计数器
+    this._playerSlots            = {};
+
     // 点赞统计
     this.totalLikes = 0;
 
@@ -272,6 +287,15 @@ class SurvivalGameEngine {
     for (const t of this._randomEventTimers) clearTimeout(t);
     this._randomEventTimers  = [];
 
+    // §33 助威模式清理
+    this._supporters.clear();
+    this._guardianLastActive    = {};
+    this._supporterCmdCooldown  = {};
+    this._supporterAtkBuff      = 0;
+    this._supporterAtkBuffTimer = 0;
+    this._afkCheckCounter       = 0;
+    this._playerSlots           = {};
+
     this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
   }
 
@@ -316,11 +340,40 @@ class SurvivalGameEngine {
    */
   handleComment(playerId, playerName, avatarUrl, content) {
     if (this.state !== 'day' && this.state !== 'night') return;
-    // 未注册玩家满员时拒绝参与
-    if (playerId && !this.contributions[playerId] && this.totalPlayers >= SurvivalGameEngine.MAX_PLAYERS) return;
     const content_trim = (content || '').trim();
-
     const cmd = parseInt(content_trim);
+
+    // §33 助威模式分流：
+    // - 已是助威者 → 走助威者分支（优先判断，避免 _trackContribution 污染后被误判为守护者）
+    // - 已是正式守护者（contributions[playerId] !== undefined）→ 刷新活跃时间，走现有逻辑
+    // - 还有守护者名额（totalPlayers < MAX_PLAYERS） → 绑定为守护者，走现有逻辑
+    // - 名额已满 → 进入助威者分支（_handleSupporterComment 内幂等注册 + 推 supporter_joined）
+    if (playerId) {
+      if (this._supporters.has(playerId)) {
+        if (cmd >= 1 && cmd <= 6) {
+          this._handleSupporterComment(playerId, playerName, cmd);
+        }
+        // 助威者 666 与守护者一致（效果本身就是全局的）→ 继续下方 666 分支
+        if (content_trim !== '666') return;
+      } else if (this.contributions[playerId] !== undefined) {
+        // 已是正式守护者
+        this._guardianLastActive[playerId] = Date.now();
+      } else if (this.totalPlayers < SurvivalGameEngine.MAX_PLAYERS) {
+        // 有名额 → 绑定为守护者（与 handlePlayerJoined 对齐）
+        this.contributions[playerId] = 0;
+        this.playerNames[playerId]   = playerName || playerId;
+        this.totalPlayers++;
+        this._guardianLastActive[playerId] = Date.now();
+        this._allocatePlayerSlot(playerId); // §33: 稳定槽位分配
+      } else {
+        // 名额已满 → 进入助威者分支
+        if (cmd >= 1 && cmd <= 6) {
+          this._handleSupporterComment(playerId, playerName, cmd);
+        }
+        if (content_trim !== '666') return;
+      }
+    }
+
     if (cmd >= 1 && cmd <= 4) {
       // 工作指令 1-4（策划案 v2.0 已移除指令5修城门）
       const cmdNames  = ['', 'food', 'coal', 'ore', 'heat'];
@@ -365,11 +418,25 @@ class SurvivalGameEngine {
    * giftValue — 礼物价格，单位：分（1分=0.01元=0.1抖币）
    */
   handleGift(playerId, playerName, avatarUrl, giftId, giftValue, giftName) {
-    // 未注册玩家满员时拒绝参与（礼物效果不生效，不进入贡献榜）
-    if (playerId && !this.contributions[playerId] && this.totalPlayers >= SurvivalGameEngine.MAX_PLAYERS) return;
     // 注册/更新送礼玩家的名字（排行榜结算时使用）
     if (playerId && !this.playerNames[playerId])
       this.playerNames[playerId] = playerName || playerId;
+
+    // §33 助威模式：名额已满且未注册 → 先晋升为助威者，再进入礼物处理
+    //   PM 决策（MVP）：跳过 §36.12 seasonDay < supporter_mode.minDay 门槛，永远允许注册
+    //   TODO §36.12: add seasonDay < supporter_mode.minDay gate when §36 implemented
+    if (playerId
+        && this.contributions[playerId] === undefined
+        && !this._supporters.has(playerId)
+        && this.totalPlayers >= SurvivalGameEngine.MAX_PLAYERS) {
+      this._promoteToSupporter(playerId, playerName);
+    }
+    const isSupporter = playerId ? this._supporters.has(playerId) : false;
+
+    // §33.5 守护者送礼属于活跃行为，刷新 AFK 计时
+    if (playerId && !isSupporter && this.contributions[playerId] !== undefined) {
+      this._guardianLastActive[playerId] = Date.now();
+    }
 
     // 优先按 douyin_id 查找，TBD 期间回退到按 price_fen 查找
     let gift = findGiftById(giftId);
@@ -382,12 +449,24 @@ class SurvivalGameEngine {
       return;
     }
 
+    // ===== §33 助威者特殊礼物分支：T1 仙女棒 / T5 爱的爆炸 =====
+    // 这两种礼物依赖"发送者自己有专属矿工"的假设，助威者无矿工 → 需要重路由到场上其他矿工
+    if (isSupporter && gift.id === 'fairy_wand') {
+      this._handleSupporterFairyWand(playerId, playerName, avatarUrl, gift, giftValue);
+      return;
+    }
+    if (isSupporter && gift.id === 'love_explosion') {
+      this._handleSupporterLoveExplosion(playerId, playerName, avatarUrl, gift, giftValue);
+      return;
+    }
+
     // 贡献值 = 礼物得分（策划案 §9）
     this._trackContribution(playerId, gift.score);
     // 积分池：礼物得分入池
     this.scorePool += gift.score;
 
     // ── 矿工复活：送礼时若该玩家的矿工已死亡，立即复活 ──────────────
+    //   助威者无 _workerHp 条目，本段自然跳过（?.isDead 为 undefined）
     if (this.state === 'night' && this._workerHp[playerId]?.isDead) {
       this._reviveWorker(playerId);
       console.log(`[SurvivalEngine] Gift revival: ${playerName}'s worker revived`);
@@ -527,11 +606,19 @@ class SurvivalGameEngine {
    */
   handlePlayerJoined(playerId, playerName, avatarUrl) {
     if (!this.contributions[playerId]) {
-      // 满员时拒绝新玩家加入（上限 = 客户端矿工模型池 MAX_WORKERS）
-      if (this.totalPlayers >= SurvivalGameEngine.MAX_PLAYERS) return;
+      // §33 助威模式：满员时降级为助威者（替代原"静默丢弃"行为）
+      if (this.totalPlayers >= SurvivalGameEngine.MAX_PLAYERS) {
+        if (playerId && !this._supporters.has(playerId)) {
+          this._promoteToSupporter(playerId, playerName);
+        }
+        return;
+      }
       this.contributions[playerId] = 0;
       this.playerNames[playerId] = playerName || playerId;  // 记录玩家名，结算时填入排行榜
       this.totalPlayers++;
+      // 守护者活跃时间初始化（供 §33.5 AFK 替补检测使用）
+      this._guardianLastActive[playerId] = Date.now();
+      this._allocatePlayerSlot(playerId); // §33: 稳定槽位分配（供 supporter_promoted 使用）
     }
 
     const data = {
@@ -541,6 +628,293 @@ class SurvivalGameEngine {
       totalPlayers: this.totalPlayers,
     };
     this.broadcast({ type: 'survival_player_joined', timestamp: Date.now(), data });
+  }
+
+  // ==================== §33 助威模式 ====================
+
+  /**
+   * 晋升为助威者（幂等；可供 handleComment/handleGift/替补流程共用入口）。
+   * 返回 true 表示已注册或已是助威者；false 表示因 §36.12 门槛不满足而保留旁观者身份。
+   *
+   * PM 决策（MVP v1.27）：跳过 §36.12 seasonDay < supporter_mode.minDay 门槛，永远允许注册。
+   * 同样本次不推送 gift_silent_fail（门槛未生效，silent_fail 分支永远不触发）。
+   */
+  _promoteToSupporter(playerId, playerName) {
+    if (!playerId) return false;
+    // 幂等：已是助威者直接返回 true
+    if (this._supporters.has(playerId)) return true;
+
+    // TODO §36.12: add seasonDay < supporter_mode.minDay gate when §36 implemented
+    // if (!this.room.isVeteran && this.room.seasonDay < FEATURE_UNLOCK_DAY.supporter_mode.minDay) return false;
+
+    this._supporters.set(playerId, {
+      name: playerName || playerId,
+      joinedAt: Date.now(),
+      totalContrib: 0,
+    });
+    // 保持 playerNames 缓存同步（live_ranking / 结算显示名共用）
+    if (!this.playerNames[playerId]) this.playerNames[playerId] = playerName || playerId;
+
+    this.broadcast({
+      type: 'supporter_joined',
+      timestamp: Date.now(),
+      data: {
+        playerId,
+        playerName: playerName || playerId,
+        supporterCount: this._supporters.size,
+      },
+    });
+    console.log(`[SurvivalEngine] Supporter joined: ${playerName || playerId} (total=${this._supporters.size})`);
+    return true;
+  }
+
+  /**
+   * 处理助威者弹幕（§33.3 约定的 20-30% 效果 + 2s 全局冷却防刷）
+   * @param {string} playerId
+   * @param {string} playerName
+   * @param {number} cmd  1~4 工作指令 / 6 夜晚攻击
+   */
+  _handleSupporterComment(playerId, playerName, cmd) {
+    // 幂等保底：极端路径（如替补晋升）可能跳过 _promoteToSupporter
+    if (!this._promoteToSupporter(playerId, playerName)) return;
+
+    // 同一 cmd 全局冷却 2s（防 200 人直播间同时刷同一指令）
+    const now = Date.now();
+    if (now - (this._supporterCmdCooldown[cmd] || 0) < 2000) return;
+    this._supporterCmdCooldown[cmd] = now;
+
+    // 助威效果（§33.3 表）
+    switch (cmd) {
+      case 1: this.food = Math.min(2000, this.food + 1); break;
+      case 2: this.coal = Math.min(1500, this.coal + 1); break;
+      case 3: this.ore  = Math.min(800,  this.ore  + 1); break;
+      case 4: this.furnaceTemp = Math.min(this.maxTemp, this.furnaceTemp + 0.5); break;
+      case 6:
+        if (this.state === 'night') {
+          this._supporterAtkBuff = Math.min(0.20, this._supporterAtkBuff + 0.02);
+          this._supporterAtkBuffTimer = 5;
+        }
+        break;
+      default: return; // 其他 cmd 不生效，也不计贡献
+    }
+
+    // 助威者贡献值 +1（与正式守护者一致），计入 live_ranking
+    this._trackContribution(playerId, 1);
+
+    this.broadcast({
+      type: 'supporter_action',
+      timestamp: Date.now(),
+      data: { playerId, playerName: playerName || playerId, cmd },
+    });
+  }
+
+  /**
+   * 助威者送 T1 仙女棒：随机挑一名在场守护者挂载 +0.05 效率（上限 1.0）。
+   * 贡献值 +1，积分池 +1。
+   */
+  _handleSupporterFairyWand(playerId, playerName, avatarUrl, gift, giftValue) {
+    const effects = { efficiencyBonus: 0, supporterRedirect: true };
+    const guardians = Object.keys(this.contributions);
+    if (guardians.length > 0) {
+      const targetId = guardians[Math.floor(Math.random() * guardians.length)];
+      const prev = this._playerEfficiencyBonus[targetId] || 0;
+      this._playerEfficiencyBonus[targetId] = Math.min(1.0, prev + 0.05);
+      effects.efficiencyBonus = this._playerEfficiencyBonus[targetId];
+      effects.redirectTargetId   = targetId;
+      effects.redirectTargetName = this.playerNames[targetId] || targetId;
+    }
+
+    // 贡献与积分池（不走 handleGift 的默认累加路径，避免重复计入）
+    this._trackContribution(playerId, 1);
+    this.scorePool += 1;
+
+    const giftData = {
+      playerId,
+      playerName,
+      avatarUrl: avatarUrl || '',
+      giftId:     gift.id,
+      giftName:   gift.name_cn,
+      giftTier:   getTierNumber(gift.tier),
+      giftTierStr: gift.tier,
+      giftValue,
+      score:      gift.score,
+      contribution: gift.score,
+      addFood: 0, addCoal: 0, addOre: 0, addHeat: 0, addGateHp: 0,
+      effects,
+    };
+    this.broadcast({ type: 'survival_gift', timestamp: Date.now(), data: giftData });
+    console.log(`[SurvivalEngine] supporter gift: ${playerName} → ${gift.name_cn} redirected to ${effects.redirectTargetName || '(no guardian)'}`);
+  }
+
+  /**
+   * 助威者送 T5 爱的爆炸：AOE + 城门 HP 与守护者一致；复活逻辑改为"随机一名已死亡矿工"。
+   * 贡献值 +2000，积分池 +2000。
+   */
+  _handleSupporterLoveExplosion(playerId, playerName, avatarUrl, gift, giftValue) {
+    const effects = { supporterRedirect: true };
+    const aoeDmg  = 200;
+
+    // AOE 全体怪物 -200 HP
+    const killed = [];
+    for (const [mid, m] of this._activeMonsters) {
+      m.currentHp -= aoeDmg;
+      if (m.currentHp <= 0) killed.push(mid);
+    }
+    for (const mid of killed) {
+      const m = this._activeMonsters.get(mid);
+      this._activeMonsters.delete(mid);
+      this._broadcast({
+        type: 'monster_died',
+        data: { monsterId: mid, monsterType: m.type, killerId: playerId },
+      });
+    }
+    effects.aoeDamage      = aoeDmg;
+    effects.monstersKilled = killed.length;
+
+    // 随机复活一名已死亡矿工（替代"仅发送者矿工"）
+    const deadWorkers = Object.entries(this._workerHp)
+      .filter(([, w]) => w && w.isDead)
+      .map(([pid]) => pid);
+    if (deadWorkers.length > 0) {
+      const targetId = deadWorkers[Math.floor(Math.random() * deadWorkers.length)];
+      this._reviveWorker(targetId);
+      effects.revivedWorkers = [targetId];
+    }
+
+    // 城门 +200HP
+    this.gateHp = Math.min(this.gateMaxHp, this.gateHp + 200);
+    effects.addGateHp = 200;
+
+    // 贡献 + 积分池
+    this._trackContribution(playerId, gift.score);
+    this.scorePool += gift.score;
+
+    const giftData = {
+      playerId,
+      playerName,
+      avatarUrl: avatarUrl || '',
+      giftId:     gift.id,
+      giftName:   gift.name_cn,
+      giftTier:   getTierNumber(gift.tier),
+      giftTierStr: gift.tier,
+      giftValue,
+      score:      gift.score,
+      contribution: gift.score,
+      addFood: 0, addCoal: 0, addOre: 0, addHeat: 0,
+      addGateHp: effects.addGateHp,
+      effects,
+    };
+    this.broadcast({ type: 'survival_gift', timestamp: Date.now(), data: giftData });
+    this._broadcastResourceUpdate();
+    console.log(`[SurvivalEngine] supporter T5 love_explosion by ${playerName}: killed ${killed.length} monsters, revived ${effects.revivedWorkers ? effects.revivedWorkers.length : 0} worker(s)`);
+  }
+
+  /**
+   * AFK 替补检测：正式守护者连续 60s 无任何操作时，最早加入的助威者替补上场。
+   * 每 10s 调用一次（_tick 内），每次最多替换 1 人，避免批量震荡。
+   */
+  _checkAfkReplacement() {
+    if (this._supporters.size === 0) return;
+
+    const now = Date.now();
+    const AFK_THRESHOLD = 60000; // 60s
+
+    for (const [pid, lastActive] of Object.entries(this._guardianLastActive)) {
+      // 豁免：主播永不替换（_roomCreatorId 未注入时视为无主播豁免）
+      if (this._roomCreatorId && pid === this._roomCreatorId) continue;
+      // 豁免：夜晚死亡等待复活中的矿工不替换
+      if (this._workerHp[pid]?.isDead) continue;
+      // 未到 AFK 阈值
+      if (now - lastActive < AFK_THRESHOLD) continue;
+
+      // 选最早加入且不在 30s 冷却期的助威者（joinedAt > now 表示冷却中）
+      let earliestId = null;
+      let earliestTime = Infinity;
+      for (const [sid, sData] of this._supporters) {
+        if (sData.joinedAt > now) continue; // 30s 冷却中，不可排队
+        if (sData.joinedAt < earliestTime) {
+          earliestId = sid;
+          earliestTime = sData.joinedAt;
+        }
+      }
+      if (!earliestId) return;
+
+      this._promoteSupporter(earliestId, pid);
+      return; // 每次只替换 1 人
+    }
+  }
+
+  /**
+   * 助威者替补上场（newId）/ 旧守护者降级为助威者（oldId，30s 冷却排队末尾）。
+   */
+  _promoteSupporter(newId, oldId) {
+    const newData = this._supporters.get(newId);
+    if (!newData) return;
+
+    const oldName = this._getPlayerName(oldId);
+    const newName = newData.name || this._getPlayerName(newId);
+    const workerIndex = this._getWorkerIndex(oldId);
+
+    // 旧守护者 → 助威者（保存当前贡献快照，30s 冷却）
+    this._supporters.set(oldId, {
+      name: oldName,
+      joinedAt: Date.now() + 30000,
+      totalContrib: this.contributions[oldId] || 0,
+    });
+    delete this.contributions[oldId];
+    delete this._guardianLastActive[oldId];
+    delete this._playerSlots[oldId]; // §33: 释放槽位供 newId 原位继承
+    // 不减 totalPlayers：槽位由 newId 继承（见下）
+
+    // 新助威者 → 守护者（继承 totalContrib 作为 contributions 起始值 + 继承 workerIndex 槽位）
+    this.contributions[newId] = newData.totalContrib || 0;
+    this.playerNames[newId]   = newName;
+    this._guardianLastActive[newId] = Date.now();
+    this._supporters.delete(newId);
+    if (workerIndex >= 0) this._playerSlots[newId] = workerIndex; // 原位继承
+
+    this.broadcast({
+      type: 'supporter_promoted',
+      timestamp: Date.now(),
+      data: {
+        newPlayerId:   newId,
+        newPlayerName: newName,
+        oldPlayerId:   oldId,
+        oldPlayerName: oldName,
+        workerIndex,
+      },
+    });
+    console.log(`[SurvivalEngine] Supporter promoted: ${newName} replaces ${oldName} (workerIndex=${workerIndex})`);
+  }
+
+  /** 获取玩家名（优先 playerNames，fallback 到 supporters.name，再 fallback 到 playerId） */
+  _getPlayerName(playerId) {
+    if (!playerId) return '';
+    if (this.playerNames[playerId]) return this.playerNames[playerId];
+    const s = this._supporters.get(playerId);
+    if (s && s.name) return s.name;
+    return playerId;
+  }
+
+  /** 获取玩家的 workerIndex（0~MAX_PLAYERS-1），未找到返回 -1 */
+  _getWorkerIndex(playerId) {
+    if (!playerId) return -1;
+    const slot = this._playerSlots[playerId];
+    return (typeof slot === 'number') ? slot : -1;
+  }
+
+  /** 找一个空槽位（0~MAX_PLAYERS-1）分配给新守护者；满员返回 -1 */
+  _allocatePlayerSlot(playerId) {
+    if (!playerId) return -1;
+    if (typeof this._playerSlots[playerId] === 'number') return this._playerSlots[playerId];
+    const occupied = new Set(Object.values(this._playerSlots));
+    for (let i = 0; i < SurvivalGameEngine.MAX_PLAYERS; i++) {
+      if (!occupied.has(i)) {
+        this._playerSlots[playerId] = i;
+        return i;
+      }
+    }
+    return -1;
   }
 
   // ==================== 内部：阶段切换 ====================
@@ -700,6 +1074,21 @@ class SurvivalGameEngine {
           this.efficiency666Bonus = 1.0;
           console.log('[SurvivalEngine] 666 bonus expired');
         }
+      }
+
+      // §33 助威者攻击加成衰减（每秒 -1；归 0 时 buff 重置）
+      if (this._supporterAtkBuffTimer > 0) {
+        this._supporterAtkBuffTimer = Math.max(0, this._supporterAtkBuffTimer - 1);
+        if (this._supporterAtkBuffTimer <= 0) {
+          this._supporterAtkBuff = 0;
+        }
+      }
+
+      // §33 AFK 替补检测（每 10s 执行一次，每次最多换 1 人）
+      this._afkCheckCounter = (this._afkCheckCounter || 0) + 1;
+      if (this._afkCheckCounter >= 10) {
+        this._afkCheckCounter = 0;
+        this._checkAfkReplacement();
       }
 
       // 随机事件触发检查（仅白天）
@@ -969,7 +1358,9 @@ class SurvivalGameEngine {
 
     if (!target) return;
 
-    const damage = 10; // 基础攻击伤害
+    // §33 助威者 cmd=6 叠加的全局攻击加成（1 + buff，buff 0~0.20）
+    const baseDamage = 10;
+    const damage = Math.max(1, Math.round(baseDamage * (1 + (this._supporterAtkBuff || 0))));
     target.currentHp -= damage;
 
     // 贡献奖励（攻击命中）
