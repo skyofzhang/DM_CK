@@ -73,8 +73,9 @@ IF FAIL:
 PM 按 Reviewer 的归属标签把问题分回对应 Agent，附上 Reviewer 原文。回到 Step 5。
 
 ### Step 7 · 终止条件
-- **PASS** → PM 合 worktree 分支回 main（或询问用户是否合并）→ 更新 `MEMORY.md` "当前状态" 和 "已完成/待完成" → 向用户报告
+- **PASS** → PM 合 worktree 分支 → main（按"合并策略"）→ 告知用户在主 repo 测试（按"测试路径约定"）→ **等用户测试通过**后更新 `MEMORY.md` "已完成/待完成" → 最终报告
 - **5 轮仍 FAIL** → 停流程，向用户报告：已修复项 / 剩余 gap / 建议（是否放弃、是否人工接管）
+- **用户测试失败** → 按失败范围判断：小改（<30min）PM 直接在新 worktree 修；大改重开一轮 Multi-Agent 流程
 
 ---
 
@@ -163,6 +164,39 @@ IF FAIL:
    向用户报告分支名和改动摘要，由用户手动合并。
 
 worktree 用完后由 PM 执行 `git worktree remove` 清理（若确认已合并或放弃）。
+
+---
+
+## 测试路径约定
+
+**人工测试必须在主 repo `E:\AIProject\DM_CK` 进行，禁止在 worktree 下打开 Unity 或部署服务器。**
+
+### 原因
+1. Unity `Library/Temp/Logs` 只在主 repo 维护，worktree 下缺失 → 切 worktree 触发全量 reimport（30 min+）
+2. `deploy.py` 按主 repo 路径读文件推服务器
+3. worktree 是 Agent 写代码的临时隔离区，分支会清理
+
+### 测试矩阵（按改动类型）
+
+| 改动类型 | 测试方式 | 前置 |
+|---------|---------|------|
+| 前端（Unity C# / UI / Prefab / Editor） | 主 repo Unity → Play Mode | 分支已合并到 main |
+| 后端（Node.js `Server/src/*`） | 主 repo `python deploy.py` → PM2 重启 → 真实客户端连接 | 分支已合并到 main |
+| 协议 / 数据结构跨端 | 前后端同时测（先服务器部署 → 再 Unity Play） | 两端分支都合并到 main |
+
+### 用户测试反馈分流
+
+用户在主 repo 测试后反馈给 PM：
+- **PASS**：PM 更新 `MEMORY.md` "已完成"，流程结束
+- **FAIL（小改 <30min）**：PM 新开 worktree 快修 → Reviewer 复核 → 合并 → 再测
+- **FAIL（大改）**：重开一轮 Multi-Agent 完整流程
+- **FAIL（策划案缺陷）**：停流程，由用户决定改策划案还是改实现
+
+### 禁止项
+- ❌ 在 worktree 下打开 Unity（Library 缺失会触发完整重导）
+- ❌ 从 worktree 执行 `deploy.py`（路径错，推的是 worktree 分支代码，易与主 repo 状态不一致）
+- ❌ 合并前让用户测（代码在 worktree 分支，主 repo 看不到）
+- ❌ 用户未测试就标 "已完成"（Reviewer PASS ≠ 功能正确，只是静态审查通过）
 
 ---
 
