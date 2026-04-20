@@ -66,6 +66,12 @@ namespace DrscfZ.Survival
         public event Action<LiveRankingData>     OnLiveRankingReceived;     // 实时贡献榜（游戏中防抖推送）
         public event Action<StreamerRankingData> OnStreamerRankingReceived; // 主播排行榜（服务器推送）
 
+        // 助威模式 §33（🆕 v1.27）
+        public event Action<SupporterJoinedData>   OnSupporterJoined;
+        public event Action<SupporterActionData>   OnSupporterAction;
+        public event Action<SupporterPromotedData> OnSupporterPromoted;
+        public event Action<GiftSilentFailData>    OnGiftSilentFail;
+
         // 贡献追踪
         private System.Collections.Generic.Dictionary<string, float> _contributions
             = new System.Collections.Generic.Dictionary<string, float>();
@@ -302,6 +308,20 @@ namespace DrscfZ.Survival
                 case "live_ranking":
                     var lr = JsonUtility.FromJson<LiveRankingData>(dataJson);
                     if (lr != null) OnLiveRankingReceived?.Invoke(lr);
+                    break;
+
+                // ----- 助威模式 §33（🆕 v1.27）-----
+                case "supporter_joined":
+                    HandleSupporterJoined(JsonUtility.FromJson<SupporterJoinedData>(dataJson));
+                    break;
+                case "supporter_action":
+                    HandleSupporterAction(JsonUtility.FromJson<SupporterActionData>(dataJson));
+                    break;
+                case "supporter_promoted":
+                    HandleSupporterPromoted(JsonUtility.FromJson<SupporterPromotedData>(dataJson));
+                    break;
+                case "gift_silent_fail":
+                    HandleGiftSilentFail(JsonUtility.FromJson<GiftSilentFailData>(dataJson));
                     break;
             }
         }
@@ -967,6 +987,72 @@ namespace DrscfZ.Survival
             SurvivalCameraController.Shake(0.3f, 0.8f);
             Systems.AudioManager.Instance?.PlaySFX("sfx_gate_alarm");
             Debug.Log("[SurvivalGM] BOSS出现！全员备战！");
+        }
+
+        // ==================== 助威模式 §33（🆕 v1.27）====================
+
+        private void HandleSupporterJoined(SupporterJoinedData data)
+        {
+            if (data == null || string.IsNullOrEmpty(data.playerId)) return;
+            var displayName = string.IsNullOrEmpty(data.playerName) ? "匿名" : data.playerName;
+
+            UI.SurvivalTopBarUI.Instance?.UpdateSupporterCount(data.supporterCount);
+            // BarrageMessageUI 通过订阅 OnPlayerActivityMessage 自动显示（COLOR_JOIN 绿色）
+            OnPlayerActivityMessage?.Invoke($"{displayName} 加入助威！发送弹幕为全队加油");
+            OnSupporterJoined?.Invoke(data);
+        }
+
+        private void HandleSupporterAction(SupporterActionData data)
+        {
+            if (data == null || string.IsNullOrEmpty(data.playerId)) return;
+            var displayName = string.IsNullOrEmpty(data.playerName) ? "匿名" : data.playerName;
+            string cmdDesc = GetSupporterCmdDescription(data.cmd);
+
+            // 跑马灯显示"[助威] XXX：食物+1"
+            UI.HorizontalMarqueeUI.Instance?.AddMessage($"[助威] {displayName}", null, cmdDesc);
+            OnPlayerActivityMessage?.Invoke($"[助威] {displayName} → {cmdDesc}");
+
+            // 夜晚 cmd=6 → 随机存活矿工头顶闪光
+            if (data.cmd == 6)
+                WorkerManager.Instance?.FlashRandomAliveWorker();
+
+            OnSupporterAction?.Invoke(data);
+        }
+
+        private void HandleSupporterPromoted(SupporterPromotedData data)
+        {
+            if (data == null) return;
+            var newName = string.IsNullOrEmpty(data.newPlayerName) ? "匿名" : data.newPlayerName;
+            var oldName = string.IsNullOrEmpty(data.oldPlayerName) ? "匿名" : data.oldPlayerName;
+
+            WorkerManager.Instance?.HandleSupporterPromoted(data);
+            UI.HorizontalMarqueeUI.Instance?.AddMessage(newName, null, $"替补上场！{oldName} 转为助威");
+            OnPlayerActivityMessage?.Invoke($"{newName} 替补上场！{oldName} 转为助威");
+            OnSupporterPromoted?.Invoke(data);
+        }
+
+        private void HandleGiftSilentFail(GiftSilentFailData data)
+        {
+            if (data == null) return;
+            // MVP 占位：服务端（§36.12 未实现时）暂不推送，若收到则仅 Debug.Log。
+            // 未来接入 §36.12 后可改为向发送者弹 toast。
+            Debug.Log($"[SGM] gift_silent_fail received: giftId={data.giftId} reason={data.reason} unlockDay={data.unlockDay} priceFen={data.priceFen}");
+            OnGiftSilentFail?.Invoke(data);
+        }
+
+        /// <summary>助威者弹幕效果的中文描述（§33.3 表）</summary>
+        private static string GetSupporterCmdDescription(int cmd)
+        {
+            return cmd switch
+            {
+                1   => "全局食物+1",
+                2   => "全局煤炭+1",
+                3   => "全局矿石+1",
+                4   => "全局炉温+0.5℃",
+                6   => "全员攻击+2%(5s)",
+                666 => "全员效率+15%(30s)",
+                _   => $"cmd={cmd}"
+            };
         }
     }
 

@@ -608,6 +608,55 @@ namespace DrscfZ.Survival
             WorkerController._fireWorkerCount = 0;
         }
 
+        // ==================== 助威模式 §33（🆕 v1.27）====================
+
+        /// <summary>
+        /// AFK 替补：旧守护者降为助威者，新助威者升级为守护者并继承其矿工槽位。
+        /// 优先按 oldPlayerId 查找 Worker（可靠），找不到则回退到 workerIndex 语义兜底。
+        /// </summary>
+        public void HandleSupporterPromoted(SupporterPromotedData data)
+        {
+            if (data == null) return;
+
+            WorkerController target = FindWorkerByPlayerId(data.oldPlayerId);
+            if (target == null)
+            {
+                // 兜底：按 workerIndex 查 _activeWorkers
+                if (data.workerIndex >= 0 && data.workerIndex < _activeWorkers.Count)
+                    target = _activeWorkers[data.workerIndex];
+            }
+            if (target == null)
+            {
+                Debug.LogWarning($"[WorkerManager] HandleSupporterPromoted: oldPlayerId={data.oldPlayerId} workerIndex={data.workerIndex} 未找到对应Worker");
+                return;
+            }
+
+            // 换绑：新玩家继承同一个 Worker 实例
+            target.Initialize(data.newPlayerId, data.newPlayerName);
+            var nameTag = target.GetComponentInChildren<PlayerNameTag>(true);
+            if (nameTag != null)
+                nameTag.Initialize(data.newPlayerName, null);
+
+            // 触发闪光提示"替补上场"
+            target.GetComponent<WorkerVisual>()?.TriggerAssignmentFlash();
+
+            Debug.Log($"[WorkerManager] HandleSupporterPromoted: {data.oldPlayerName}({data.oldPlayerId}) → {data.newPlayerName}({data.newPlayerId})");
+        }
+
+        /// <summary>
+        /// 助威者夜晚发 cmd=6 时：随机一名存活矿工头顶闪光，表示"助威传达到了"。
+        /// </summary>
+        public void FlashRandomAliveWorker()
+        {
+            var alive = new List<WorkerController>();
+            foreach (var w in _activeWorkers)
+                if (w != null && !w.IsDead) alive.Add(w);
+            if (alive.Count == 0) return;
+
+            var pick = alive[UnityEngine.Random.Range(0, alive.Count)];
+            pick.GetComponent<WorkerVisual>()?.TriggerAssignmentFlash();
+        }
+
         // ==================== T007/T008 私有算法 ====================
 
         /// <summary>
