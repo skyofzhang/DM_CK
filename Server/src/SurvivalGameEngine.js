@@ -45,8 +45,9 @@ function getWaveConfig(day) {
   return cfg;
 }
 
-// 城门等级配置（策划案 §3.3：lv1→2=100矿, lv2→3=250矿, lv3→4=500矿）
-const GATE_UPGRADE_COSTS   = [0, 100, 250, 500]; // index: lv1→idx0=100, lv2→idx1=250, lv3→idx2=500
+// 城门等级配置（策划案 §10.2：lv1→2=100矿, lv2→3=250矿, lv3→4=500矿）
+// 2026-04-15 修复：数组首位原为 0（导致 Lv1→Lv2 免费升级的 Bug），已对齐策划案设计意图
+const GATE_UPGRADE_COSTS   = [100, 250, 500]; // index: lv1→idx0=100, lv2→idx1=250, lv3→idx2=500
 const GATE_MAX_HP_BY_LEVEL = [1000, 1500, 2200, 3000]; // 城门HP：1级/2级/3级/4级
 
 // 随机事件名称映射（策划案 §8）
