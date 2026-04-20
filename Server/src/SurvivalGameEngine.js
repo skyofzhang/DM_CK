@@ -49,6 +49,18 @@ function getWaveConfig(day) {
 const GATE_UPGRADE_COSTS   = [0, 100, 250, 500]; // index: lv1→idx0=100, lv2→idx1=250, lv3→idx2=500
 const GATE_MAX_HP_BY_LEVEL = [1000, 1500, 2200, 3000]; // 城门HP：1级/2级/3级/4级
 
+// 矿工成长系统常量（策划案 §30.10）
+// TIER_THRESHOLDS[tierIdx]：进入该阶段所需的最小累计终身贡献值
+// TIER_COST_PER_LV[tierIdx]：该阶段内每级所需贡献值增量
+// TIER_THREAT[tierIdx]：阶段威胁值倍率（用于怪物目标选择）
+// TIER_SKINS[tierIdx]：阶段对应的皮肤 ID（自动换肤/手动换肤共用）
+const TIER_THRESHOLDS  = [0, 100, 300, 700, 1700, 3700, 8700, 18700, 43700, 103700];
+const TIER_COST_PER_LV = [10, 20, 40, 100, 200, 500, 1000, 2500, 6000, 15000];
+const TIER_THREAT      = [1.0, 1.3, 1.7, 2.2, 2.8, 3.4, 4.0, 4.6, 5.2, 6.0];
+const TIER_SKINS       = ['skin_rookie','skin_veteran','skin_backbone','skin_elite',
+                          'skin_assault','skin_iron','skin_commander',
+                          'skin_wargod','skin_myth','skin_legend'];
+
 // 随机事件名称映射（策划案 §8）
 const EVENT_NAMES = {
   E01_snowstorm:    '暴风雪',
@@ -146,6 +158,16 @@ class SurvivalGameEngine {
     this._difficulty       = 'normal';
     this._monsterHpMult    = 1.0;
     this._monsterCntMult   = 1.0;
+
+    // ── 矿工成长系统（策划案 §30，MVP）─────────────────────────────────
+    // TODO §30 持久化：MVP 内存存储，服务重启清零；后续接入 WeeklyRankingStore（或新 WorkerLevelStore）
+    this._lifetimeContrib    = {};   // { playerId: number } — 终身累计贡献（MVP 不持久化）
+    this._playerLevel        = {};   // { playerId: 1~100 } — 当前等级
+    this._playerSkinId       = {};   // { playerId: skinId string } — 当前激活皮肤（阶段皮肤，仅决定外观）
+    this._legendReviveUsed   = {};   // { playerId: bool } — 阶10 每晚1次免死标记（_enterNight 重置）
+    this._playerSkinCooldown = {};   // { playerId: ts } — 换肤弹幕冷却（60s）
+    this._dynamicHpMult      = 1.0;  // 动态难度怪物HP倍率（_updateDynamicDifficulty 派生）
+    this._dynamicCountMult   = 1.0;  // 动态难度怪物数量倍率
 
     // 点赞统计
     this.totalLikes = 0;
@@ -272,6 +294,15 @@ class SurvivalGameEngine {
     for (const t of this._randomEventTimers) clearTimeout(t);
     this._randomEventTimers  = [];
 
+    // ── §30 矿工成长系统 reset 处理 ────────────────────────────────────
+    // _lifetimeContrib / _playerLevel / _playerSkinId 跨局永续，不清零
+    // _legendReviveUsed / _playerSkinCooldown 每局重置
+    // _dynamicHpMult / _dynamicCountMult 清零为 1.0（下次 _enterNight 重算）
+    this._legendReviveUsed    = {};
+    this._playerSkinCooldown  = {};
+    this._dynamicHpMult       = 1.0;
+    this._dynamicCountMult    = 1.0;
+
     this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
   }
 
@@ -320,6 +351,51 @@ class SurvivalGameEngine {
     if (playerId && !this.contributions[playerId] && this.totalPlayers >= SurvivalGameEngine.MAX_PLAYERS) return;
     const content_trim = (content || '').trim();
 
+    // ── §30.7 换肤弹幕：`换肤` / `换肤N`（1~10）──────────────────────────
+    // 必须在数字指令解析前处理（regex 仅匹配 `换肤` 前缀，不会与 cmd 1-6 冲突）
+    const skinMatch = content_trim.match(/^换肤(\d{1,2})?$/);
+    if (skinMatch) {
+      if (!playerId) return; // 匿名不响应
+      const nStr = skinMatch[1];
+      const nowTier = this._getWorkerTier(playerId);
+      if (!nStr) {
+        // 查询：返回已解锁皮肤列表
+        const unlocked = TIER_SKINS.slice(0, nowTier);
+        this.broadcast({
+          type: 'bobao',
+          timestamp: Date.now(),
+          data: { message: `${playerName} 已解锁皮肤：${unlocked.join('/')}（阶1~${nowTier}）` }
+        });
+        return;
+      }
+      const targetTier = parseInt(nStr);
+      if (isNaN(targetTier) || targetTier < 1 || targetTier > 10) return;
+      if (targetTier > nowTier) {
+        this.broadcast({
+          type: 'bobao',
+          timestamp: Date.now(),
+          data: { message: `${playerName} 未解锁阶${targetTier}皮肤（当前阶${nowTier}）` }
+        });
+        return;
+      }
+      // 60s 冷却（静默丢弃）
+      const cd = this._playerSkinCooldown[playerId] || 0;
+      if (Date.now() - cd < 60000) return;
+      this._playerSkinCooldown[playerId] = Date.now();
+      this._playerSkinId[playerId] = TIER_SKINS[targetTier - 1];
+      this._broadcast({
+        type: 'worker_skin_changed',
+        data: {
+          playerId,
+          playerName: playerName || playerId,
+          tier: targetTier,
+          skinId: TIER_SKINS[targetTier - 1],
+        }
+      });
+      console.log(`[SurvivalEngine] Skin changed: ${playerName} → 阶${targetTier} ${TIER_SKINS[targetTier - 1]}`);
+      return;
+    }
+
     const cmd = parseInt(content_trim);
     if (cmd >= 1 && cmd <= 4) {
       // 工作指令 1-4（策划案 v2.0 已移除指令5修城门）
@@ -353,7 +429,7 @@ class SurvivalGameEngine {
       // 666弹幕：全员效率+15%，持续30秒（策划案 §4.3）
       this.efficiency666Bonus = 1.15;
       this.efficiency666Timer = 30;
-      this._trackContribution(playerId, 2);
+      this._trackContribution(playerId, 2, 'barrage');
       this.broadcast({ type: 'special_effect', timestamp: Date.now(), data: { effect: 'glow_all', duration: 3 } });
       console.log(`[SurvivalEngine] 666 bonus activated by ${playerName}, efficiency +15% for 30s`);
     }
@@ -383,7 +459,7 @@ class SurvivalGameEngine {
     }
 
     // 贡献值 = 礼物得分（策划案 §9）
-    this._trackContribution(playerId, gift.score);
+    this._trackContribution(playerId, gift.score, 'gift');
     // 积分池：礼物得分入池
     this.scorePool += gift.score;
 
@@ -583,6 +659,11 @@ class SurvivalGameEngine {
 
     console.log(`[SurvivalEngine] ===== Night ${day} Start =====`);
 
+    // §30.6 动态难度：每夜进入前刷新（避免每 tick 都算）
+    // §30.3 阶10 传奇免死每晚 1 次 → 重置标记
+    this._legendReviveUsed = {};
+    this._updateDynamicDifficulty();
+
     // 初始化矿工HP（夜晚开始时全员满血上阵）
     this._initWorkerHp();
 
@@ -742,13 +823,15 @@ class SurvivalGameEngine {
 
   // ==================== 矿工HP系统 ====================
 
-  /** 夜晚开始时初始化所有已加入玩家的矿工HP（满血）*/
+  /** 夜晚开始时初始化所有已加入玩家的矿工HP（满血，按等级动态值）*/
   _initWorkerHp() {
     this._workerHp = {};
     for (const pid of Object.keys(this.contributions)) {
+      // §30 等级决定 maxHp（基础100 + 每级+3）
+      const maxHp = this._getWorkerMaxHp(pid);
       this._workerHp[pid] = {
-        hp:        this._workerMaxHp,
-        maxHp:     this._workerMaxHp,
+        hp:        maxHp,
+        maxHp:     maxHp,
         isDead:    false,
         respawnAt: 0,
       };
@@ -861,26 +944,34 @@ class SurvivalGameEngine {
   _applyWorkEffect(commandId, playerId) {
     if (this.state !== 'day' && this.state !== 'night') return;
 
-    // 综合效率倍率计算（策划案 §4.4）
+    // 综合效率倍率计算（策划案 §4.4 + §30 等级加成）
+    // levelMult：等级效率系数（每级 +0.8%，Lv.100≈×1.79）
     // playerBonus：仙女棒永久累计加成（最高+100%）
     // globalBoost：能量电池 per-player 临时加成（×1.3，持续180s）
-    // 综合上限 ×3.0
+    // 综合上限 ×3.0（策划案 §30.9 数值平衡约束）
+    const levelMult        = this._getWorkerLevelEffMult(playerId);               // §30 等级效率
     const playerBonus      = 1.0 + (this._playerEfficiencyBonus[playerId] || 0); // 仙女棒加成
     const globalBoost      = this._playerTempBoost[playerId] || 1.0;             // 能量电池 per-player 加成
     const broadcasterBoost = this.broadcasterEfficiencyMultiplier || 1.0;         // 主播紧急加速
     const eff666Boost      = this.efficiency666Bonus || 1.0;                      // 666弹幕加成
-    const totalMult        = Math.min(3.0, playerBonus * globalBoost * broadcasterBoost * eff666Boost);
+    const totalMult        = Math.min(3.0, levelMult * playerBonus * globalBoost * broadcasterBoost * eff666Boost);
+
+    // 阶3+（Lv.21+）白天采矿 10% 概率双倍产出（策划案 §30.3 阶3 专属被动）
+    // 适用 cmd 1/2/3（采食物/挖煤/采矿），不含 cmd=4 添柴
+    const workerTier = this._getWorkerTier(playerId);
+    const isMiningCmd = (commandId === 1 || commandId === 2 || commandId === 3);
+    const doubleMult = (workerTier >= 3 && this.state === 'day' && isMiningCmd && Math.random() < 0.10) ? 2 : 1;
 
     // 工作效果：每次评论小幅增加资源（基础值 × 综合倍率）
     switch (commandId) {
       case 1: // 采食物（丰收事件额外加成）
-        this.food = Math.min(2000, this.food + Math.round(5 * totalMult * (this.foodBonus || 1.0)));
+        this.food = Math.min(2000, this.food + Math.round(5 * totalMult * (this.foodBonus || 1.0) * doubleMult));
         break;
       case 2: // 挖煤
-        this.coal = Math.min(1500, this.coal + Math.round(3 * totalMult));
+        this.coal = Math.min(1500, this.coal + Math.round(3 * totalMult * doubleMult));
         break;
       case 3: // 采矿（矿脉事件额外加成）
-        this.ore = Math.min(800, this.ore + Math.round(2 * totalMult * (this.oreBonus || 1.0)));
+        this.ore = Math.min(800, this.ore + Math.round(2 * totalMult * (this.oreBonus || 1.0) * doubleMult));
         break;
       case 4: // 添柴升温：每次+3℃（策划案要求），消耗1煤炭
         this.furnaceTemp = Math.min(this.maxTemp, this.furnaceTemp + Math.round(3 * totalMult));
@@ -889,7 +980,7 @@ class SurvivalGameEngine {
       // case 5 (修城门) 已从策划案 v2.0 移除
     }
 
-    this._trackContribution(playerId, 1); // 工作贡献值=1
+    this._trackContribution(playerId, 1, 'barrage'); // 工作贡献值=1（弹幕来源，阶2被动 ×1.5）
   }
 
   // ==================== 内部：怪物追踪 ====================
@@ -902,8 +993,10 @@ class SurvivalGameEngine {
     const cfg = getWaveConfig(day);
 
     // 难度倍率（未设置时默认 1.0）
-    const hpMult  = this._monsterHpMult  || 1.0;
-    const cntMult = this._monsterCntMult || 1.0;
+    // §30.6 动态难度叠加：HP 基础难度 × 动态难度（Hard 封顶+25%，Normal/Easy 封顶+50%）
+    // TODO §30.6：若未来加入随机 Hard Night 事件，HP 加成取 max(_dynamicHpMult, hardNightMult)
+    const hpMult  = (this._monsterHpMult  || 1.0) * (this._dynamicHpMult  || 1.0);
+    const cntMult = (this._monsterCntMult || 1.0) * (this._dynamicCountMult || 1.0);
 
     // 普通怪
     if (cfg.normal) {
@@ -969,7 +1062,16 @@ class SurvivalGameEngine {
 
     if (!target) return;
 
-    const damage = 10; // 基础攻击伤害
+    // 基础攻击伤害 × 等级攻击系数（§30 每级 +0.8%）
+    const atkMult = this._getWorkerLevelAtkMult(secOpenId);
+    let damage = Math.round(10 * atkMult);
+
+    // 阶5+ 20% 概率重击（伤害 ×2）策划案 §30.3
+    const attackerTier = this._getWorkerTier(secOpenId);
+    if (attackerTier >= 5 && Math.random() < 0.20) {
+      damage *= 2;
+    }
+
     target.currentHp -= damage;
 
     // 贡献奖励（攻击命中）
@@ -996,8 +1098,21 @@ class SurvivalGameEngine {
       const killScore = target.type === 'normal' ? 20 :
                         target.type === 'elite'  ? 50 : 200;
       this._addScore(secOpenId, nickname, killScore);
+      // 阶7+ 击杀怪物贡献值 ×2（策划案 §30.3 阶7 专属被动）：再补一份贡献
+      // 仅影响 contributions/_lifetimeContrib，不重复加 scorePool（scorePool 反映游戏产出不按身份倍增）
+      if (attackerTier >= 7) {
+        this._addScore(secOpenId, nickname, killScore);
+      }
       // 积分池：击杀得分入池
       this.scorePool += killScore;
+
+      // 阶8+ 吸血：击杀怪物回 10HP（策划案 §30.3）
+      if (attackerTier >= 8 && this._workerHp[secOpenId] && !this._workerHp[secOpenId].isDead) {
+        const w = this._workerHp[secOpenId];
+        const heal = 10;
+        w.hp = Math.min(w.maxHp, w.hp + heal);
+        this._broadcastWorkerHp();
+      }
 
       this._broadcast({
         type: 'monster_died',
@@ -1107,9 +1222,9 @@ class SurvivalGameEngine {
   _spawnWave(cfg, day, waveIndex) {
     if (this.state !== 'night') return;
 
-    // 生成数量随天数递增，并应用难度倍率
+    // 生成数量随天数递增，应用基础难度倍率 + §30.6 动态难度数量加成
     const baseCnt = cfg.baseCount + Math.floor((day - 1) * 0.5);
-    const count   = Math.max(1, Math.round(baseCnt * (this._monsterCntMult || 1.0)));
+    const count   = Math.max(1, Math.round(baseCnt * (this._monsterCntMult || 1.0) * (this._dynamicCountMult || 1.0)));
 
     const sides = ['left', 'right', 'top', 'all'];
     const spawnSide = sides[Math.floor(Math.random() * sides.length)];
@@ -1133,14 +1248,47 @@ class SurvivalGameEngine {
       // 每个存活矿工平均承担伤害（至少1点，避免小伤害完全跳过矿工直打城门）
       const damagePerWorker = Math.max(1, Math.floor(totalDamage / aliveWorkers.length));
       for (const [pid, w] of aliveWorkers) {
+        // §30.3 阶6 15% 格挡（本次伤害归零）
+        if (this._calcWorkerBlock(pid)) {
+          // 格挡成功：不扣HP，不消耗 remainingDamage（视为防御完全抵挡）
+          this._broadcast({
+            type: 'worker_blocked',
+            data: { playerId: pid, playerName: this._getPlayerName(pid) }
+          });
+          continue;
+        }
+
         const actualDmg = Math.min(w.hp, damagePerWorker);
         w.hp -= actualDmg;
         remainingDamage -= actualDmg;
 
         if (w.hp <= 0) {
+          // §30.3 阶10 每晚1次免死：回复至 25% maxHp（策划案 §30.3 "回复至25% HP + 10s 50%减伤护盾"）
+          // MVP：不实现减伤护盾（TODO）
+          if (this._getWorkerTier(pid) >= 10 && !this._legendReviveUsed[pid]) {
+            this._legendReviveUsed[pid] = true;
+            const maxHp = this._getWorkerMaxHp(pid);
+            w.hp = Math.ceil(maxHp * 0.25);
+            w.isDead = false;
+            w.respawnAt = 0;
+            this._broadcast({
+              type: 'legend_revive_triggered',
+              data: {
+                playerId: pid,
+                playerName: this._getPlayerName(pid),
+              }
+            });
+            console.log(`[SurvivalEngine] Legend revive: ${this._getPlayerName(pid)} saved from death (${w.hp}/${maxHp} HP)`);
+            // TODO §30.3: 10s 50% 减伤护盾，MVP 暂不实现
+            continue; // 跳过正常死亡逻辑
+          }
+
           w.hp = 0;
           w.isDead = true;
-          w.respawnAt = Date.now() + this._workerRespawnMs;
+          // §30 矿工复活秒数按阶段（阶4+ 20s，否则 30s）
+          const respawnSec = this._getWorkerRespawnSec(pid);
+          const respawnMs  = respawnSec * 1000;
+          w.respawnAt = Date.now() + respawnMs;
 
           // 广播矿工死亡
           this._broadcast({
@@ -1148,12 +1296,12 @@ class SurvivalGameEngine {
             timestamp: Date.now(),
             data: { playerId: pid, respawnAt: w.respawnAt }
           });
-          console.log(`[SurvivalEngine] Worker ${pid} died, respawn at +${this._workerRespawnMs/1000}s`);
+          console.log(`[SurvivalEngine] Worker ${pid} died, respawn at +${respawnSec}s (tier=${this._getWorkerTier(pid)})`);
 
           // 自动定时复活（若天亮先到则由 _reviveAllWorkers 处理）
           const respawnTimer = setTimeout(() => {
             if (this._workerHp[pid]?.isDead) this._reviveWorker(pid);
-          }, this._workerRespawnMs);
+          }, respawnMs);
           this._waveTimers.push(respawnTimer);
         }
       }
@@ -1314,11 +1462,162 @@ class SurvivalGameEngine {
     });
   }
 
+  // ==================== 内部：矿工成长系统（策划案 §30）====================
+
+  /** 阶段（1~10），派生自 `_playerLevel` */
+  _getWorkerTier(playerId) {
+    const lv = this._playerLevel[playerId] || 1;
+    return Math.ceil(lv / 10);
+  }
+
+  /** 等级效率系数（每级 +0.8%，Lv.100≈+79%），乘入 _applyWorkEffect */
+  _getWorkerLevelEffMult(playerId) {
+    const lv = this._playerLevel[playerId] || 1;
+    return 1 + (lv - 1) * 0.008;
+  }
+
+  /** 等级攻击系数（每级 +0.8%），乘入 _handleAttack 伤害 */
+  _getWorkerLevelAtkMult(playerId) {
+    const lv = this._playerLevel[playerId] || 1;
+    return 1 + (lv - 1) * 0.008;
+  }
+
+  /** 等级决定的最大HP（基础100 + 每级+3） */
+  _getWorkerMaxHp(playerId) {
+    const lv = this._playerLevel[playerId] || 1;
+    return 100 + (lv - 1) * 3;
+  }
+
+  /** 矿工复活秒数（阶4+ 20s，否则 30s） */
+  _getWorkerRespawnSec(playerId) {
+    const tier = this._getWorkerTier(playerId);
+    // TODO §30.13: 加入 hasHospital 减时 15s（§37 建造系统落地后接入）
+    return tier >= 4 ? 20 : 30;
+  }
+
+  /** 阶6 矿工 15% 概率格挡（本次伤害归零） */
+  _calcWorkerBlock(playerId) {
+    const tier = this._getWorkerTier(playerId);
+    return tier >= 6 && Math.random() < 0.15;
+  }
+
+  /** 玩家名（排行榜/贡献表/supporters 三层回退） */
+  _getPlayerName(playerId) {
+    if (!playerId) return 'Unknown';
+    if (this.playerNames && this.playerNames[playerId]) return this.playerNames[playerId];
+    // TODO §33 助威模式：若有 _supporters Map，亦可 fallback
+    return playerId;
+  }
+
+  /**
+   * 等级检查（每次 _trackContribution 末尾调用）：
+   * 遍历 100→1，找到最高符合 `_lifetimeContrib[playerId]` 的等级，
+   * 若跨阶段（tier 上升）则自动切换到新阶段皮肤并广播 `worker_level_up`。
+   * 阶内升级（tier 未变）仅更新 `_playerLevel`，不播报公告（策划案 §30.8 防刷屏）。
+   */
+  _checkLevelUp(playerId) {
+    if (!playerId) return;
+    const lc  = this._lifetimeContrib[playerId] || 0;
+    const cur = this._playerLevel[playerId]     || 1;
+    let newLevel = 1;
+    for (let lv = 100; lv >= 1; lv--) {
+      const tier = Math.floor((lv - 1) / 10);
+      const lvInTier = ((lv - 1) % 10) + 1;
+      const needed = TIER_THRESHOLDS[tier] + (lvInTier - 1) * TIER_COST_PER_LV[tier];
+      if (lc >= needed) { newLevel = lv; break; }
+    }
+    if (newLevel <= cur) return;
+    this._playerLevel[playerId] = newLevel;
+    const newTier = Math.ceil(newLevel / 10);
+    const oldTier = Math.ceil(cur / 10);
+    if (newTier > oldTier) {
+      // 跨阶段：自动换肤（不受 60s 冷却限制）+ 广播
+      this._playerSkinId[playerId] = TIER_SKINS[newTier - 1];
+      this._broadcast({
+        type: 'worker_level_up',
+        data: {
+          playerId,
+          playerName: this._getPlayerName(playerId),
+          newLevel,
+          newTier,
+          skinId: TIER_SKINS[newTier - 1],
+        }
+      });
+      console.log(`[SurvivalEngine] Level up: ${this._getPlayerName(playerId)} → Lv.${newLevel} 阶${newTier} skin=${TIER_SKINS[newTier - 1]}`);
+    }
+  }
+
+  /**
+   * 当前场上/参与过贡献的所有玩家平均等级（§30.6 动态难度统计口径）。
+   * 含 12 人 WorkerPool 之外的 supporters（§33 助威模式，若已实现）。
+   */
+  _getAverageLevel() {
+    const ids = new Set(Object.keys(this.contributions));
+    // TODO §33 助威模式：合并 this._supporters 的 key
+    if (this._supporters && typeof this._supporters.keys === 'function') {
+      for (const id of this._supporters.keys()) ids.add(id);
+    }
+    if (ids.size === 0) return 0;
+    let total = 0;
+    for (const id of ids) total += (this._playerLevel[id] || 1);
+    return total / ids.size;
+  }
+
+  /**
+   * 动态难度更新（策划案 §30.6），每次进入夜晚调一次。
+   * 平均等级越高，怪物 HP/数量 越强；Hard 难度下动态加成封顶+25%。
+   */
+  _updateDynamicDifficulty() {
+    const avg = this._getAverageLevel();
+    const isHard = this._difficulty === 'hard';
+    if (avg < 20) {
+      this._dynamicHpMult = 1.0;
+      this._dynamicCountMult = 1.0;
+    } else if (avg < 40) {
+      this._dynamicHpMult    = isHard ? 1.10 : 1.15;
+      this._dynamicCountMult = 1.0;
+    } else if (avg < 60) {
+      this._dynamicHpMult    = isHard ? 1.20 : 1.30;
+      this._dynamicCountMult = 1.10;
+    } else {
+      this._dynamicHpMult    = isHard ? 1.25 : 1.50;
+      this._dynamicCountMult = 1.20;
+    }
+    console.log(`[SurvivalEngine] Dynamic difficulty: avgLv=${avg.toFixed(1)} hpMult=${this._dynamicHpMult} countMult=${this._dynamicCountMult} diff=${this._difficulty}`);
+  }
+
   // ==================== 内部：工具 ====================
 
-  _trackContribution(playerId, amount) {
+  /**
+   * 追踪贡献值（本局排行榜用） + 同步累加 `_lifetimeContrib`（等级用） + 触发 `_checkLevelUp`。
+   * @param playerId
+   * @param amount
+   * @param source 'barrage' | 'gift' | 'combat' | undefined — 弹幕工作指令来源区分（阶2皮肤 ×1.5 弹幕贡献加成）
+   */
+  _trackContribution(playerId, amount, source) {
     if (!playerId) return;
-    this.contributions[playerId] = (this.contributions[playerId] || 0) + amount;
+
+    // 阶2 弹幕贡献 ×1.5（策划案 §30.3 阶2 专属被动）：仅作用于 contributions 与 _lifetimeContrib
+    let finalAmount = amount;
+    if (source === 'barrage' && this._getWorkerTier(playerId) >= 2) {
+      finalAmount = amount * 1.5;
+    }
+
+    this.contributions[playerId] = (this.contributions[playerId] || 0) + finalAmount;
+
+    // ── §30 新玩家追赶加速（×3 仅作用于 _lifetimeContrib，contributions 不受影响）─────
+    // 策划案 §30.8：只要 `_lifetimeContrib < 100` 就持续 ×3（覆盖完整"追赶期"），
+    // 直到累计满 100 后自动回归 ×1；不影响 contributions（排行榜公平）。
+    // TODO §30.4：每日衰减（UTC+8 00:00，`newLevel = floor(currentLevel × 0.95)` / 活跃 ×0.975）
+    //   —— MVP 未实现，等 §30 持久化（WeeklyRankingStore 扩展）落地后再加日重置定时器。
+    const currentLc   = this._lifetimeContrib[playerId] || 0;
+    const catchUpMult = (currentLc < 100 && finalAmount > 0) ? 3 : 1;
+    this._lifetimeContrib[playerId] = currentLc + finalAmount * catchUpMult;
+    // 首次玩家初始等级为 Lv.1
+    if (this._playerLevel[playerId] == null) this._playerLevel[playerId] = 1;
+    // 等级检查 + 跨阶广播
+    this._checkLevelUp(playerId);
+
     // 防抖：贡献变化后 1.5s 推送实时榜（避免每条弹幕都广播）
     this._scheduleLiveRankingBroadcast();
   }
@@ -1348,10 +1647,11 @@ class SurvivalGameEngine {
   }
 
   /**
-   * 给玩家加分（贡献值），同时可扩展为分离的积分系统
+   * 给玩家加分（贡献值），同时可扩展为分离的积分系统。
+   * 攻击/击杀来源标记为 'combat'，不触发 §30 阶2 弹幕 ×1.5 加成。
    */
   _addScore(playerId, playerName, amount) {
-    this._trackContribution(playerId, amount);
+    this._trackContribution(playerId, amount, 'combat');
   }
 
   _buildRankings() {
