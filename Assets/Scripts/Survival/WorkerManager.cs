@@ -653,6 +653,94 @@ namespace DrscfZ.Survival
             WorkerController._fireWorkerCount = 0;
         }
 
+        // ==================== §38 探险系统（🆕 v1.27）====================
+
+        /// <summary>
+        /// 服务器通知矿工出发探险（expedition_started）：
+        /// - 按 playerId 查对应 Worker；找不到时按 workerIdx 兜底
+        /// - 隐藏矿工 GameObject（MVP 简化：SetActive(false)；TODO 未来接入 WorkerVisual 淡出动画）
+        /// - 触发 ExpeditionMarkerUI.AddMarker 在地图边缘显示倒计时图标
+        /// - 释放该 Worker 占用的任何工位槽，避免其他 Worker 被阻塞
+        /// </summary>
+        public void HandleExpeditionStarted(ExpeditionStartedData data)
+        {
+            if (data == null) return;
+
+            var worker = FindWorkerByPlayerId(data.playerId);
+            if (worker == null)
+            {
+                // 兜底：按 workerIdx 查 _activeWorkers
+                if (data.workerIdx >= 0 && data.workerIdx < _activeWorkers.Count)
+                    worker = _activeWorkers[data.workerIdx];
+            }
+            if (worker == null)
+            {
+                Debug.LogWarning($"[WorkerManager] HandleExpeditionStarted: playerId={data.playerId} workerIdx={data.workerIdx} 未找到对应Worker");
+                // 即便未找到 Worker 也让地图边缘显示 marker（状态可视化优先）
+                UI.ExpeditionMarkerUI.Instance?.AddMarker(data.playerId, data.returnsAt);
+                return;
+            }
+
+            // 释放该 Worker 占用的槽位（探险期间不能再被分配工作）
+            if (_workerToSlot.TryGetValue(worker, out int slotIdx)
+                && _stationSlots != null && slotIdx >= 0 && slotIdx < _stationSlots.Length)
+            {
+                _stationSlots[slotIdx].occupyingPlayerId = "";
+            }
+            _workerToSlot.Remove(worker);
+
+            // 取消当前正在执行的工作/移动协程，避免探险期间仍在移动
+            worker.ResetWorker();
+
+            // MVP 简化：直接隐藏 GameObject；TODO 未来使用 WorkerVisual.FadeOut(0.3f) 做 Alpha 渐变
+            worker.gameObject.SetActive(false);
+
+            // 在地图边缘添加探险 marker
+            UI.ExpeditionMarkerUI.Instance?.AddMarker(data.playerId, data.returnsAt);
+
+            Debug.Log($"[WorkerManager] HandleExpeditionStarted: {data.playerId} 隐藏矿工模型，ETA={data.returnsAt}");
+        }
+
+        /// <summary>
+        /// 服务器通知矿工探险返回（expedition_returned）：
+        /// - 按 playerId 查对应 Worker
+        /// - 恢复矿工 GameObject 激活状态（若之前被 HandleExpeditionStarted 隐藏）
+        /// - 若 outcome.died=true，立即切 Dead 状态（服务端会再独立发 worker_died 兜底）
+        /// - 清除地图边缘的探险 marker
+        /// </summary>
+        public void HandleExpeditionReturned(ExpeditionReturnedData data)
+        {
+            if (data == null) return;
+
+            // 无论 Worker 能否找到都先清除 UI marker
+            UI.ExpeditionMarkerUI.Instance?.RemoveMarker(data.playerId);
+
+            var worker = FindWorkerByPlayerId(data.playerId);
+            if (worker == null)
+            {
+                Debug.LogWarning($"[WorkerManager] HandleExpeditionReturned: playerId={data.playerId} 未找到对应Worker");
+                return;
+            }
+
+            // 恢复显示（若 HandleExpeditionStarted 曾 SetActive(false)）
+            if (!worker.gameObject.activeSelf)
+                worker.gameObject.SetActive(true);
+
+            // outcome.died=true → 立即切 Dead 状态（30s 复活由 §2.2 既有路径）
+            if (data.outcome != null && data.outcome.died)
+            {
+                // 返程抵达即 Dead：respawnAt=0 表示不计时倒计时（由服务端的 worker_died 覆盖具体数值）
+                worker.EnterDead(0L);
+                Debug.Log($"[WorkerManager] HandleExpeditionReturned: {data.playerId} 外域阵亡，进入 Dead 状态");
+            }
+            else
+            {
+                // 正常归来 → 重置到 Idle（保证触发 ReturnHomeCoroutine 回待机圈）
+                worker.ResetWorker();
+                Debug.Log($"[WorkerManager] HandleExpeditionReturned: {data.playerId} 平安归来，outcome={data.outcome?.type}");
+            }
+        }
+
         // ==================== 助威模式 §33（🆕 v1.27）====================
 
         /// <summary>

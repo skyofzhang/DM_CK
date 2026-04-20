@@ -380,6 +380,69 @@ namespace DrscfZ.Survival
         public long       expiresAt;   // Unix ms，到期服务端自动视作弃权
     }
 
+    // ==================== §38 探险系统（Expedition System，🆕 v1.27）====================
+
+    /// <summary>探险开始通知（type=expedition_started）
+    /// 服务端广播：某矿工已出发探险，客户端隐藏其模型并在地图边缘显示小图标。</summary>
+    [Serializable]
+    public class ExpeditionStartedData
+    {
+        public string playerId;
+        public int    workerIdx;     // _activeWorkers 中该 Worker 的索引（兜底用，首选按 playerId 查）
+        public string expeditionId;
+        public long   returnsAt;     // Unix ms（未考虑 bandit_raid / 加速回程的最初 ETA）
+    }
+
+    /// <summary>探险外域事件（type=expedition_event）
+    /// 探险到达 40s 时服务端随机触发，15s 时限内由主播决议（trader_caravan）或直接结算。</summary>
+    [Serializable]
+    public class ExpeditionEventData
+    {
+        public string   expeditionId;
+        public string   eventId;     // 'lost_cache'/'wild_beasts'/'trader_caravan'/'meteor_fragment'/'bandit_raid'/'mystic_rune'
+        public long     eventEndsAt; // Unix ms（= 发送时刻 + 15s）
+        public string[] options;     // 仅 trader_caravan 非空（['accept','cancel']），其他 eventId 序列化为 null / 空数组
+    }
+
+    /// <summary>探险返回通知（type=expedition_returned）
+    /// 35s 返程结束后广播，客户端恢复矿工模型（或切 Dead 状态）。</summary>
+    [Serializable]
+    public class ExpeditionReturnedData
+    {
+        public string            playerId;
+        public string            expeditionId;
+        public ExpeditionOutcome outcome;
+    }
+
+    /// <summary>探险结算详情（ExpeditionReturnedData.outcome 子对象）</summary>
+    [Serializable]
+    public class ExpeditionOutcome
+    {
+        public string         type;          // 'success' / 'died' / 'empty'
+        public ResourceBundle resources;     // 可为 null（empty/died 时）
+        public int            contributions; // 未产生贡献时为 0
+        public bool           died;
+    }
+
+    /// <summary>协议层资源三元组 {food, coal, ore}（§38 首次定义）</summary>
+    [Serializable]
+    public class ResourceBundle
+    {
+        public int food;
+        public int coal;
+        public int ore;
+    }
+
+    /// <summary>探险拒绝通知（type=expedition_failed）
+    /// 服务端拒绝 send/recall 时返回，客户端显示跑马灯提示原因。</summary>
+    [Serializable]
+    public class ExpeditionFailedData
+    {
+        public string playerId;
+        public string reason;      // 'max_concurrent'/'wrong_phase'/'worker_dead'/'duplicate'/'supporter_not_allowed'/'season_ending'/'feature_locked'
+        public int    unlockDay;   // 仅 reason='feature_locked' 时有效；其他场景序列化为 0
+    }
+
     // ==================== 主播排行榜（type=streamer_ranking）====================
 
     /// <summary>主播排行榜单条记录</summary>

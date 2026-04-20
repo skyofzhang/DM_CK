@@ -51,5 +51,13 @@ namespace DrscfZ.Survival
         public const string BroadcasterTraderOffer         = "broadcaster_trader_offer";
         // C→S 消息（客户端发送时直接用字面量，无需此常量解析）：
         //   broadcaster_roulette_spin / broadcaster_roulette_apply / broadcaster_trader_accept
+
+        // ----- §38 探险系统 -----
+        public const string ExpeditionCommand   = "expedition_command";   // C→S：主播/观众派出或召回探险
+        public const string ExpeditionStarted   = "expedition_started";   // S→C：出发广播
+        public const string ExpeditionEvent     = "expedition_event";     // S→C：外域事件推送
+        public const string ExpeditionEventVote = "expedition_event_vote"; // C→S：主播对 trader_caravan 的接受/取消
+        public const string ExpeditionReturned  = "expedition_returned";  // S→C：结算返回
+        public const string ExpeditionFailed    = "expedition_failed";    // S→C：send/recall 被拒
     }
 }
