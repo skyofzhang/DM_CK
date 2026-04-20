@@ -83,6 +83,12 @@ namespace DrscfZ.Survival
         public event Action<RouletteEffectEndedData> OnRouletteEffectEnded;
         public event Action<TraderOfferData>         OnTraderOffer;
 
+        // §38 探险系统
+        public event Action<ExpeditionStartedData>  OnExpeditionStarted;
+        public event Action<ExpeditionEventData>    OnExpeditionEvent;
+        public event Action<ExpeditionReturnedData> OnExpeditionReturned;
+        public event Action<ExpeditionFailedData>   OnExpeditionFailed;
+
         // 贡献追踪
         private System.Collections.Generic.Dictionary<string, float> _contributions
             = new System.Collections.Generic.Dictionary<string, float>();
@@ -369,6 +375,24 @@ namespace DrscfZ.Survival
                 case "broadcaster_trader_offer":
                     var tof = JsonUtility.FromJson<TraderOfferData>(dataJson);
                     if (tof != null) HandleTraderOffer(tof);
+                    break;
+
+                // ----- §38 探险系统 -----
+                case "expedition_started":
+                    var expS = JsonUtility.FromJson<ExpeditionStartedData>(dataJson);
+                    if (expS != null) HandleExpeditionStarted(expS);
+                    break;
+                case "expedition_event":
+                    var expE = JsonUtility.FromJson<ExpeditionEventData>(dataJson);
+                    if (expE != null) HandleExpeditionEvent(expE);
+                    break;
+                case "expedition_returned":
+                    var expR = JsonUtility.FromJson<ExpeditionReturnedData>(dataJson);
+                    if (expR != null) HandleExpeditionReturned(expR);
+                    break;
+                case "expedition_failed":
+                    var expF = JsonUtility.FromJson<ExpeditionFailedData>(dataJson);
+                    if (expF != null) HandleExpeditionFailed(expF);
                     break;
             }
         }
@@ -1236,6 +1260,146 @@ namespace DrscfZ.Survival
         {
             OnTraderOffer?.Invoke(data);
             Debug.Log($"[SGM] broadcaster_trader_offer: expiresAt={data.expiresAt}");
+        }
+
+        // ==================== §38 探险系统（🆕 v1.27）====================
+
+        /// <summary>
+        /// 探险出发：路由到 WorkerManager 隐藏矿工模型、ExpeditionMarkerUI 显示地图边缘图标；
+        /// 跑马灯提示 "[玩家名] 出发探险"。
+        /// </summary>
+        private void HandleExpeditionStarted(ExpeditionStartedData data)
+        {
+            WorkerManager.Instance?.HandleExpeditionStarted(data);
+            OnExpeditionStarted?.Invoke(data);
+
+            string displayName = ResolveDisplayName(data.playerId);
+            UI.HorizontalMarqueeUI.Instance?.AddMessage(displayName, null, "出发探险！");
+            OnPlayerActivityMessage?.Invoke($"{displayName} 出发探险！");
+            Debug.Log($"[SGM] expedition_started: {data.playerId} workerIdx={data.workerIdx} expeditionId={data.expeditionId} returnsAt={data.returnsAt}");
+        }
+
+        /// <summary>
+        /// 探险外域事件：UI 层显示事件图标/提示；trader_caravan 且有 options 时弹 TraderCaravanUI。
+        /// 非 trader_caravan 的事件仅推到 ExpeditionMarkerUI.ShowEvent 做气泡提示（MVP：Log 降级）。
+        /// </summary>
+        private void HandleExpeditionEvent(ExpeditionEventData data)
+        {
+            UI.ExpeditionMarkerUI.Instance?.ShowEvent(data);
+            OnExpeditionEvent?.Invoke(data);
+
+            // trader_caravan 且 options 非空 → 显示接受/取消面板
+            if (data.eventId == "trader_caravan" && data.options != null && data.options.Length > 0)
+            {
+                if (UI.TraderCaravanUI.Instance != null)
+                {
+                    UI.TraderCaravanUI.Instance.Show(data);
+                }
+                else
+                {
+                    // 降级：TraderCaravanUI 未绑定时用 AnnouncementUI 提示（主播仍可走弹幕路径）
+                    UI.AnnouncementUI.Instance?.ShowAnnouncement(
+                        "商队交易",
+                        "主播：弹幕 \"accept 接受\" / \"cancel 拒绝\"",
+                        new Color(1f, 0.85f, 0.1f),
+                        4f);
+                    Debug.LogWarning("[SGM] expedition_event trader_caravan：TraderCaravanUI.Instance 为 null，已降级到 AnnouncementUI");
+                }
+            }
+
+            Debug.Log($"[SGM] expedition_event: expeditionId={data.expeditionId} eventId={data.eventId} eventEndsAt={data.eventEndsAt} options=[{(data.options == null ? "" : string.Join(",", data.options))}]");
+        }
+
+        /// <summary>
+        /// 探险返回：路由到 WorkerManager 恢复矿工显示（或切 Dead）；跑马灯显示 outcome 文案。
+        /// </summary>
+        private void HandleExpeditionReturned(ExpeditionReturnedData data)
+        {
+            WorkerManager.Instance?.HandleExpeditionReturned(data);
+            OnExpeditionReturned?.Invoke(data);
+
+            string displayName = ResolveDisplayName(data.playerId);
+            string outcomeText = FormatExpeditionOutcome(data.outcome);
+            UI.HorizontalMarqueeUI.Instance?.AddMessage(displayName, null, outcomeText);
+            OnPlayerActivityMessage?.Invoke($"{displayName} 探险归来：{outcomeText}");
+            Debug.Log($"[SGM] expedition_returned: {data.playerId} expeditionId={data.expeditionId} outcome.type={data.outcome?.type} died={data.outcome?.died}");
+        }
+
+        /// <summary>
+        /// 探险被拒：跑马灯 + 活动消息显示失败原因（本地化）。
+        /// </summary>
+        private void HandleExpeditionFailed(ExpeditionFailedData data)
+        {
+            OnExpeditionFailed?.Invoke(data);
+            string displayName = ResolveDisplayName(data.playerId);
+            string reasonText  = FormatExpeditionFailReason(data.reason, data.unlockDay);
+            UI.HorizontalMarqueeUI.Instance?.AddMessage(displayName, null, $"探险失败：{reasonText}");
+            OnPlayerActivityMessage?.Invoke($"{displayName} 探险失败：{reasonText}");
+            Debug.Log($"[SGM] expedition_failed: {data.playerId} reason={data.reason} unlockDay={data.unlockDay}");
+        }
+
+        /// <summary>
+        /// 格式化 outcome 文案：
+        ///   success → "获得 矿石80 煤炭50"
+        ///   died    → "不幸阵亡"
+        ///   empty   → "空手而归"
+        /// </summary>
+        private static string FormatExpeditionOutcome(ExpeditionOutcome outcome)
+        {
+            if (outcome == null) return "归来";
+            if (outcome.died)    return "外域阵亡";
+
+            if (outcome.type == "died")  return "外域阵亡";
+            if (outcome.type == "empty") return "空手而归";
+
+            // success: 组合 resources + contributions
+            var sb = new System.Text.StringBuilder();
+            if (outcome.resources != null)
+            {
+                if (outcome.resources.food > 0) sb.Append($"食物+{outcome.resources.food} ");
+                if (outcome.resources.coal > 0) sb.Append($"煤炭+{outcome.resources.coal} ");
+                if (outcome.resources.ore  > 0) sb.Append($"矿石+{outcome.resources.ore} ");
+            }
+            if (outcome.contributions > 0) sb.Append($"贡献+{outcome.contributions}");
+
+            string result = sb.ToString().Trim();
+            return string.IsNullOrEmpty(result) ? "归来" : $"获得 {result}";
+        }
+
+        /// <summary>探险失败原因枚举 → 中文描述（§38.5 表）</summary>
+        private static string FormatExpeditionFailReason(string reason, int unlockDay)
+        {
+            switch (reason)
+            {
+                case "max_concurrent":        return "同时探险上限 3 人";
+                case "wrong_phase":           return "只能在白天发起探险";
+                case "worker_dead":           return "矿工当前已阵亡";
+                case "duplicate":             return "该矿工已在探险中";
+                case "supporter_not_allowed": return "助威者无法派出探险";
+                case "season_ending":         return "赛季即将结束";
+                case "feature_locked":        return unlockDay > 0 ? $"功能未解锁（需第{unlockDay}天后）" : "功能未解锁";
+                default:                      return reason;
+            }
+        }
+
+        /// <summary>根据 playerId 从 WorkerManager 找出昵称；找不到则回显 id 缩写。</summary>
+        private static string ResolveDisplayName(string playerId)
+        {
+            if (string.IsNullOrEmpty(playerId)) return "匿名";
+            var wm = WorkerManager.Instance;
+            if (wm != null)
+            {
+                var workers = wm.ActiveWorkers;
+                if (workers != null)
+                {
+                    foreach (var w in workers)
+                    {
+                        if (w != null && w.PlayerId == playerId)
+                            return string.IsNullOrEmpty(w.PlayerName) ? playerId : w.PlayerName;
+                    }
+                }
+            }
+            return playerId;
         }
     }
 
