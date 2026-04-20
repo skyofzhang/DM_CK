@@ -335,6 +335,51 @@ namespace DrscfZ.Survival
         public string playerName;
     }
 
+    // ==================== §24.4 主播事件轮盘（Broadcaster Event Roulette，🆕 v1.27）====================
+
+    /// <summary>轮盘充能就绪通知（type=broadcaster_roulette_ready）</summary>
+    [Serializable]
+    public class RouletteReadyData
+    {
+        public long readyAt;    // Unix ms；-1 表示已就绪
+    }
+
+    /// <summary>轮盘抽卡结果（type=broadcaster_roulette_result）
+    /// 服务端已在 spin 时确定 cardId，客户端转轴动画仅为表演。
+    /// displayedCards 固定长度 3，中间（index 1）为定格卡。</summary>
+    [Serializable]
+    public class RouletteResultData
+    {
+        public string   cardId;           // 定格卡 ID（elite_raid/time_freeze/double_contrib/mystery_trader/meteor_shower/aurora）
+        public string[] displayedCards;   // 长度 3，展示给主播的 3 张卡
+        public long     spunAt;           // spin 发生时刻（Unix ms，用于兜底 autoApplyAt 计算）
+    }
+
+    /// <summary>轮盘效果结束通知（type=broadcaster_roulette_effect_ended）</summary>
+    [Serializable]
+    public class RouletteEffectEndedData
+    {
+        public string cardId;
+    }
+
+    /// <summary>神秘商人交易卡（2 选 1 中单张）</summary>
+    [Serializable]
+    public class TraderCard
+    {
+        public int costFood;  public int costCoal;  public int costOre;
+        public int gainFood;  public int gainCoal;  public int gainOre;
+        public int gainGateHp;
+    }
+
+    /// <summary>神秘商人交易邀约（type=broadcaster_trader_offer）——30s 限时二选一，超时自动弃权。</summary>
+    [Serializable]
+    public class TraderOfferData
+    {
+        public TraderCard cardA;
+        public TraderCard cardB;
+        public long       expiresAt;   // Unix ms，到期服务端自动视作弃权
+    }
+
     // ==================== 主播排行榜（type=streamer_ranking）====================
 
     /// <summary>主播排行榜单条记录</summary>

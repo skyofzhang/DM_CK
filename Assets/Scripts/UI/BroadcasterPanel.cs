@@ -38,6 +38,9 @@ namespace DrscfZ.UI
         [SerializeField] private Image    _eventBtnBg;
         [SerializeField] private TMP_Text _eventCdText;
 
+        [Header("🎰 主播事件轮盘按钮（§24.4 🆕 v1.27，委托给 RouletteUI）")]
+        [SerializeField] private Button   _rouletteButton;
+
         // ==================== 颜色常量 ====================
 
         // ⚡ 按钮：可用/CD两种状态背景色
@@ -83,6 +86,8 @@ namespace DrscfZ.UI
                 _boostBtn.onClick.AddListener(OnBoostClicked);
             if (_eventBtn != null)
                 _eventBtn.onClick.AddListener(OnEventClicked);
+            if (_rouletteButton != null)
+                _rouletteButton.onClick.AddListener(OnRouletteClicked);
 
             // 初始化UI状态
             ResetBoostBtn();
@@ -218,6 +223,18 @@ namespace DrscfZ.UI
             _eventCd = EVENT_CD;
             SetEventCdState(true);
             Debug.Log("[BroadcasterPanel] 🌊 trigger_event 已发送");
+        }
+
+        /// <summary>
+        /// 🎰 主播事件轮盘（§24.4）— 委托给 RouletteUI。
+        /// 充能状态/就绪/转轴动画全部在 RouletteUI 内部处理；本按钮仅是入口。
+        /// 按钮的"就绪发光/充能灰蓝/剩余秒数"由 RouletteUI 直接操作其内部 btnSpin 引用，
+        /// 若 _rouletteButton 与 RouletteUI.btnSpin 为同一 GameObject，逻辑完全重合；
+        /// 否则（MVP 场景预创建可能仅有入口按钮）OnClick 等同 Spin 请求。
+        /// </summary>
+        private void OnRouletteClicked()
+        {
+            RouletteUI.Instance?.OpenPanel();
         }
 
         // ==================== broadcaster_effect 全屏反馈 ====================
