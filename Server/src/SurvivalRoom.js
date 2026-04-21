@@ -21,8 +21,13 @@ class SurvivalRoom {
   /**
    * @param {string} roomId    - 房间ID（通常=抖音直播间ID）
    * @param {object} gameConfig - 来自 config/default.json
+   * @param {TribeWarManager} [tribeWarMgr]      §35 单例
+   * @param {object} [globalServices]            §36 全局服务注入
+   * @param {GlobalClock}      [globalServices.globalClock]
+   * @param {SeasonManager}    [globalServices.seasonMgr]
+   * @param {RoomPersistence}  [globalServices.roomPersistence]
    */
-  constructor(roomId, gameConfig, tribeWarMgr = null) {
+  constructor(roomId, gameConfig, tribeWarMgr = null, globalServices = null) {
     this.roomId       = roomId;
     this.gameConfig   = gameConfig;
     this.createdAt    = Date.now();
@@ -45,13 +50,26 @@ class SurvivalRoom {
       (msg) => this.broadcast(msg)
     );
 
-    // §35 跨直播间攻防战：注入 TribeWarManager 单例 + room 反向引用
-    //   未注入（tribeWarMgr == null）时,tribeWar 相关逻辑 no-op
+    // §35 / §36 注入
     this.streamerName = roomId;  // MVP:以 roomId 作展示名,真实主播名由抖音 API 另行同步
-    if (tribeWarMgr && typeof this.survivalEngine.setRoomContext === 'function') {
-      this.survivalEngine.setRoomContext(this, tribeWarMgr);
-    }
     this.tribeWarMgr = tribeWarMgr;
+    const extras = globalServices || {};
+    this.globalClock     = extras.globalClock     || null;
+    this.seasonMgr       = extras.seasonMgr       || null;
+    this.roomPersistence = extras.roomPersistence || null;
+
+    if (typeof this.survivalEngine.setRoomContext === 'function') {
+      this.survivalEngine.setRoomContext(this, tribeWarMgr, {
+        globalClock:     this.globalClock,
+        seasonMgr:       this.seasonMgr,
+        roomPersistence: this.roomPersistence,
+      });
+    }
+
+    // §36 GlobalClock：注册到全局时钟（tick 每秒 broadcast world_clock_tick；phase 切换触发 engine 入口）
+    if (this.globalClock && typeof this.globalClock.registerRoom === 'function') {
+      this.globalClock.registerRoom(this);
+    }
 
     // 本周贡献榜持久化存储（每周日23:59→周一00:00 UTC+8 自动重置）
     this.weeklyRanking = new WeeklyRankingStore(roomId);
@@ -188,6 +206,17 @@ class SurvivalRoom {
     this._cancelPauseTimer();
     this._stopSimulation();
     this.survivalEngine.pause();
+
+    // §36 销毁前保存一次快照
+    if (this.roomPersistence) {
+      try { this.roomPersistence.save(this); } catch (e) { /* ignore */ }
+    }
+
+    // §36 从 GlobalClock 注销
+    if (this.globalClock && typeof this.globalClock.unregisterRoom === 'function') {
+      try { this.globalClock.unregisterRoom(this); } catch (e) { /* ignore */ }
+    }
+
     this.status = 'destroyed';
 
     for (const ws of this.clients) {
@@ -308,6 +337,10 @@ class SurvivalRoom {
         this.survivalEngine.startGame(data && data.difficulty ? data.difficulty : 'normal');
         break;
       case 'reset_game':
+        // §36 重置前保存一次（保留 fortressDay / 持久化字段）
+        if (this.roomPersistence) {
+          try { this.roomPersistence.save(this); } catch (e) { /* ignore */ }
+        }
         this._stopSimulation();
         this.survivalEngine.reset();
         break;
@@ -367,6 +400,10 @@ class SurvivalRoom {
 
       case 'end_game':
         // GM 手动结束游戏 → 强制触发失败结算
+        // §36 结束前保存一次（_enterSettlement 内部会再保存；此处双保险）
+        if (this.roomPersistence) {
+          try { this.roomPersistence.save(this); } catch (e) { /* ignore */ }
+        }
         this._stopSimulation();
         if (this.survivalEngine.state === 'day' || this.survivalEngine.state === 'night') {
           this.survivalEngine._enterSettlement('lose', 'manual');
