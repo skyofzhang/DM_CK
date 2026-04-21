@@ -12,6 +12,7 @@
  * 礼物 → 按策划案 §5.1 七种礼物 ID 分发效果，推送 survival_gift
  */
 
+const crypto = require('crypto');
 const { findGiftById, findGiftByPrice, getGift, getTierNumber } = require('./GiftConfig');
 
 // ==================== §36 全服同步 / §36.5.1 每日闯关上限 常量 ====================
@@ -85,6 +86,17 @@ const FROST_PULSE_INTERVAL_MS = 15000;
 const FROST_PULSE_RADIUS      = 8;
 const FROST_PULSE_DAMAGE      = 100;
 const FROST_PULSE_FREEZE_MS   = 2000;
+
+// ==================== §17.15 新手引导气泡（🆕 v1.27 待实现）====================
+// ONBOARDING_THROTTLE_MS：
+//   观众进房触发 B1–B3 气泡后的节流窗口，避免主播屏被新观众流 spam。
+//   策划案 §17.15 "触发规则"：`now - _lastOnboardingAt ≥ 300_000ms`（5 分钟）再触发下一轮。
+// ONBOARDING_REPLAY_WINDOW_MS：
+//   客户端 sync_state（断连重连/主动同步）时的补发窗口。落在 [_lastOnboardingAt, _lastOnboardingAt + 30_000]
+//   内沿用同一 sessionId 重发 show_onboarding_sequence，客户端靠 sessionId 幂等；超窗口不重发。
+//   默认 30 s（覆盖移动端弱网 4G/2G 重连延迟），可通过此常量调优。
+const ONBOARDING_THROTTLE_MS      = 300_000;
+const ONBOARDING_REPLAY_WINDOW_MS = 30_000;
 
 // ==================== §31 怪物多样性系统（Monster Variants） ====================
 // 第一/二/三阶段 variant：normal / rush / assassin / ice / summoner / guard / mini
@@ -618,6 +630,11 @@ class SurvivalGameEngine {
     this._dailyResetKey          = 0;      // 当前 dayKey（UTC+8 05:00 作为日切）
     this._dailyCapBlocked        = false;  // 达到 cap → 本 dayKey 后续 success 静默
 
+    // §17.15 新手引导气泡（内存变量，不持久化；服务端重启全房间重置为 0）
+    this._lastOnboardingAt        = 0;     // Unix ms，最近一次触发时间
+    this._lastOnboardingSessionId = null;  // 最近一次推送的 sessionId，供 sync_state 30s 补发窗口重发
+    this._onboardingDisabled      = false; // 主播"关闭引导"标志（本次房间会话级，reset 时清除）
+
     // FeatureFlags：§36.5.1 每日闯关上限默认启用
     if (!this.constructor._featureFlagsWarned) {
       this.constructor._featureFlagsWarned = true;
@@ -921,6 +938,11 @@ class SurvivalGameEngine {
 
     // F8: 无效指令提示去重每局重置 (策划案 §34 F8)
     this._shopInvalidCmdHintSent     = {};
+
+    // §17.15 新手引导：节流/disabled/sessionId 不跨局保留，新一局允许重新触发
+    this._lastOnboardingAt        = 0;
+    this._lastOnboardingSessionId = null;
+    this._onboardingDisabled      = false;
 
     this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
   }
@@ -4062,6 +4084,57 @@ class SurvivalGameEngine {
     if (cfg.cost.coal && this.coal < cfg.cost.coal) return false;
     if (cfg.cost.food && this.food < cfg.cost.food) return false;
     return true;
+  }
+
+  // ==================== §17.15 新手引导气泡 ====================
+
+  /**
+   * 抖音 `viewer_joined` 事件钩子的服务端判定入口。
+   * 满足 5 分钟节流 + 当前为 day/night + 未被主播关闭时，生成 sessionId 并广播 show_onboarding_sequence。
+   *
+   * 注意：此方法是**事件驱动**（由 viewer_joined 事件调用），严禁放到 setInterval 中轮询。
+   * 当前项目尚未接入抖音 viewer_joined SDK 事件，SurvivalRoom 里留了 'viewer_joined' case 占位；
+   * 抖音 SDK 接入时，将真实事件路由到该 case，本方法自动生效。
+   */
+  _maybeTriggerOnboarding() {
+    if (this._onboardingDisabled) return;
+    // idle / loading / settlement / recovery 等非游戏中的状态不触发
+    if (this.state !== 'day' && this.state !== 'night') return;
+
+    const now = Date.now();
+    if (now - this._lastOnboardingAt < ONBOARDING_THROTTLE_MS) return;
+
+    const sessionId = crypto.randomUUID();
+    this._lastOnboardingAt        = now;
+    this._lastOnboardingSessionId = sessionId;
+    this._broadcast({
+      type: 'show_onboarding_sequence',
+      data: { sessionId, priority: 2 }
+    });
+    console.log(`[SurvivalEngine] Onboarding sequence triggered (sessionId=${sessionId})`);
+  }
+
+  /**
+   * `sync_state` 联动：客户端断连重连 / 主动同步时，若节流窗口尚新（≤ 30s）且有 sessionId，
+   * 沿用原 sessionId 向该发起者 unicast 重发一次 show_onboarding_sequence；
+   * 客户端靠 sessionId 幂等，不会重播。
+   * 超窗口不重发；此方法只 unicast，不广播整房。
+   *
+   * @param {function} send - 单播发送函数 (msg) => void（通常为 SurvivalRoom 封装的 ws.send 包装）
+   */
+  _replayOnboardingIfInWindow(send) {
+    if (!this._lastOnboardingSessionId) return;
+    const now = Date.now();
+    if (now - this._lastOnboardingAt > ONBOARDING_REPLAY_WINDOW_MS) return;
+    try {
+      send({
+        type: 'show_onboarding_sequence',
+        timestamp: Date.now(),
+        data: { sessionId: this._lastOnboardingSessionId, priority: 2 }
+      });
+    } catch (e) {
+      console.warn(`[SurvivalEngine] Onboarding replay send error: ${e.message}`);
+    }
   }
 
   // ==================== 内部：广播 ====================

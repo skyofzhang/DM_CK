@@ -400,6 +400,16 @@ class SurvivalRoom {
       case 'sync_state':
         // 客户端请求重新同步当前游戏状态（用于"继续上一局"场景）
         this._sendStateToClient(ws);
+        // §17.15：若节流窗口尚新（≤ ONBOARDING_REPLAY_WINDOW_MS），
+        // 沿用同一 sessionId 给该客户端补发一次 show_onboarding_sequence（客户端幂等）
+        this.survivalEngine._replayOnboardingIfInWindow((msg) => {
+          try {
+            msg.roomId = this.roomId;
+            if (ws.readyState === 1) ws.send(JSON.stringify(msg));
+          } catch (e) {
+            console.warn(`[SurvivalRoom:${this.roomId}] onboarding replay send error: ${e.message}`);
+          }
+        });
         break;
       case 'heartbeat':
         try {
@@ -711,6 +721,21 @@ class SurvivalRoom {
         }
         break;
       }
+
+      // ==================== §17.15 新手引导气泡 ====================
+      // TODO: 抖音 SDK 观众进房事件接入后，由 SDK 路由到本 case（或直接在 SDK 回调里调 engine._maybeTriggerOnboarding()）。
+      // 目前仅占位：本地模拟 / GM 测试 / 客户端回放可主动发 viewer_joined 触发一轮 B1–B3 节流。
+      case 'viewer_joined':
+        this.survivalEngine._maybeTriggerOnboarding();
+        break;
+
+      case 'disable_onboarding_for_session':
+        // 主播"关闭引导"开关：仅房间创建者可发，非主播静默忽略（不回 failed）
+        if (this._isRoomCreator(ws)) {
+          this.survivalEngine._onboardingDisabled = true;
+          console.log(`[SurvivalRoom:${this.roomId}] Onboarding disabled for session by broadcaster`);
+        }
+        break;
 
       default:
         console.log(`[SurvivalRoom:${this.roomId}] Unknown client message: ${msgType}`);
