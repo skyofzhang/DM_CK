@@ -12,6 +12,14 @@ namespace DrscfZ.UI
     /// 生存结算UI - 3屏序列: A(结果) → B(数据) → C(MVP/Top3)
     /// 挂载到 Canvas/SurvivalSettlementPanel（初始 inactive）
     ///
+    /// 🆕 v1.26 永续模式（§16）：
+    ///   - 无胜利分支，`IsVictory` 恒为 false（接口保留防止下游空引用）
+    ///   - 标题按 reason 区分："manual" → "本次主动终止"；其它失败 reason → "极地陷落 — xxx"
+    ///   - 副标题新增堡垒日变化：`newbieProtected` → "新手保护期 · 堡垒日 X 保持"；
+    ///     `IsManual` → "本次为主动终止，堡垒日不变"（§16.4）；否则 "堡垒日 Before → After"
+    ///   - 自动关闭时长 ~8s（§16.6 / §23.1），序列完成后不再等待手动点击
+    ///   - 点击"重新开始"不再发送 reset_game（服务端 8s 自动进入 recovery，§23.1 要求客户端无需发送）
+    ///
     /// 数据来源：SurvivalGameManager.HandleGameEnded → ShowSettlement(SettlementData)
     /// Rankings 由 RankingSystem.GetTopN(3) 在序列开始前自动注入。
     ///
@@ -98,6 +106,9 @@ namespace DrscfZ.UI
         }
 
         // ─── Sequence coroutine ───────────────────────────────────────────────
+        // 🆕 v1.26 永续模式（§16.6 / §23.1）：~8s 自动关闭，无需等待玩家点击；
+        //   屏 A 3s + 屏 B 3s + 屏 C 2s ≈ 8s；有榜时仍走 C 屏，无榜时在 B 屏停留至超时。
+        //   "重新开始" 按钮保留仅作 GM 手动跳过兜底（§16.4 已说明主动终止走 end_game）。
 
         private IEnumerator PlaySettlementSequence(SettlementData data)
         {
@@ -123,20 +134,27 @@ namespace DrscfZ.UI
             yield return new WaitForSecondsRealtime(3f);
 
             ShowScreenB(data);
-            yield return new WaitForSecondsRealtime(5f);
+            yield return new WaitForSecondsRealtime(3f);
 
             if (data.Rankings != null && data.Rankings.Count > 0)
             {
                 ShowScreenC(data);
-                yield return new WaitForSecondsRealtime(3f);
+                yield return new WaitForSecondsRealtime(2f);
+            }
+            else
+            {
+                // 无榜时补足 2s，维持 ~8s 总时长
+                yield return new WaitForSecondsRealtime(2f);
             }
 
-            // 序列播完后停留在最后一屏，显示"重新开始"按钮等待玩家操作
+            // 序列播完后显示"重新开始"按钮（GM 手动跳过用）；
+            // 服务端 8s 后自动推送 phase_changed{variant:recovery}，客户端进入恢复期白天
             if (_restartButton != null) _restartButton.gameObject.SetActive(true);
-            Debug.Log("[SurvivalSettlementUI] 结算序列播完，等待玩家点击重新开始");
+            Debug.Log("[SurvivalSettlementUI] 结算序列播完（~8s），等待服务端 recovery 推送或主播手动跳过");
         }
 
         // ─── Screen A: result title ───────────────────────────────────────────
+        // 🆕 v1.26 永续模式（§16）：无胜利分支；manual 与失败走不同标题；副标题显示堡垒日变化。
 
         private void ShowScreenA(SettlementData data)
         {
@@ -144,11 +162,11 @@ namespace DrscfZ.UI
             _screenB.SetActive(false);
             _screenC.SetActive(false);
 
-            if (data.IsVictory)
+            // 标题：manual=灰（中性）；失败=红；IsVictory 保留仅作兜底（v1.26 恒为 false）
+            if (data.IsManual)
             {
-                _resultTitleText.text    = "极地已守护!";
-                _resultTitleText.color   = new Color(1f, 0.85f, 0.1f); // gold
-                _resultSubtitleText.text = $"坚守了 {data.SurvivalDays} 天";
+                _resultTitleText.text  = "本次主动终止";
+                _resultTitleText.color = new Color(0.8f, 0.8f, 0.8f); // neutral gray
             }
             else
             {
@@ -157,11 +175,38 @@ namespace DrscfZ.UI
                     "food"        => "极地陷落 — 食物耗尽",
                     "temperature" => "极地陷落 — 冻死冰原",
                     "gate"        => "极地陷落 — 城门攻破",
+                    "all_dead"    => "极地陷落 — 矿工全灭",  // 🆕 §16.5
                     _             => "极地陷落"
                 };
-                _resultTitleText.color   = new Color(0.9f, 0.2f, 0.2f); // red
-                _resultSubtitleText.text = $"坚守了 {data.SurvivalDays} 天";
+                _resultTitleText.color = new Color(0.9f, 0.2f, 0.2f); // red
             }
+
+            // 副标题：优先展示堡垒日变化（§16.6），兼容旧数据（Before==0 且 After==0 时退回天数显示）
+            if (_resultSubtitleText != null)
+            {
+                _resultSubtitleText.text = BuildSubtitle(data);
+            }
+        }
+
+        /// <summary>副标题文案（§16.4 / §16.6）：
+        ///  - manual → "本次为主动终止，堡垒日不变"
+        ///  - newbieProtected → "新手保护期 · 堡垒日 {Before} 保持"
+        ///  - 正常失败 → "堡垒日 {Before} → {After} · 坚守了 X 天"
+        ///  - 服务端字段缺失（Before/After 均 0）→ fallback 到旧版天数文案</summary>
+        private string BuildSubtitle(SettlementData data)
+        {
+            if (data.IsManual)
+                return "本次为主动终止，堡垒日不变";
+
+            // Before/After 均 0 视为服务端未填充字段（旧协议 / 本地 fallback 路径）
+            bool hasFortressInfo = data.FortressDayBefore > 0 || data.FortressDayAfter > 0;
+            if (!hasFortressInfo)
+                return $"坚守了 {data.SurvivalDays} 天";
+
+            if (data.NewbieProtected)
+                return $"新手保护期 · 堡垒日 {data.FortressDayBefore} 保持";
+
+            return $"堡垒日 {data.FortressDayBefore} → {data.FortressDayAfter} · 坚守了 {data.SurvivalDays} 天";
         }
 
         // ─── Screen B: stats + ranking ────────────────────────────────────────
@@ -248,11 +293,15 @@ namespace DrscfZ.UI
         }
 
         // ─── Restart ─────────────────────────────────────────────────────────
+        // 🆕 v1.26 永续模式（§23.1）：结算结束客户端**不再发送 reset_game**；
+        //   服务端 8s 后自动推送 phase_changed{variant:recovery} 进入恢复期。
+        //   保留按钮仅作 GM 手动关闭 UI 兜底（例如序列播完后再次点击隐藏面板）。
 
         private void OnRestartClicked()
         {
+            // 仅关闭面板；不触发 reset_game（永续模式服务端自动进入 recovery）
             gameObject.SetActive(false);
-            SurvivalGameManager.Instance?.RequestResetGame();
+            Debug.Log("[SurvivalSettlementUI] 主播手动关闭结算面板（不触发 reset_game）");
         }
 
         // ─── View Ranking ─────────────────────────────────────────────────────
@@ -281,17 +330,27 @@ namespace DrscfZ.UI
     /// 结算面板所需数据（从 SurvivalGameEndedData 映射而来）。
     /// Rankings 由 PlaySettlementSequence 从 RankingSystem.GetTopN(3) 自动注入，
     /// 也可由外部显式提供。
+    ///
+    /// 🆕 v1.26 永续模式（§16.6）：
+    ///   - IsVictory 保留但恒为 false（永续模式无胜利分支，接口保留防止下游空引用）
+    ///   - FailReason 枚举扩展："food" | "temperature" | "gate" | "all_dead" | "manual" | "unknown"
+    ///   - 新增 FortressDayBefore / FortressDayAfter / NewbieProtected 用于副标题渲染
+    ///   - 新增 IsManual 标记 GM 手动终止（§16.4，此时 FortressDayBefore==FortressDayAfter）
     /// </summary>
     [System.Serializable]
     public class SettlementData
     {
-        public bool   IsVictory;
-        public string FailReason;   // "food" | "temperature" | "gate"
+        public bool   IsVictory;             // v1.26 恒为 false；保留兼容（未来若增加胜利条件可复用）
+        public string FailReason;            // "food" | "temperature" | "gate" | "all_dead" | "manual" | "unknown"
         public int    SurvivalDays;
         public int    TotalKills;
         public int    TotalGather;
         public int    TotalRepair;
-        public List<RankEntry> Rankings; // null = 由 PlaySettlementSequence 自动从 RankingSystem 获取
+        public int    FortressDayBefore;     // 🆕 §16.6
+        public int    FortressDayAfter;      // 🆕 §16.6
+        public bool   NewbieProtected;       // 🆕 §16.6 Day 1-10 新手保护
+        public bool   IsManual;              // 🆕 §16.4 GM 手动终止（reason == "manual"）
+        public List<RankEntry> Rankings;     // null = 由 PlaySettlementSequence 自动从 RankingSystem 获取
     }
 
     [System.Serializable]

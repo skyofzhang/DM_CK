@@ -60,11 +60,17 @@ namespace DrscfZ.Survival
         public event Action<SurvivalGiftData> OnGiftReceived;    // 礼物效果
         public event Action<SurvivalPlayerJoinedData> OnPlayerJoined;
         public event Action<SurvivalGameEndedData> OnGameEnded;
+        public event Action<PhaseChangedData> OnPhaseChanged;    // 🆕 §4.2 昼夜/恢复期切换（携带 variant）
         public event Action<string> OnPlayerActivityMessage;     // 弹幕消息文本
         public event Action<int> OnScorePoolUpdated;             // 积分池变动（实时推送）
         public event Action<WeeklyRankingData>   OnWeeklyRankingReceived;   // 本周贡献榜（服务器推送）
         public event Action<LiveRankingData>     OnLiveRankingReceived;     // 实时贡献榜（游戏中防抖推送）
         public event Action<StreamerRankingData> OnStreamerRankingReceived; // 主播排行榜（服务器推送）
+
+        // §16 / §4.2 最近一次 phase_changed 的 variant 缓存（"normal" | "recovery"）
+        // HUD 推荐规则 R10-8 / PeaceNightOverlay / BroadcasterDecisionHUD 查询此字段过滤恢复期白天
+        private string _lastPhaseVariant = "normal";
+        public string LastPhaseVariant => _lastPhaseVariant;
 
         // 助威模式 §33
         public event Action<SupporterJoinedData>   OnSupporterJoined;
@@ -202,9 +208,17 @@ namespace DrscfZ.Survival
         {
             // 结算/空闲状态下只处理连接确认和周榜，忽略所有游戏内消息
             // 避免结算期间礼物效果、昼夜切换、怪物等继续触发
+            // 🆕 §16 永续模式：放行 phase_changed / survival_game_state，
+            //   用于 Settlement 收到 variant=recovery 时切回 Running（服务端 8s 自动恢复路径）
+            //   及断线重连到 recovery 期（state=day + variant=recovery）的兜底触发
             if (_state == SurvivalState.Settlement || _state == SurvivalState.Idle)
             {
-                if (type != "join_room_confirm" && type != "weekly_ranking" && type != "streamer_ranking") return;
+                if (type != "join_room_confirm"
+                    && type != "weekly_ranking"
+                    && type != "streamer_ranking"
+                    && type != "phase_changed"        // 🆕 §16 永续模式恢复期需要
+                    && type != "survival_game_state") // 🆕 §16 断线重连 state=day+variant=recovery 需要
+                    return;
             }
 
             switch (type)
@@ -233,15 +247,37 @@ namespace DrscfZ.Survival
 
                 // ----- 昼夜切换 -----
                 case "phase_changed":
-                    // 结算/空闲状态下忽略昼夜切换消息，避免计时器继续跑
-                    if (_state == SurvivalState.Settlement || _state == SurvivalState.Idle) break;
                     var pc = JsonUtility.FromJson<PhaseChangedData>(dataJson);
+                    // 🆕 §4.2 缓存 variant（旧消息字段缺失时 JsonUtility 会保留默认 "normal"；空字符串兜底）
+                    _lastPhaseVariant = string.IsNullOrEmpty(pc.variant) ? "normal" : pc.variant;
+
+                    // 🆕 §16 永续模式：Settlement 态收到 variant=recovery → 回 Running
+                    //   服务端 8s 结算 UI 自动关闭后推送 phase_changed{variant:recovery}（§23.3 T=11s）
+                    //   这是客户端从 Settlement 回到 Running 的唯一合法路径
+                    //   Idle 态收到 recovery 不做状态切换（玩家还未进入场景，应走 join_room_confirm/reconnect 流程）
+                    if (_state == SurvivalState.Settlement && _lastPhaseVariant == "recovery")
+                    {
+                        Debug.Log("[SGM] Settlement 态收到 phase_changed{variant=recovery} → 切回 Running（§16 永续模式）");
+                        ChangeState(SurvivalState.Running);
+                        if (_settlementUI != null && _settlementUI.gameObject.activeSelf)
+                            _settlementUI.gameObject.SetActive(false);  // 关闭结算面板（若 8s 自动关闭未触发）
+                    }
+
+                    // 结算/空闲状态下仍忽略昼夜计时器/防守切换等副作用（避免残留状态污染 UI）
+                    //   注：放行 Settlement→Running 的切换已在上方完成，此 guard 仅拦截 dayNight/worker 副作用
+                    if (_state == SurvivalState.Settlement || _state == SurvivalState.Idle)
+                    {
+                        OnPhaseChanged?.Invoke(pc);  // 事件仍然触发，让订阅者（HUD 等）识别 variant
+                        break;
+                    }
+
                     dayNightManager?.HandlePhaseChanged(pc);
                     // 黑夜开始 → 全员防守；白天开始 → 回工位
                     if (pc.phase == "night")
                         WorkerManager.Instance?.EnterNightDefense();
                     else if (pc.phase == "day")
                         WorkerManager.Instance?.ExitNightDefense();
+                    OnPhaseChanged?.Invoke(pc);
                     break;
 
                 // ----- 资源更新 -----
@@ -300,6 +336,13 @@ namespace DrscfZ.Survival
                 case "survival_game_ended":
                     var ge = JsonUtility.FromJson<SurvivalGameEndedData>(dataJson);
                     HandleGameEnded(ge);
+                    break;
+
+                // ----- §16.4 end_game 被拒（非 day/night 态）-----
+                case "end_game_failed":
+                    var egf = JsonUtility.FromJson<EndGameFailedData>(dataJson);
+                    Debug.LogWarning($"[SGM] end_game rejected: reason={egf?.reason} currentState={egf?.currentState}");
+                    // 主播可选：跑马灯提示（当前仅日志，不弹 toast 避免阻塞）
                     break;
 
                 // ----- 兼容旧协议（游戏未重构服务器时先用旧的player_joined）-----
@@ -653,7 +696,18 @@ namespace DrscfZ.Survival
 
                 case "day":
                 case "night":
-                    if ((_state == SurvivalState.Loading || _state == SurvivalState.Waiting) && IsEnteringScene)
+                    // 🆕 §16 永续模式：Settlement 态收到 state=day+variant=recovery（后端规范化后仍是 day）
+                    //   → 断线重连兜底路径，允许从 Settlement 切回 Running
+                    //   后端 getFullState 在 recovery 期对外推送 state='day' + variant='recovery'（非 state='recovery'）
+                    string dataVariant = string.IsNullOrEmpty(data.variant) ? "normal" : data.variant;
+                    if (_state == SurvivalState.Settlement && dataVariant == "recovery")
+                    {
+                        Debug.Log("[SGM] Settlement 态收到 survival_game_state{state=day, variant=recovery} → 切回 Running（§16 断线重连兜底）");
+                        ChangeState(SurvivalState.Running);
+                        if (_settlementUI != null && _settlementUI.gameObject.activeSelf)
+                            _settlementUI.gameObject.SetActive(false);
+                    }
+                    else if ((_state == SurvivalState.Loading || _state == SurvivalState.Waiting) && IsEnteringScene)
                     {
                         // 进入流程：服务器已启动 → 停止超时 → 切 Running
                         StopLoadingTimeout();
@@ -677,11 +731,15 @@ namespace DrscfZ.Survival
                     // 同步昼夜（仅在 Running 状态才同步，避免影响 Waiting 场景）
                     if (_state == SurvivalState.Running)
                     {
+                        // 🆕 §16 / §4.2：从 survival_game_state 同步 variant，供 HUD 差异化 UI 识别恢复期
+                        //   dataVariant 在上方已从 data.variant 规范化，此处复用
+                        _lastPhaseVariant = dataVariant;
                         dayNightManager?.HandlePhaseChanged(new PhaseChangedData
                         {
                             phase = data.state,
                             day = data.day,
-                            phaseDuration = data.remainingTime
+                            phaseDuration = data.remainingTime,
+                            variant = dataVariant
                         });
                     }
                     break;
@@ -879,11 +937,13 @@ namespace DrscfZ.Survival
             if (reason == "gate_breached")
                 UI.TopFloatingTextUI.Instance?.ShowDanger("【告急】城门失守！游戏结束");
 
+            // 🆕 v1.26 永续模式：无胜利分支，客户端本地 fallback 结算（正常路径走服务器 survival_game_ended）
             var endData = new SurvivalGameEndedData
             {
-                result = "lose",
                 reason = reason,
                 dayssurvived = dayNightManager != null ? dayNightManager.CurrentDay : 0
+                // fortressDayBefore/After/newbieProtected 由服务器 survival_game_ended 权威提供；
+                // 本地 fallback 时保持默认 0/false，UI 将显示 "堡垒日 0 → 0"（仅 fallback 极端场景）
             };
             HandleGameEnded(endData);
         }
@@ -891,10 +951,12 @@ namespace DrscfZ.Survival
         private void HandleDefeatOrVictory(string reason)
         {
             if (_state != SurvivalState.Running) return;
+            // 🆕 v1.26 永续模式：方法名保留兼容旧调用，但永续模式无胜利分支——
+            // "survived" reason 已从协议移除；若外部仍传入该值，按 manual 降级
+            var effectiveReason = reason == "survived" ? "manual" : reason;
             var endData = new SurvivalGameEndedData
             {
-                result = reason == "survived" ? "win" : "lose",
-                reason = reason,
+                reason = effectiveReason,
                 dayssurvived = dayNightManager != null ? dayNightManager.CurrentDay : 0,
                 totalScore = GetTotalContribution()
             };
@@ -923,17 +985,25 @@ namespace DrscfZ.Survival
                         });
                 }
 
+                // 🆕 v1.26 永续模式：IsVictory 固定 false（无胜利分支）；
+                // reason 映射表补 all_dead / manual（§16.5）
                 var settlement = new global::DrscfZ.UI.SettlementData
                 {
-                    IsVictory    = data.result == "win",
+                    IsVictory    = false,
                     SurvivalDays = data.dayssurvived,
                     FailReason   = data.reason switch
                     {
                         "food_depleted" => "food",
                         "temp_freeze"   => "temperature",
                         "gate_breached" => "gate",
+                        "all_dead"      => "all_dead",   // 🆕 §16.5 矿工夜晚全灭
+                        "manual"        => "manual",     // 🆕 §16.4 GM 手动终止
                         _               => "unknown"
                     },
+                    FortressDayBefore = data.fortressDayBefore,  // 🆕 §16.6
+                    FortressDayAfter  = data.fortressDayAfter,   // 🆕 §16.6
+                    NewbieProtected   = data.newbieProtected,    // 🆕 §16.6
+                    IsManual          = data.reason == "manual", // 🆕 §16.4 区分主动终止
                     Rankings = rankList,
                 };
                 StartCoroutine(DelayShowSettlement(3f, settlement));
