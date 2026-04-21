@@ -122,6 +122,19 @@ namespace DrscfZ.Survival
         public event Action<TribeWarCombatReportData>       OnTribeWarCombatReportDefense;
         public event Action<TribeWarAttackEndedData>        OnTribeWarAttackEnded;
 
+        // §36 全服同步 + 赛季制（🆕 v1.27 MVP）
+        public event Action<WorldClockTickData>      OnWorldClockTick;
+        public event Action<SeasonStateData>         OnSeasonState;
+        public event Action<FortressDayChangedData>  OnFortressDayChanged;
+        public event Action<RoomFailedData>          OnRoomFailed;
+        public event Action<SeasonStartedData>       OnSeasonStarted;
+        public event Action<SeasonSettlementData>    OnSeasonSettlement;
+
+        /// <summary>§36 缓存的当前赛季/全服时钟状态，供 UI 层按需查询。
+        /// phase/phaseRemainingSec 随 world_clock_tick 每秒刷新；seasonDay/themeId/seasonId
+        /// 随 world_clock_tick + season_state 同步；首次收到任意一方消息前保持为 null。</summary>
+        public SeasonRuntimeState CurrentSeasonState { get; private set; }
+
         // §39 本地装备缓存（自己最新的 equipped，供 UI 层做灰化/装备按钮回显）
         public ShopEquipped MyEquipped { get; private set; }
 
@@ -543,6 +556,32 @@ namespace DrscfZ.Survival
                 case "tribe_war_attack_ended":
                     var twAE = JsonUtility.FromJson<TribeWarAttackEndedData>(dataJson);
                     if (twAE != null) HandleTribeWarAttackEnded(twAE);
+                    break;
+
+                // ----- §36 全服同步 + 赛季制 -----
+                case "world_clock_tick":
+                    var wct = JsonUtility.FromJson<WorldClockTickData>(dataJson);
+                    if (wct != null) HandleWorldClockTick(wct);
+                    break;
+                case "season_state":
+                    var ss = JsonUtility.FromJson<SeasonStateData>(dataJson);
+                    if (ss != null) HandleSeasonState(ss);
+                    break;
+                case "fortress_day_changed":
+                    var fdc = JsonUtility.FromJson<FortressDayChangedData>(dataJson);
+                    if (fdc != null) HandleFortressDayChanged(fdc);
+                    break;
+                case "room_failed":
+                    var rf = JsonUtility.FromJson<RoomFailedData>(dataJson);
+                    if (rf != null) HandleRoomFailed(rf);
+                    break;
+                case "season_started":
+                    var sst = JsonUtility.FromJson<SeasonStartedData>(dataJson);
+                    if (sst != null) HandleSeasonStarted(sst);
+                    break;
+                case "season_settlement":
+                    var sstl = JsonUtility.FromJson<SeasonSettlementData>(dataJson);
+                    if (sstl != null) HandleSeasonSettlement(sstl);
                     break;
             }
         }
@@ -2021,6 +2060,186 @@ namespace DrscfZ.Survival
                 default:                   return data.eventName ?? "";
             }
         }
+
+        // ==================== §36 全服同步 + 赛季制（🆕 v1.27 MVP） ====================
+
+        /// <summary>world_clock_tick：更新顶部计时器+缓存 phase/seasonDay/themeId/phaseRemainingSec。
+        /// 1Hz 广播，避免在此做昂贵操作（仅刷 UI 缓存 + 事件分发）。</summary>
+        private void HandleWorldClockTick(WorldClockTickData data)
+        {
+            if (data == null) return;
+            if (CurrentSeasonState == null) CurrentSeasonState = new SeasonRuntimeState();
+            CurrentSeasonState.phase             = data.phase;
+            CurrentSeasonState.phaseRemainingSec = data.phaseRemainingSec;
+            CurrentSeasonState.seasonDay         = data.seasonDay;
+            CurrentSeasonState.themeId           = data.themeId;
+            CurrentSeasonState.seasonId          = data.seasonId;
+
+            // 通知 UI：SurvivalTopBarUI 可拉取 CurrentSeasonState 显示"赛季 D%/主题"；
+            // SeasonThemeUI 不由 tick 驱动（避免每秒闪），仅由 season_started 驱动。
+            OnWorldClockTick?.Invoke(data);
+        }
+
+        /// <summary>season_state：连接/主动请求时推送的赛季状态快照。更新缓存 + 触发主题切换。</summary>
+        private void HandleSeasonState(SeasonStateData data)
+        {
+            if (data == null) return;
+            if (CurrentSeasonState == null) CurrentSeasonState = new SeasonRuntimeState();
+
+            int prevSeasonId = CurrentSeasonState.seasonId;
+            string prevThemeId = CurrentSeasonState.themeId;
+
+            CurrentSeasonState.seasonId  = data.seasonId;
+            CurrentSeasonState.seasonDay = data.seasonDay;
+            CurrentSeasonState.themeId   = data.themeId;
+
+            OnSeasonState?.Invoke(data);
+
+            // 若主题变化 → 通知 SeasonThemeUI 应用横幅颜色（MVP 极简：仅颜色切换，无粒子/天空盒）
+            if (!string.IsNullOrEmpty(data.themeId) && data.themeId != prevThemeId)
+            {
+                UI.SeasonThemeUI.Instance?.ApplyTheme(data.themeId);
+            }
+
+            Debug.Log($"[SGM] season_state: seasonId={data.seasonId} seasonDay={data.seasonDay} themeId={data.themeId} (prev seasonId={prevSeasonId} themeId={prevThemeId})");
+        }
+
+        /// <summary>fortress_day_changed：堡垒日变更 → FortressDayBadgeUI 刷新 + 跑马灯提示。
+        /// reason 枚举：'promoted'/'demoted'/'newbie_protected'/'cap_blocked'/'cap_reset'。</summary>
+        private void HandleFortressDayChanged(FortressDayChangedData data)
+        {
+            if (data == null) return;
+
+            UI.FortressDayBadgeUI.Instance?.UpdateFortressDay(data);
+
+            string marqueeText = data.reason switch
+            {
+                "promoted"         => $"堡垒日晋级 Lv.{data.newFortressDay}！",
+                "demoted"          => $"堡垒日降级 {data.oldFortressDay}→{data.newFortressDay}",
+                "newbie_protected" => $"新手保护：堡垒日保持 Lv.{data.newFortressDay}",
+                "cap_blocked"      => $"今日闯关已达上限 {data.dailyCapMax}！次日 05:00（北京时间）重置",
+                "cap_reset"        => "今日闯关已重置，继续挑战！",
+                _                  => $"堡垒日变更：{data.reason} → Lv.{data.newFortressDay}"
+            };
+            UI.HorizontalMarqueeUI.Instance?.AddMessage("堡垒日", null, marqueeText);
+            OnPlayerActivityMessage?.Invoke(marqueeText);
+
+            OnFortressDayChanged?.Invoke(data);
+            Debug.Log($"[SGM] fortress_day_changed: {data.oldFortressDay}→{data.newFortressDay} reason={data.reason} seasonDay={data.seasonDay} daily={data.dailyFortressDayGained}/{data.dailyCapMax} capBlocked={data.dailyCapBlocked}");
+        }
+
+        /// <summary>room_failed：与 fortress_day_changed 同帧推送，展示失败降级信息。</summary>
+        private void HandleRoomFailed(RoomFailedData data)
+        {
+            if (data == null) return;
+            UI.RoomFailedBannerUI.Instance?.Show(data);
+            OnRoomFailed?.Invoke(data);
+            Debug.Log($"[SGM] room_failed: {data.oldFortressDay}→{data.newFortressDay} reason={data.demotionReason} newbieProtected={data.newbieProtected}");
+        }
+
+        /// <summary>season_started：新赛季开始 → AnnouncementUI 横幅 + 主题视觉</summary>
+        private void HandleSeasonStarted(SeasonStartedData data)
+        {
+            if (data == null) return;
+
+            // 更新缓存（若 world_clock_tick 尚未到达 season_started 的 tick 节拍）
+            if (CurrentSeasonState == null) CurrentSeasonState = new SeasonRuntimeState();
+            CurrentSeasonState.seasonId = data.seasonId;
+            if (!string.IsNullOrEmpty(data.themeId))
+                CurrentSeasonState.themeId = data.themeId;
+
+            string themeName = GetSeasonThemeName(data.themeId);
+            string subtitle  = GetSeasonThemeSubtitle(data.themeId);
+
+            UI.AnnouncementUI.Instance?.ShowAnnouncement(
+                "新赛季",
+                string.IsNullOrEmpty(subtitle) ? themeName : $"{themeName} · {subtitle}",
+                GetSeasonThemeColor(data.themeId),
+                5f);
+
+            // 主题视觉（MVP 极简：仅 SeasonThemeUI 横幅颜色）
+            UI.SeasonThemeUI.Instance?.ApplyTheme(data.themeId);
+
+            OnSeasonStarted?.Invoke(data);
+            Debug.Log($"[SGM] season_started: seasonId={data.seasonId} themeId={data.themeId}");
+        }
+
+        /// <summary>season_settlement：赛季结算 → MVP 占位 Log；SeasonSettlementUI 属 P2 阶段。</summary>
+        private void HandleSeasonSettlement(SeasonSettlementData data)
+        {
+            if (data == null) return;
+            OnSeasonSettlement?.Invoke(data);
+
+            string nextThemeName = GetSeasonThemeName(data.nextThemeId);
+            UI.AnnouncementUI.Instance?.ShowAnnouncement(
+                "赛季结算",
+                string.IsNullOrEmpty(nextThemeName) ? "下一赛季即将开启" : $"下一赛季：{nextThemeName}",
+                new Color(1f, 0.85f, 0.1f),
+                5f);
+            Debug.Log($"[SGM] season_settlement: seasonId={data.seasonId} nextThemeId={data.nextThemeId}");
+        }
+
+        /// <summary>§36.3 themeId → 中文名</summary>
+        public static string GetSeasonThemeName(string themeId)
+        {
+            if (string.IsNullOrEmpty(themeId)) return "";
+            switch (themeId)
+            {
+                case "classic_frozen": return "经典冰封";
+                case "blood_moon":     return "血月";
+                case "snowstorm":      return "暴风雪";
+                case "dawn":           return "黎明";
+                case "frenzy":         return "狂潮";
+                case "serene":         return "宁静";
+                default:               return themeId;
+            }
+        }
+
+        /// <summary>§36.3 themeId → 简短说明（首条横幅副标题）</summary>
+        public static string GetSeasonThemeSubtitle(string themeId)
+        {
+            if (string.IsNullOrEmpty(themeId)) return "";
+            switch (themeId)
+            {
+                case "classic_frozen": return "基线赛季";
+                case "blood_moon":     return "夜晚怪物强化";
+                case "snowstorm":      return "白天减速·夜晚多矿";
+                case "dawn":           return "节奏加快";
+                case "frenzy":         return "高频怪潮";
+                case "serene":         return "夜长 Boss 弱";
+                default:               return "";
+            }
+        }
+
+        /// <summary>§36.3 themeId → 主题色（AnnouncementUI 横幅 + SeasonThemeUI overlay）</summary>
+        public static Color GetSeasonThemeColor(string themeId)
+        {
+            if (string.IsNullOrEmpty(themeId)) return new Color(1f, 0.85f, 0.1f);
+            switch (themeId)
+            {
+                case "classic_frozen": return new Color(0.60f, 0.85f, 1.00f); // 蓝白冷色
+                case "blood_moon":     return new Color(1.00f, 0.20f, 0.30f); // 红月
+                case "snowstorm":      return new Color(0.85f, 0.90f, 0.95f); // 灰白
+                case "dawn":           return new Color(1.00f, 0.65f, 0.30f); // 橙黄
+                case "frenzy":         return new Color(1.00f, 0.30f, 0.60f); // 粉紫
+                case "serene":         return new Color(0.40f, 1.00f, 0.75f); // 极光绿
+                default:               return new Color(1f, 0.85f, 0.1f);
+            }
+        }
+    }
+
+    // ==================== §36 运行时缓存 ====================
+
+    /// <summary>§36 SurvivalGameManager.CurrentSeasonState 缓存结构，UI 层只读。
+    /// 由 world_clock_tick / season_state 消息各字段按需更新；首次更新前各字段为默认值（0 / null）。</summary>
+    [Serializable]
+    public class SeasonRuntimeState
+    {
+        public string phase;              // "day" | "night"
+        public int    phaseRemainingSec;
+        public int    seasonDay;
+        public string themeId;
+        public int    seasonId;
     }
 
     // ==================== M3-02 新增数据类型 ====================
