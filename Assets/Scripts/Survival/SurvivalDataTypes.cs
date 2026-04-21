@@ -912,6 +912,17 @@ namespace DrscfZ.Survival
         public int    stolenOre;
     }
 
+    // ==================== §17.15 新手引导气泡（🆕 v1.27） ====================
+
+    /// <summary>新手引导气泡 B1–B3 连播触发（type=show_onboarding_sequence，S→C）。
+    /// 服务端 5 分钟节流 + UUID 幂等：相同 sessionId 客户端只播放一次。</summary>
+    [Serializable]
+    public class ShowOnboardingSequenceData
+    {
+        public string sessionId;  // 服务端 crypto.randomUUID()，用于客户端幂等
+        public int    priority;   // 固定 2（normal），UI 引导非关键消息
+    }
+
     // ==================== §36 全服同步 + 赛季制（Global Sync + Season，🆕 v1.27） ====================
     // 协议详见策划案 §36.9 / §19.2；客户端 MVP 极简版：仅脚本,Prefab 绑定留给人工。
     //

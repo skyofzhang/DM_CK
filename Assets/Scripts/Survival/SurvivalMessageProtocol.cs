@@ -124,6 +124,11 @@ namespace DrscfZ.Survival
         public const string PhaseVariantNormal            = "normal";               // 常规白天/夜晚
         public const string PhaseVariantRecovery          = "recovery";             // §16 永续模式恢复期
 
+        // ----- §17.15 新手引导 -----
+        // S→C：show_onboarding_sequence 广播 B1–B3 气泡连播（服务端 5 分钟节流）
+        // C→S 消息（客户端发送时直接用字面量 "disable_onboarding_for_session"，无需此常量解析）
+        public const string ShowOnboardingSequence = "show_onboarding_sequence";
+
         // ----- §36.12 feature id 常量（FEATURE_UNLOCK_DAY 键，供客户端查锁）-----
         public const string FeatureGateUpgradeBasic = "gate_upgrade_basic";   // Lv1–Lv4（D1 解锁）
         public const string FeatureGateUpgradeHigh  = "gate_upgrade_high";    // Lv5–Lv6（D4 解锁）

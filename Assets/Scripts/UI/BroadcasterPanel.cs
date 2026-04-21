@@ -51,6 +51,17 @@ namespace DrscfZ.UI
         [Header("🛡 升级城门按钮（🆕 v1.22 §10，可留空；场景中通过 Editor 工具绑定）")]
         [SerializeField] private Button _btnUpgradeGate;
 
+        [Header("§17.15 关闭引导按钮（🆕 v1.27；点击后服务端房间会话内不再广播 B1-B3 气泡）")]
+        [SerializeField] private Button _btnDisableOnboarding;
+
+        [Header("§17.15 主播话术卡（🆕 v1.27；默认/入夜/低血三态 TMP 文本）")]
+        [SerializeField] private TMP_Text _broadcasterTipText;
+        [SerializeField] private string _tipDefault = "欢迎来到极地生存法则！白天刷仙女棒帮矿工，夜晚刷甜甜圈保护城门！";
+        [SerializeField] private string _tipNight   = "快刷礼物！怪物要攻城了！";
+        [SerializeField] private string _tipLowGate = "城门快破了！刷甜甜圈救场！";
+        [Tooltip("§17.15 低血话术触发阈值：gateHp < 此值时显示 _tipLowGate（默认 300）")]
+        [SerializeField] private int _tipLowGateThreshold = 300;
+
         // ==================== 🆕 v1.22 §10 升级常量表（与服务端 SurvivalGameEngine.js 顶部常量对齐）====================
 
         // 索引 i 对应 gateLevel=i+1 → gateLevel=i+2 的升级消耗
@@ -134,6 +145,10 @@ namespace DrscfZ.UI
             if (_btnUpgradeGate != null)
                 _btnUpgradeGate.onClick.AddListener(OnUpgradeGateClick);
 
+            // 🆕 §17.15 关闭引导按钮
+            if (_btnDisableOnboarding != null)
+                _btnDisableOnboarding.onClick.AddListener(OnDisableOnboardingClick);
+
             // 初始化UI状态
             ResetBoostBtn();
             ResetEventBtn();
@@ -146,6 +161,16 @@ namespace DrscfZ.UI
                 net.OnConnected       += HandleConnected;
                 net.OnDisconnected    += HandleDisconnected;
             }
+
+            // 🆕 §17.15 主播话术卡：订阅 phase_changed / resource_update
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm != null)
+            {
+                sgm.OnPhaseChanged   += HandlePhaseChangedForTip;
+                sgm.OnResourceUpdate += HandleResourceUpdateForTip;
+            }
+            // 初始化话术（默认）
+            RefreshBroadcasterTip(phase: "day", gateHp: int.MaxValue);
         }
 
         private void OnDestroy()
@@ -156,6 +181,12 @@ namespace DrscfZ.UI
                 net.OnMessageReceived -= HandleMessage;
                 net.OnConnected       -= HandleConnected;
                 net.OnDisconnected    -= HandleDisconnected;
+            }
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm != null)
+            {
+                sgm.OnPhaseChanged   -= HandlePhaseChangedForTip;
+                sgm.OnResourceUpdate -= HandleResourceUpdateForTip;
             }
         }
 
@@ -491,6 +522,49 @@ namespace DrscfZ.UI
             int end = json.IndexOf('"', start);
             if (end < 0) return "";
             return json.Substring(start, end - start);
+        }
+
+        // ==================== §17.15 关闭引导 / 主播话术卡 ====================
+
+        /// <summary>主播点击"关闭引导"按钮：委托 SurvivalGameManager 发送 disable_onboarding_for_session
+        /// + 本地 OnboardingBubbleUI.DisableLocal() 立即打断协程。</summary>
+        private void OnDisableOnboardingClick()
+        {
+            SurvivalGameManager.Instance?.SendDisableOnboarding();
+            OnboardingBubbleUI.Instance?.DisableLocal();
+            Debug.Log("[BroadcasterPanel] §17.15 关闭引导按钮点击：disable_onboarding_for_session 已发送 + 本地序列已停止");
+        }
+
+        private void HandlePhaseChangedForTip(PhaseChangedData pc)
+        {
+            if (pc == null) return;
+            int gateHp = CityGateSystem.Instance != null ? CityGateSystem.Instance.CurrentHp : int.MaxValue;
+            RefreshBroadcasterTip(pc.phase, gateHp);
+        }
+
+        private void HandleResourceUpdateForTip(ResourceUpdateData ru)
+        {
+            if (ru == null) return;
+            string phase = SurvivalGameManager.Instance != null
+                && SurvivalGameManager.Instance.CurrentSeasonState != null
+                ? (SurvivalGameManager.Instance.CurrentSeasonState.phase ?? "day")
+                : "day";
+            RefreshBroadcasterTip(phase, ru.gateHp);
+        }
+
+        /// <summary>§17.15 主播话术卡三态切换。优先级：低血 > 入夜 > 默认。
+        /// gateHp 兜底：<= 0 视作首帧未就绪，不切换低血态。</summary>
+        private void RefreshBroadcasterTip(string phase, int gateHp)
+        {
+            if (_broadcasterTipText == null) return;
+            string text;
+            if (gateHp > 0 && gateHp < _tipLowGateThreshold)
+                text = _tipLowGate;
+            else if (phase == "night")
+                text = _tipNight;
+            else
+                text = _tipDefault;
+            _broadcasterTipText.text = text;
         }
     }
 }

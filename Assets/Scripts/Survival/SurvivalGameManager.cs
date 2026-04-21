@@ -145,6 +145,12 @@ namespace DrscfZ.Survival
         public event Action<VeteranUnlockedData>         OnVeteranUnlocked;
         public event Action<BroadcasterActionFailedData> OnBroadcasterActionFailed;
 
+        // §17.15 新手引导气泡（🆕 v1.27）
+        public event Action<ShowOnboardingSequenceData> OnShowOnboardingSequence;
+
+        // §24.5 主播决策中心 HUD（🆕 v1.27）：resource_update 事件转发，供 HUD 触发推荐重算
+        public event Action<ResourceUpdateData> OnResourceUpdate;
+
         /// <summary>§36.12 seasonDay 从 N→N+1 递增的那一秒新解锁的功能 id 列表（由 world_clock_tick 触发）。
         /// 参数是该 tick 携带的 newlyUnlockedFeatures 字段内容，UI 层据此逐条播放解锁横幅。</summary>
         public event Action<string[]> OnNewlyUnlockedFeatures;
@@ -314,6 +320,14 @@ namespace DrscfZ.Survival
                     }
                     dayNightManager?.SyncRemainingTime(ru.remainingTime);
                     if (ru.scorePool > 0) OnScorePoolUpdated?.Invoke(ru.scorePool);
+                    // 🆕 §24.5 主播决策中心 HUD 依赖：每次资源更新触发推荐重算
+                    OnResourceUpdate?.Invoke(ru);
+                    break;
+
+                // ----- §17.15 新手引导气泡（S→C：show_onboarding_sequence）-----
+                case "show_onboarding_sequence":
+                    var sos = JsonUtility.FromJson<ShowOnboardingSequenceData>(dataJson);
+                    if (sos != null) OnShowOnboardingSequence?.Invoke(sos);
                     break;
 
                 // ----- 怪物波次 -----
@@ -1229,6 +1243,15 @@ namespace DrscfZ.Survival
                 NetworkManager.Instance?.SendMessage("reset_game");
                 Debug.Log("[SGM] Waiting 状态发送 reset_game");
             }
+        }
+
+        /// <summary>§17.15 主播"关闭引导"：发送 disable_onboarding_for_session（服务端校验 isRoomCreator）。
+        /// 服务端收到后置 `_onboardingDisabled=true`，本次房间会话内不再广播 B1-B3；
+        /// 下一局（engine.reset()）自动清除。</summary>
+        public void SendDisableOnboarding()
+        {
+            NetworkManager.Instance?.SendMessage("disable_onboarding_for_session");
+            Debug.Log("[SGM] §17.15 disable_onboarding_for_session 已发送");
         }
 
         private void ResetAllSystems()
