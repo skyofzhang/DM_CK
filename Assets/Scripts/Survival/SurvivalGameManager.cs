@@ -1,6 +1,7 @@
 using UnityEngine;
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using DrscfZ.Core;
 using DrscfZ.Monster;
 using DrscfZ.UI;
@@ -135,6 +136,26 @@ namespace DrscfZ.Survival
         public event Action<RoomFailedData>          OnRoomFailed;
         public event Action<SeasonStartedData>       OnSeasonStarted;
         public event Action<SeasonSettlementData>    OnSeasonSettlement;
+
+        // §36.4 赛季 Boss Rush（🆕 v1.27）
+        public event Action<BossRushStartedData> OnBossRushStarted;
+        public event Action<BossRushKilledData>  OnBossRushKilled;
+
+        // §36.12 分时段解锁 & 老用户豁免（🆕 v1.27）
+        public event Action<VeteranUnlockedData>         OnVeteranUnlocked;
+        public event Action<BroadcasterActionFailedData> OnBroadcasterActionFailed;
+
+        /// <summary>§36.12 seasonDay 从 N→N+1 递增的那一秒新解锁的功能 id 列表（由 world_clock_tick 触发）。
+        /// 参数是该 tick 携带的 newlyUnlockedFeatures 字段内容，UI 层据此逐条播放解锁横幅。</summary>
+        public event Action<string[]> OnNewlyUnlockedFeatures;
+
+        /// <summary>§36.12 当前已解锁功能 id 集合（全集）变更通知。
+        /// 由 season_state / survival_game_state 的 unlockedFeatures 字段触发；UI 层据此刷新按钮锁态。</summary>
+        public event Action<string[]> OnUnlockedFeaturesSync;
+
+        /// <summary>§36.12 当前已解锁功能 id 集合（只读缓存，UI 层查询按钮锁态）。
+        /// 由 season_state / survival_game_state 同步；首次收到前为 null。</summary>
+        public IReadOnlyList<string> CurrentUnlockedFeatures { get; private set; }
 
         /// <summary>§36 缓存的当前赛季/全服时钟状态，供 UI 层按需查询。
         /// phase/phaseRemainingSec 随 world_clock_tick 每秒刷新；seasonDay/themeId/seasonId
@@ -657,6 +678,30 @@ namespace DrscfZ.Survival
                     var sstl = JsonUtility.FromJson<SeasonSettlementData>(dataJson);
                     if (sstl != null) HandleSeasonSettlement(sstl);
                     break;
+
+                // ----- §36.4 赛季 Boss Rush -----
+                case "season_boss_rush_start":
+                    var brs = JsonUtility.FromJson<BossRushStartedData>(dataJson);
+                    if (brs != null) HandleBossRushStarted(brs);
+                    break;
+                case "season_boss_rush_killed":
+                    var brk = JsonUtility.FromJson<BossRushKilledData>(dataJson);
+                    if (brk != null) HandleBossRushKilled(brk);
+                    break;
+
+                // ----- §36.12 老用户豁免 / 主播动作失败 -----
+                case "veteran_unlocked":
+                    var vu = JsonUtility.FromJson<VeteranUnlockedData>(dataJson);
+                    if (vu != null) HandleVeteranUnlocked(vu);
+                    break;
+                case "broadcaster_action_failed":
+                    var baf = JsonUtility.FromJson<BroadcasterActionFailedData>(dataJson);
+                    if (baf != null) HandleBroadcasterActionFailed(baf);
+                    break;
+                case "roulette_spin_failed":
+                    // §36.12 feature_locked 场景（roulette.minDay=1 实际不触发；此处为防御性兜底，避免静默吞消息）
+                    HandleRouletteSpinFailed(dataJson);
+                    break;
             }
         }
 
@@ -709,6 +754,11 @@ namespace DrscfZ.Survival
             }
             // 同步积分池（连接/断线重连时立即刷新显示）
             if (data.scorePool > 0) OnScorePoolUpdated?.Invoke(data.scorePool);
+
+            // 🆕 v1.27 §36.12 分时段解锁：survival_game_state 每次推送都携带已解锁功能全集
+            //   断线重连兜底路径，确保客户端按钮锁态与服务端完全一致
+            if (data.unlockedFeatures != null)
+                SyncUnlockedFeatures(data.unlockedFeatures);
 
             switch (data.state)
             {
@@ -2311,6 +2361,15 @@ namespace DrscfZ.Survival
             // 通知 UI：SurvivalTopBarUI 可拉取 CurrentSeasonState 显示"赛季 D%/主题"；
             // SeasonThemeUI 不由 tick 驱动（避免每秒闪），仅由 season_started 驱动。
             OnWorldClockTick?.Invoke(data);
+
+            // 🆕 v1.27 §36.12 分时段解锁：seasonDay N→N+1 递增那一秒携带新解锁功能列表
+            //   合并入本地缓存 + 触发 FeatureUnlockBanner 横幅；其他 tick 字段为 null/空。
+            if (data.newlyUnlockedFeatures != null && data.newlyUnlockedFeatures.Length > 0)
+            {
+                MergeNewlyUnlockedFeatures(data.newlyUnlockedFeatures);
+                OnNewlyUnlockedFeatures?.Invoke(data.newlyUnlockedFeatures);
+                Debug.Log($"[SGM] world_clock_tick carries newlyUnlockedFeatures: {string.Join(",", data.newlyUnlockedFeatures)}");
+            }
         }
 
         /// <summary>season_state：连接/主动请求时推送的赛季状态快照。更新缓存 + 触发主题切换。</summary>
@@ -2328,13 +2387,17 @@ namespace DrscfZ.Survival
 
             OnSeasonState?.Invoke(data);
 
+            // 🆕 v1.27 §36.12 分时段解锁：携带截至当前 seasonDay 的全集；用于中途进场客户端初始化按钮锁态
+            if (data.unlockedFeatures != null)
+                SyncUnlockedFeatures(data.unlockedFeatures);
+
             // 若主题变化 → 通知 SeasonThemeUI 应用横幅颜色（MVP 极简：仅颜色切换，无粒子/天空盒）
             if (!string.IsNullOrEmpty(data.themeId) && data.themeId != prevThemeId)
             {
                 UI.SeasonThemeUI.Instance?.ApplyTheme(data.themeId);
             }
 
-            Debug.Log($"[SGM] season_state: seasonId={data.seasonId} seasonDay={data.seasonDay} themeId={data.themeId} (prev seasonId={prevSeasonId} themeId={prevThemeId})");
+            Debug.Log($"[SGM] season_state: seasonId={data.seasonId} seasonDay={data.seasonDay} themeId={data.themeId} unlockedCount={(data.unlockedFeatures == null ? 0 : data.unlockedFeatures.Length)} (prev seasonId={prevSeasonId} themeId={prevThemeId})");
         }
 
         /// <summary>fortress_day_changed：堡垒日变更 → FortressDayBadgeUI 刷新 + 跑马灯提示。
@@ -2458,6 +2521,135 @@ namespace DrscfZ.Survival
                 case "serene":         return new Color(0.40f, 1.00f, 0.75f); // 极光绿
                 default:               return new Color(1f, 0.85f, 0.1f);
             }
+        }
+
+        // ==================== §36.4 赛季 Boss Rush（🆕 v1.27） ====================
+
+        /// <summary>season_boss_rush_start：D7 夜晚开始 → BossRushBanner 显示全服血量池 + 下季主题预告。</summary>
+        private void HandleBossRushStarted(BossRushStartedData data)
+        {
+            OnBossRushStarted?.Invoke(data);
+            UI.BossRushBanner.Instance?.Show(data);
+            int n = data.participatingRooms == null ? 0 : data.participatingRooms.Length;
+            Debug.Log($"[SGM] season_boss_rush_start: seasonId={data.seasonId} bossHpTotal={data.bossHpTotal} participatingRooms={n} nextThemeId={data.nextThemeId}");
+        }
+
+        /// <summary>season_boss_rush_killed：全服 Boss 池归零 → BossRushBanner 击杀反馈 → 3s 后隐藏。</summary>
+        private void HandleBossRushKilled(BossRushKilledData data)
+        {
+            OnBossRushKilled?.Invoke(data);
+            UI.BossRushBanner.Instance?.OnKilled(data);
+            Debug.Log($"[SGM] season_boss_rush_killed: seasonId={data.seasonId} killedAt={data.killedAt}");
+        }
+
+        // ==================== §36.12 分时段解锁 & 老用户豁免（🆕 v1.27） ====================
+
+        /// <summary>veteran_unlocked：玩家首次达到老用户豁免条件 → FeatureUnlockBanner 专属横幅。</summary>
+        private void HandleVeteranUnlocked(VeteranUnlockedData data)
+        {
+            OnVeteranUnlocked?.Invoke(data);
+            UI.FeatureUnlockBanner.Instance?.ShowVeteranUnlocked(data);
+            Debug.Log($"[SGM] veteran_unlocked: openId={data.openId} reason={data.reason}");
+        }
+
+        /// <summary>roulette_spin_failed：主播轮盘抽奖失败（含 feature_locked；roulette.minDay=1 实际不触发）→ 跑马灯兜底。</summary>
+        private void HandleRouletteSpinFailed(string dataJson)
+        {
+            string reason = null;
+            int unlockDay = 0;
+            try
+            {
+                // 轻量反序列化（无专用 Data 类）
+                var probe = JsonUtility.FromJson<BroadcasterActionFailedData>(dataJson);
+                if (probe != null) { reason = probe.reason; unlockDay = probe.unlockDay; }
+            }
+            catch { /* ignore */ }
+            string reasonText = reason == SurvivalMessageProtocol.ReasonFeatureLocked
+                ? $"轮盘暂未解锁（D{unlockDay} 解锁）"
+                : (string.IsNullOrEmpty(reason) ? "轮盘操作失败" : $"轮盘操作失败：{reason}");
+            OnPlayerActivityMessage?.Invoke(reasonText);
+            UI.HorizontalMarqueeUI.Instance?.AddMessage("轮盘", null, reasonText);
+            Debug.Log($"[SGM] roulette_spin_failed: reason={reason} unlockDay={unlockDay}");
+        }
+
+        /// <summary>broadcaster_action_failed：主播 ⚡加速/🌊事件触发失败（含 feature_locked）→ 跑马灯 + 活动消息。</summary>
+        private void HandleBroadcasterActionFailed(BroadcasterActionFailedData data)
+        {
+            OnBroadcasterActionFailed?.Invoke(data);
+            string reasonText = FormatBroadcasterActionFailReason(data.reason, data.unlockDay);
+            string actionText = GetBroadcasterActionName(data.action);
+            string msg = $"{actionText}：{reasonText}";
+            UI.AnnouncementUI.Instance?.ShowAnnouncement("主播操作失败", msg, new Color(1f, 0.4f, 0.2f), 2f);
+            OnPlayerActivityMessage?.Invoke(msg);
+            Debug.Log($"[SGM] broadcaster_action_failed: action={data.action} reason={data.reason} unlockDay={data.unlockDay}");
+        }
+
+        private static string FormatBroadcasterActionFailReason(string reason, int unlockDay)
+        {
+            if (string.IsNullOrEmpty(reason)) return "未知原因";
+            switch (reason)
+            {
+                case "feature_locked": return unlockDay > 0 ? $"D{unlockDay} 解锁此功能" : "功能未解锁";
+                case "in_cooldown":    return "冷却中";
+                case "wrong_phase":    return "当前阶段不可用";
+                default:               return reason;
+            }
+        }
+
+        private static string GetBroadcasterActionName(string action)
+        {
+            if (string.IsNullOrEmpty(action)) return "主播操作";
+            switch (action)
+            {
+                case "efficiency_boost": return "紧急加速";
+                case "trigger_event":    return "触发事件";
+                default:                 return action;
+            }
+        }
+
+        /// <summary>§36.12 合并新解锁功能到本地缓存（world_clock_tick.newlyUnlockedFeatures → CurrentUnlockedFeatures）。
+        /// 不触发 OnUnlockedFeaturesSync（由 season_state/survival_game_state 的全集推送独占），
+        /// 避免同一 tick 双事件导致订阅者重复刷新。</summary>
+        private void MergeNewlyUnlockedFeatures(string[] incoming)
+        {
+            if (incoming == null || incoming.Length == 0) return;
+            var merged = new List<string>();
+            if (CurrentUnlockedFeatures != null)
+            {
+                foreach (var f in CurrentUnlockedFeatures) if (!string.IsNullOrEmpty(f)) merged.Add(f);
+            }
+            foreach (var f in incoming)
+            {
+                if (!string.IsNullOrEmpty(f) && !merged.Contains(f)) merged.Add(f);
+            }
+            CurrentUnlockedFeatures = merged;
+        }
+
+        /// <summary>§36.12 同步服务端推送的全集（season_state.unlockedFeatures / survival_game_state.unlockedFeatures）。
+        /// 触发 OnUnlockedFeaturesSync，供 FeatureLockOverlay 等订阅者刷新按钮锁态。</summary>
+        private void SyncUnlockedFeatures(string[] incoming)
+        {
+            if (incoming == null) return;
+            var snapshot = new List<string>(incoming.Length);
+            foreach (var f in incoming)
+            {
+                if (!string.IsNullOrEmpty(f) && !snapshot.Contains(f)) snapshot.Add(f);
+            }
+            CurrentUnlockedFeatures = snapshot;
+            OnUnlockedFeaturesSync?.Invoke(incoming);
+            Debug.Log($"[SGM] SyncUnlockedFeatures: {string.Join(",", incoming)}");
+        }
+
+        /// <summary>§36.12 查询某个功能是否已解锁（供 UI 按钮兜底判断）。</summary>
+        public bool IsFeatureUnlocked(string featureId)
+        {
+            if (string.IsNullOrEmpty(featureId)) return false;
+            if (CurrentUnlockedFeatures == null) return false; // 首次同步前保守按锁定
+            foreach (var f in CurrentUnlockedFeatures)
+            {
+                if (f == featureId) return true;
+            }
+            return false;
         }
     }
 
