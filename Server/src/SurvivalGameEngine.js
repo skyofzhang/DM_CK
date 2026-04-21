@@ -346,7 +346,8 @@ class SurvivalGameEngine {
     // 资源衰减配置（每秒）
     // 目标：Normal难度下不采食约 3min 耗尽（200/1.0≈200s≈3.3min），持续紧迫
     this.foodDecayDay    = config.foodDecayDay    ?? 1.0;   // 白天食物消耗/s
-    this.foodDecayNight  = config.foodDecayNight  ?? 1.5;   // 夜晚食物消耗/s（夜晚更快）
+    // F7: 夜晚食物消耗 = 白天 (策划案 §34 F7) —— 夜晚压力集中在单一维度（怪物伤害），去掉 ×1.5 决策焦虑
+    this.foodDecayNight  = config.foodDecayNight  ?? 1.0;   // 夜晚食物消耗/s（与白天一致）
     this.tempDecayDay    = config.tempDecayDay    ?? 0.15;  // 白天炉温衰减/s
     this.tempDecayNight  = config.tempDecayNight  ?? 0.4;   // 夜晚炉温衰减/s
     this.coalBurnTicks   = 10;                              // 自动烧煤间隔（tick数，10=2秒）
@@ -467,6 +468,10 @@ class SurvivalGameEngine {
     this._peptTalkBoostUntil          = 0;   // §39.4 A1 worker_pep_talk 有效截止时间戳（Date.now() < 此值 → 采矿 +15%）
     this._shopSpotlightTimers         = {};  // {playerId: setTimeout handle} spotlight 过期句柄
     this._shopPendingIdCounter        = 0;
+
+    // F8: 无效指令提示去重 (策划案 §34 F8) —— {`${playerId}:cmd5`|`${playerId}:cmd6day`: true}
+    // 每位玩家每种提示类型每局最多显示一次；reset() 清空
+    this._shopInvalidCmdHintSent      = {};
 
     // 点赞统计
     this.totalLikes = 0;
@@ -627,9 +632,11 @@ class SurvivalGameEngine {
     //   normal: 食物降~10/天, 煤2秒烧1个(标准), 压力适中
     //   hard:   食物降~14/天, 煤1.4秒烧1个(紧迫), 极限生存
     const presets = {
+      // F5: 困难初始资源统一 200/120/50 (策划案 §34 F5) —— 困难通过消耗速率和怪物强度区分，不通过资源起始量
+      // F3: 困难 70 → 40 天 (策划案 §34 F3) —— 抖音直播 4h40min 不现实；Day 40 WAVE_CONFIGS 已有配置
       easy:   { hpMult: 0.6, cntMult: 0.6, decayMult: 0.7, coalBurnTicks: 10, initFood: 160, initCoal: 96,  initOre: 40,  initGateHp: 800,  totalDays: 30, poolNightBase: 300, dayDuration: 120, nightDuration: 120 },
       normal: { hpMult: 1.0, cntMult: 1.0, decayMult: 1.0, coalBurnTicks: 7,  initFood: 200, initCoal: 120, initOre: 50,  initGateHp: 1000, totalDays: 50, poolNightBase: 500, dayDuration: 120, nightDuration: 120 },
-      hard:   { hpMult: 1.5, cntMult: 1.5, decayMult: 1.5, coalBurnTicks: 5,  initFood: 300, initCoal: 180, initOre: 75,  initGateHp: 1500, totalDays: 70, poolNightBase: 800, dayDuration: 120, nightDuration: 120 },
+      hard:   { hpMult: 1.5, cntMult: 1.5, decayMult: 1.5, coalBurnTicks: 5,  initFood: 200, initCoal: 120, initOre: 50,  initGateHp: 1500, totalDays: 40, poolNightBase: 800, dayDuration: 120, nightDuration: 120 },
     };
     const p = presets[difficulty] || presets.normal;
 
@@ -645,9 +652,10 @@ class SurvivalGameEngine {
     this.nightDuration = p.nightDuration;
 
     // 按倍率调整资源衰减（在构造函数默认值基础上乘以倍率）
-    // ⚠️ 默认值必须与构造函数保持一致：foodDecayDay=1.0, foodDecayNight=1.5
+    // ⚠️ 默认值必须与构造函数保持一致：foodDecayDay=1.0, foodDecayNight=1.0 (F7)
+    // F7: 夜晚食物消耗 = 白天 (策划案 §34 F7)
     this.foodDecayDay   = (this.config.foodDecayDay   ?? 1.0) * p.decayMult;
-    this.foodDecayNight = (this.config.foodDecayNight ?? 1.5) * p.decayMult;
+    this.foodDecayNight = (this.config.foodDecayNight ?? 1.0) * p.decayMult;
     this.tempDecayDay   = (this.config.tempDecayDay   ?? 0.15) * p.decayMult;
     this.tempDecayNight = (this.config.tempDecayNight ?? 0.40) * p.decayMult;
     this.coalBurnTicks  = p.coalBurnTicks || 10;  // 自动烧煤间隔
@@ -778,6 +786,9 @@ class SurvivalGameEngine {
     // 清理 spotlight 过期定时器
     for (const t of Object.values(this._shopSpotlightTimers || {})) clearTimeout(t);
     this._shopSpotlightTimers        = {};
+
+    // F8: 无效指令提示去重每局重置 (策划案 §34 F8)
+    this._shopInvalidCmdHintSent     = {};
 
     this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
   }
@@ -947,6 +958,35 @@ class SurvivalGameEngine {
     }
 
     const cmd = parseInt(content_trim);
+
+    // F8: 无效指令提示 (策划案 §34 F8) —— 防止观众刷"5"或白天"6"时沉默以为游戏坏了
+    // 每位玩家每种提示类型每局最多一次；匿名（无 playerId）静默丢弃
+    if (playerId) {
+      if (content_trim === '5') {
+        const key = `${playerId}:cmd5`;
+        if (!this._shopInvalidCmdHintSent[key]) {
+          this._shopInvalidCmdHintSent[key] = true;
+          this.broadcast({
+            type: 'bobao',
+            timestamp: Date.now(),
+            data: { message: `${playerName || playerId}：指令 5 不存在，发 1-4 采集资源或发 6 攻击怪物` },
+          });
+        }
+        return;
+      }
+      if (cmd === 6 && this.state === 'day') {
+        const key = `${playerId}:cmd6day`;
+        if (!this._shopInvalidCmdHintSent[key]) {
+          this._shopInvalidCmdHintSent[key] = true;
+          this.broadcast({
+            type: 'bobao',
+            timestamp: Date.now(),
+            data: { message: `${playerName || playerId}：白天是采集时间！发 1-4 分配矿工` },
+          });
+        }
+        return;
+      }
+    }
 
     // §33 助威模式分流：
     // - 已是助威者 → 走助威者分支（优先判断，避免 _trackContribution 污染后被误判为守护者）
@@ -1738,12 +1778,13 @@ class SurvivalGameEngine {
       try { this.roomPersistence.save(this.room); } catch (e) { /* ignore */ }
     }
 
-    // 10秒后自动重置并重启游戏（直播间持续运行）
+    // F1: 10s → 30s (策划案 §34 F1) —— 结算是付费转化黄金窗口，给观众更多停留时间
+    // 三屏结算序列共 11s (3+5+3)；30s 允许主播点"重新开始"跳过
     setTimeout(() => {
       console.log('[SurvivalEngine] Auto-restarting game after settlement...');
       this.reset();
       this.startGame(this._difficulty || 'normal');
-    }, 10000);
+    }, 30000);
   }
 
   // ==================== 内部：Tick ====================
