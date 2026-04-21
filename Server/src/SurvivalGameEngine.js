@@ -126,6 +126,54 @@ const ROULETTE_CARD_IDS  = ['elite_raid', 'time_freeze', 'double_contrib', 'myst
 const ROULETTE_COOLDOWN_MS = 300 * 1000;    // 300s 充能
 const ROULETTE_AUTO_APPLY_MS = 10 * 1000;   // 10s 未 apply 自动兜底
 
+// ==================== §39 商店系统（Shop System，MVP） ====================
+// 策划案 §39.2 商品清单 / §39.3 双轨货币体系 / §39.5 装备槽
+// PM 决策（MVP）：
+//   - §36.12 `shop.minDay=2` 跳过（全局允许，不做 feature_locked）
+//   - §36 赛季末 5 min `season_locked` 跳过
+//   - B9/B10 赛季限定 SKU 跳过（`currentSeasonShopPool` 始终空；`买B9/10` 返 `item_not_found`）
+//   - 持久化跳过：所有新字段仅内存，重启清零（TODO RoomPersistence schemaVersion 2→3 迁移）
+//   - `_roomCreatorId` 鉴权放开（与 §24.4 / §37 一致）
+//   - `shop_effect_triggered` 广播照做（客户端响应由另一 Agent 负责）
+//   - LiveRankingEntry 扩展 `equipped` 字段（_broadcastLiveRanking 填充）
+//   - `entrance_spark` 触发：若 VIP 路径存在则触发，否则 log 占位
+const SHOP_CATALOG = {
+  // A 类——战术即时道具（货币：本局 contributions，不入库存）
+  worker_pep_talk:  { category: 'A', price: 150, slot: null, effect: 'worker_pep_talk' },
+  gate_quickpatch:  { category: 'A', price: 200, slot: null, effect: 'gate_quickpatch' },
+  emergency_alert:  { category: 'A', price: 300, slot: null, effect: 'emergency_alert' },
+  spotlight:        { category: 'A', price: 250, slot: null, effect: 'spotlight' },
+  // B 类固定 SKU——永久身份装备（货币：_contribBalance，入库存）
+  title_supporter:     { category: 'B', price: 500,   slot: 'title' },
+  title_veteran:       { category: 'B', price: 5000,  slot: 'title' },
+  title_legend_mover:  { category: 'B', price: 50000, slot: 'title' },
+  frame_bronze:        { category: 'B', price: 1000,  slot: 'frame' },
+  frame_silver:        { category: 'B', price: 10000, slot: 'frame' },
+  entrance_spark:      { category: 'B', price: 3000,  slot: 'entrance' },
+  barrage_glow:        { category: 'B', price: 2000,  slot: 'barrage' },
+  barrage_crown:       { category: 'B', price: 8000,  slot: 'barrage' },
+};
+// 弹幕 `买A<n>` / `买B<n>` 索引映射（1-based → itemId）
+const SHOP_A_INDEX = ['worker_pep_talk', 'gate_quickpatch', 'emergency_alert', 'spotlight'];  // 买A1~4
+const SHOP_B_INDEX = ['title_supporter', 'title_veteran', 'title_legend_mover',
+                       'frame_bronze',    'frame_silver',
+                       'entrance_spark',
+                       'barrage_glow',    'barrage_crown'];  // 买B1~8
+// 弹幕 `装XY` 字母槽位映射
+const SHOP_EQUIP_SLOT_MAP = { T: 'title', F: 'frame', E: 'entrance', B: 'barrage' };
+// 双确认 pending 5s TTL（§39.7）
+const SHOP_PENDING_TTL_MS = 5000;
+// 装备切换 2s 冷却（§39.5）
+const SHOP_EQUIP_COOLDOWN_MS = 2000;
+// A1 worker_pep_talk 下一波前 30s 采矿 +15%；简化为固定 30s 窗口（§39.2 A1 效果）
+const SHOP_PEP_TALK_DURATION_MS = 30 * 1000;
+// A4 spotlight 激活时长 10s（§39.2 A4）
+const SHOP_SPOTLIGHT_DURATION_MS = 10 * 1000;
+// A2 gate_quickpatch 立即 +100 HP（§39.2 A2）
+const SHOP_GATE_QUICKPATCH_HP = 100;
+// A3 emergency_alert 预警提前秒数（§39.2 A3，无瞭望塔时 10s，有瞭望塔时 30s——MVP 简化为固定 10s）
+const SHOP_EMERGENCY_ALERT_LEAD_SEC = 10;
+
 class BroadcasterRoulette {
   /** @param {SurvivalGameEngine} engine */
   constructor(engine) {
@@ -396,6 +444,21 @@ class SurvivalGameEngine {
     this._buildVoteUsedToday = false;
     this._proposalIdCounter  = 0;
 
+    // ── §39 商店系统（Shop System，MVP）─────────────────────────────────
+    // 双轨货币：_lifetimeContrib（§30，仍为终身累计水位）+ _contribBalance（新增可消费余额）
+    // MVP 持久化：全部内存存储，重启清零（TODO 接入 RoomPersistence schemaVersion 1→2）
+    this._contribBalance              = {};  // {playerId: number} 可消费余额
+    this._playerShopInventory         = {};  // {playerId: string[]} 已购 B 类 itemId
+    this._playerShopEquipped          = {};  // {playerId: {title?, frame?, entrance?, barrage?}} 当前装备
+    this._shopLastEquipAt             = {};  // {playerId: ts} 2s 冷却时间戳
+    this._shopSpotlightActive         = {};  // {playerId: {endsAt}} spotlight 激活状态
+    this._shopSpotlightUsedThisGame   = {};  // {playerId: true} spotlight 本局已用过（激活结束后）
+    this._shopEmergencyAlertUsedWave  = {};  // {playerId: waveIdx} emergency_alert 同波次限 1 次
+    this._shopPendingPurchases        = new Map();  // pendingId -> { playerId, itemId, price, expiresAt }
+    this._peptTalkBoostUntil          = 0;   // §39.4 A1 worker_pep_talk 有效截止时间戳（Date.now() < 此值 → 采矿 +15%）
+    this._shopSpotlightTimers         = {};  // {playerId: setTimeout handle} spotlight 过期句柄
+    this._shopPendingIdCounter        = 0;
+
     // 点赞统计
     this.totalLikes = 0;
 
@@ -569,6 +632,21 @@ class SurvivalGameEngine {
     this._buildVote           = null;
     this._buildVoteUsedToday  = false;
 
+    // §39 商店系统重置：
+    //   跨局永续（MVP 仅内存，重启清零）：_contribBalance / _playerShopInventory / _playerShopEquipped
+    //   每局重置：_shopLastEquipAt / _shopSpotlightActive / _shopSpotlightUsedThisGame /
+    //              _shopEmergencyAlertUsedWave / _shopPendingPurchases / _peptTalkBoostUntil
+    // TODO §39.10 持久化：接入 RoomPersistence schemaVersion 1→2，`_contribBalance[p]` 初值迁移为 `_lifetimeContrib[p]`
+    this._shopLastEquipAt            = {};
+    this._shopSpotlightActive        = {};
+    this._shopSpotlightUsedThisGame  = {};
+    this._shopEmergencyAlertUsedWave = {};
+    this._shopPendingPurchases.clear();
+    this._peptTalkBoostUntil         = 0;
+    // 清理 spotlight 过期定时器
+    for (const t of Object.values(this._shopSpotlightTimers || {})) clearTimeout(t);
+    this._shopSpotlightTimers        = {};
+
     this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
   }
 
@@ -624,6 +702,60 @@ class SurvivalGameEngine {
       if (idx >= 0 && idx < this._buildVote.options.length) {
         this.handleBuildVote(playerId, this._buildVote.proposalId, this._buildVote.options[idx]);
       }
+      return;
+    }
+
+    // ── §39.4 商店购买弹幕：`买A<n>` / `买B<n>`（严格正则）──
+    // A1~4 / B1~8 → 查表 → handleShopPurchase（无 pendingId，弹幕意图已显式）
+    // B9/B10 退化：当期赛季未配置 → 推送 shop_purchase_failed { reason: 'item_not_found' }
+    // 任何越界静默忽略
+    const shopMatch = content_trim.match(/^买([AB])(\d{1,2})$/);
+    if (shopMatch) {
+      if (!playerId) return;
+      const cat = shopMatch[1];
+      const idx = parseInt(shopMatch[2]);
+      let itemId = null;
+      if (cat === 'A' && idx >= 1 && idx <= 4) {
+        itemId = SHOP_A_INDEX[idx - 1];
+      } else if (cat === 'B' && idx >= 1 && idx <= 8) {
+        itemId = SHOP_B_INDEX[idx - 1];
+      } else if (cat === 'B' && (idx === 9 || idx === 10)) {
+        // PM MVP 决策：B9/B10 赛季限定 SKU 跳过，currentSeasonShopPool 始终空 → item_not_found
+        this._shopFailPurchase('item_not_found', `买${cat}${idx}`);
+        return;
+      }
+      if (itemId) {
+        this.handleShopPurchase(playerId, playerName, itemId, null);
+      }
+      // 越界（idx<1 或 A>=5）静默忽略
+      return;
+    }
+
+    // ── §39.5 装备切换弹幕：`装XY`（X=T|F|E|B，Y=数字）──
+    // T=title, F=frame, E=entrance, B=barrage；Y=0 卸下；Y>=1 装上对应 SKU
+    // 同样 2s 冷却，越界静默忽略
+    const equipMatch = content_trim.match(/^装([TFEB])(\d{1,2})$/);
+    if (equipMatch) {
+      if (!playerId) return;
+      const slotLetter = equipMatch[1];
+      const slot = SHOP_EQUIP_SLOT_MAP[slotLetter];
+      if (!slot) return;
+      const idx = parseInt(equipMatch[2]);
+      let itemId = null;
+      if (idx === 0) {
+        itemId = '';  // 卸下
+      } else if (slot === 'title' && idx >= 1 && idx <= 3) {
+        itemId = ['title_supporter', 'title_veteran', 'title_legend_mover'][idx - 1];
+      } else if (slot === 'frame' && idx >= 1 && idx <= 2) {
+        itemId = ['frame_bronze', 'frame_silver'][idx - 1];
+      } else if (slot === 'entrance' && idx === 1) {
+        itemId = 'entrance_spark';
+      } else if (slot === 'barrage' && idx >= 1 && idx <= 2) {
+        itemId = ['barrage_glow', 'barrage_crown'][idx - 1];
+      } else {
+        return;  // 越界静默忽略
+      }
+      this.handleShopEquip(playerId, slot, itemId);
       return;
     }
 
@@ -1479,6 +1611,9 @@ class SurvivalGameEngine {
       // §24.4 elite_raid 精英怪 30s 未击杀 → 穿门打城门
       this._tickEliteRaid(Date.now());
 
+      // §39 商店：pending TTL 扫描（每秒清理过期双确认 pending）
+      this._shopCleanupExpiredPending();
+
       // 随机事件触发检查（仅白天）
       this._checkRandomEvents();
 
@@ -1651,7 +1786,10 @@ class SurvivalGameEngine {
     const broadcasterBoost = this.broadcasterEfficiencyMultiplier || 1.0;         // 主播紧急加速
     const eff666Boost      = this.efficiency666Bonus || 1.0;                      // 666弹幕加成
     const auroraBoost      = this._auroraEffMult || 1.0;                          // §24.4 极光 ×1.5（60s）
-    const totalMult        = Math.min(3.0, levelMult * playerBonus * globalBoost * broadcasterBoost * eff666Boost * auroraBoost);
+    // §39 A1 worker_pep_talk：采矿效率 +15%（与 efficiency666Bonus / ability_pill 按 Math.max 取最大，不叠加）
+    const pepTalkBoost     = (Date.now() < this._peptTalkBoostUntil) ? 1.15 : 1.0;
+    const efficiencyAdditive = Math.max(pepTalkBoost, eff666Boost);
+    const totalMult        = Math.min(3.0, levelMult * playerBonus * globalBoost * broadcasterBoost * efficiencyAdditive * auroraBoost);
 
     // 阶3+（Lv.21+）白天采矿 10% 概率双倍产出（策划案 §30.3 阶3 专属被动）
     // 适用 cmd 1/2/3（采食物/挖煤/采矿），不含 cmd=4 添柴
@@ -2603,6 +2741,15 @@ class SurvivalGameEngine {
     const currentLc   = this._lifetimeContrib[playerId] || 0;
     const catchUpMult = (currentLc < 100 && finalAmount > 0) ? 3 : 1;
     this._lifetimeContrib[playerId] = currentLc + finalAmount * catchUpMult;
+
+    // ── §39 商店：_contribBalance 与 _lifetimeContrib 同步增长（同 catchUpMult）────
+    // 策划案 §39.3 不变式：_addContribution 前后 _lifetimeContrib 的差值 = _contribBalance 的差值
+    // 该字段独立于 contributions（本局）与 _lifetimeContrib（终身水位）：
+    //   - B 类购买仅扣 _contribBalance，_lifetimeContrib 不变（等级/皮肤/豁免不受影响）
+    //   - 不可为负（购买前 handleShopPurchase 校验）
+    // TODO §39.10 持久化：目前 MVP 内存存储，重启清零；等 RoomPersistence schemaVersion 1→2 落地
+    this._contribBalance[playerId] = (this._contribBalance[playerId] || 0) + finalAmount * catchUpMult;
+
     // 首次玩家初始等级为 Lv.1
     if (this._playerLevel[playerId] == null) this._playerLevel[playerId] = 1;
     // 等级检查 + 跨阶广播
@@ -2632,6 +2779,8 @@ class SurvivalGameEngine {
         playerId:    id,
         playerName:  this.playerNames[id] || id,
         contribution: Math.round(score),
+        // §39.5 身份装备（搭现有 live_ranking 广播捎带；空对象兼容老客户端）
+        equipped:    this._playerShopEquipped[id] || {},
       }));
     this.broadcast({ type: 'live_ranking', timestamp: Date.now(), data: { rankings: top5 } });
   }
@@ -3517,6 +3666,487 @@ class SurvivalGameEngine {
 
   // ==================== end §38 ====================
 
+  // ==================== §39 商店系统（Shop System，MVP） ====================
+  // 策划案 §39（第 6709–7115 行）。实现范围：
+  //   - A 类 4 件战术即时道具（worker_pep_talk / gate_quickpatch / emergency_alert / spotlight）
+  //   - B 类固定 8 件身份装备
+  //   - 12 协议 handler（shop_list / shop_purchase_prepare / shop_purchase / shop_equip 输入；
+  //                       shop_list_data / shop_purchase_confirm_prompt / shop_purchase_confirm /
+  //                       shop_purchase_failed / shop_equip_changed / shop_equip_failed /
+  //                       shop_inventory_data / shop_effect_triggered 输出）
+  //   - 弹幕 `买A<n>` / `买B<n>` / `装XY`（handleComment 内集成）
+  // PM 决策（MVP）见 SHOP_CATALOG 注释。
+
+  /**
+   * §39 工具：校验 itemId 是否允许在当前 phase 购买（§39.6 购买窗口）
+   * state 合法值：idle | loading | day | night | settlement
+   *   MVP 无独立 `recovery` variant（策划案中 recovery = running 的第三种，本版归入 day 口径）
+   */
+  _shopIsPhaseAllowed(itemId) {
+    const cfg = SHOP_CATALOG[itemId];
+    if (!cfg) return false;
+    const st = this.state;
+    if (cfg.category === 'B') {
+      // B 类：day/night/settlement 均可（身份装备结算后也能买）
+      return st === 'day' || st === 'night' || st === 'settlement';
+    }
+    // A 类：按 itemId 细分
+    switch (itemId) {
+      case 'worker_pep_talk':
+      case 'emergency_alert':
+        return st === 'day';
+      case 'gate_quickpatch':
+      case 'spotlight':
+        return st === 'day' || st === 'night';
+      default:
+        return false;
+    }
+  }
+
+  /** §39 工具：生成 UUID-like pendingId（MVP 轻量实现，避免引入 uuid 依赖） */
+  _shopGenPendingId() {
+    this._shopPendingIdCounter = (this._shopPendingIdCounter || 0) + 1;
+    return `pend_${Date.now().toString(36)}_${this._shopPendingIdCounter}_${Math.floor(Math.random() * 0xfffff).toString(36)}`;
+  }
+
+  /** §39 工具：推送 shop_purchase_failed（带 reason + 可选附加字段） */
+  _shopFailPurchase(reason, itemId, extra) {
+    const data = { reason, itemId: itemId || null };
+    if (extra) Object.assign(data, extra);
+    this._broadcast({ type: 'shop_purchase_failed', data });
+  }
+
+  /**
+   * handleShopList: 应答 shop_list 请求（C→S）
+   * 返回 SHOP_CATALOG 过滤后的 items 数组。
+   * A 类：按索引顺序列出 4 件；B 类：按索引顺序列出 8 件固定 SKU + owned 历史限定（MVP 暂无限定，列表为空）。
+   * @param {string} playerId 请求者（用于 owned 合并，MVP 未使用）
+   * @param {string} category 'A' | 'B'
+   */
+  handleShopList(playerId, category) {
+    const items = [];
+    if (category === 'A') {
+      for (const itemId of SHOP_A_INDEX) {
+        const cfg = SHOP_CATALOG[itemId];
+        if (!cfg) continue;
+        items.push({
+          itemId,
+          name: itemId,
+          price: cfg.price,
+          slot: cfg.slot || null,
+          category: cfg.category,
+          effect: cfg.effect || '',
+          minLifetimeContrib: 0,
+          limitedSeasonId: '',
+        });
+      }
+    } else if (category === 'B') {
+      for (const itemId of SHOP_B_INDEX) {
+        const cfg = SHOP_CATALOG[itemId];
+        if (!cfg) continue;
+        items.push({
+          itemId,
+          name: itemId,
+          price: cfg.price,
+          slot: cfg.slot || null,
+          category: cfg.category,
+          effect: cfg.effect || '',
+          minLifetimeContrib: 0,
+          limitedSeasonId: '',
+        });
+      }
+      // B9/B10 赛季限定 SKU 跳过（currentSeasonShopPool 始终空，PM MVP 决策）
+    }
+    // 应答：按策划案 §39.9，S→C shop_list_data { category, items }
+    this._broadcast({
+      type: 'shop_list_data',
+      data: { playerId: playerId || '', category, items },
+    });
+  }
+
+  /**
+   * handleShopPurchasePrepare: 双重确认前置（C→S shop_purchase_prepare）
+   * 触发条件（且）：isRoomCreator（MVP 放开） + B 类 + price ≥ 1000
+   * 不满足 → 静默忽略（避免普通玩家占 pending 池）
+   * 满足 → 生成 pendingId UUID，存 _shopPendingPurchases，推送 shop_purchase_confirm_prompt
+   */
+  handleShopPurchasePrepare(playerId, itemId) {
+    if (!playerId) return;
+    const cfg = SHOP_CATALOG[itemId];
+    if (!cfg) return;                          // 静默忽略
+    if (cfg.category !== 'B') return;          // 静默忽略（A 类无双确认）
+    if (cfg.price < 1000) return;              // 静默忽略（<1000 直接购买）
+    // MVP PM 决策：_roomCreatorId 鉴权放开，任何玩家都可发起 prepare
+
+    // 校验余额（余额不足直接 shop_purchase_failed，不进 pending 池）
+    const balance = this._contribBalance[playerId] || 0;
+    if (balance < cfg.price) {
+      return this._shopFailPurchase('insufficient', itemId);
+    }
+
+    // 已拥有 → already_owned（prepare 阶段就拦截，避免浪费 pending）
+    const owned = this._playerShopInventory[playerId] || [];
+    if (owned.includes(itemId)) {
+      return this._shopFailPurchase('already_owned', itemId);
+    }
+
+    // 清掉该玩家已有的旧 pending（同主播同时最多 1 个 pending，§39.7）
+    for (const [pid, p] of this._shopPendingPurchases) {
+      if (p.playerId === playerId) this._shopPendingPurchases.delete(pid);
+    }
+
+    const pendingId = this._shopGenPendingId();
+    const expiresAt = Date.now() + SHOP_PENDING_TTL_MS;
+    this._shopPendingPurchases.set(pendingId, {
+      playerId,
+      itemId,
+      price: cfg.price,
+      expiresAt,
+    });
+
+    this._broadcast({
+      type: 'shop_purchase_confirm_prompt',
+      data: { playerId, pendingId, itemId, price: cfg.price, expiresAt },
+    });
+    console.log(`[Shop] prepare: player=${this._getPlayerName(playerId)} itemId=${itemId} price=${cfg.price} pending=${pendingId}`);
+  }
+
+  /**
+   * handleShopPurchase: 核心购买流程（C→S shop_purchase / 弹幕 买A<n> 买B<n>）
+   * 流程（§39.7）：
+   *  1. 校验 itemId 存在 → 否则 item_not_found
+   *  2. 校验 phase（§39.6 表）→ 否则 wrong_phase
+   *  3. pendingId 校验（若传）：不存在 pending_invalid / 已过期 pending_expired / 匹配则删除一次性
+   *  4. 扣费：A 类从 contributions；B 类从 _contribBalance + owned 检查
+   *  5. A 类特殊校验：supporter_not_allowed / no_effect / spotlight_active / limit_exceeded / per_game_limit
+   *  6. A 类效果执行
+   *  7. B 类 → owned.push(itemId)
+   *  8. 广播 shop_purchase_confirm（房间广播，带 remainingContrib / remainingBalance）
+   */
+  handleShopPurchase(playerId, playerName, itemId, pendingId) {
+    if (!playerId) return;
+
+    // 1) itemId 存在性
+    const cfg = SHOP_CATALOG[itemId];
+    if (!cfg) return this._shopFailPurchase('item_not_found', itemId);
+
+    // 2) phase 校验
+    if (!this._shopIsPhaseAllowed(itemId)) {
+      return this._shopFailPurchase('wrong_phase', itemId);
+    }
+
+    // 3) pendingId 校验（若有）：一次性凭证
+    if (pendingId) {
+      const pending = this._shopPendingPurchases.get(pendingId);
+      if (!pending) {
+        return this._shopFailPurchase('pending_invalid', itemId);
+      }
+      if (Date.now() > pending.expiresAt) {
+        this._shopPendingPurchases.delete(pendingId);
+        return this._shopFailPurchase('pending_expired', itemId);
+      }
+      // playerId + itemId 一致性
+      if (pending.playerId !== playerId || pending.itemId !== itemId) {
+        return this._shopFailPurchase('pending_invalid', itemId);
+      }
+      // 匹配成功 → 一次性删除
+      this._shopPendingPurchases.delete(pendingId);
+    }
+
+    // 4) 扣费 + 特殊校验
+    const pname = playerName || this._getPlayerName(playerId);
+    if (cfg.category === 'A') {
+      // 助威者禁 A 类
+      if (this._supporters.has(playerId)) {
+        return this._shopFailPurchase('supporter_not_allowed', itemId);
+      }
+
+      // A 类特殊预检（在扣费前，避免"无效购买"也扣钱）
+      if (itemId === 'gate_quickpatch') {
+        if (this.gateHp >= this.gateMaxHp) {
+          return this._shopFailPurchase('no_effect', itemId);  // 满血不扣费
+        }
+      }
+      if (itemId === 'spotlight') {
+        const active = this._shopSpotlightActive[playerId];
+        if (active && Date.now() < active.endsAt) {
+          return this._shopFailPurchase('spotlight_active', itemId);  // 激活中不扣费
+        }
+        if (this._shopSpotlightUsedThisGame[playerId]) {
+          return this._shopFailPurchase('limit_exceeded', itemId);   // 本局已用过不扣费
+        }
+      }
+      if (itemId === 'emergency_alert') {
+        // 同波次同玩家限 1 次
+        const lastWave = this._shopEmergencyAlertUsedWave[playerId];
+        const curWave  = this.currentDay;  // 以 currentDay 作为 wave 代理（MVP 简化）
+        if (lastWave !== undefined && lastWave === curWave) {
+          return this._shopFailPurchase('per_game_limit', itemId);
+        }
+      }
+
+      // 余额校验（A 类从 contributions 扣）
+      const curContrib = this.contributions[playerId] || 0;
+      if (curContrib < cfg.price) {
+        return this._shopFailPurchase('insufficient', itemId);
+      }
+      // 扣费
+      this.contributions[playerId] = curContrib - cfg.price;
+
+      // 5) A 类效果执行
+      this._shopApplyAEffect(itemId, playerId, pname);
+
+      // 6) 广播购买成功（A 类带 remainingContrib，不带 remainingBalance）
+      this._broadcast({
+        type: 'shop_purchase_confirm',
+        data: {
+          playerId,
+          playerName: pname,
+          itemId,
+          category: 'A',
+          remainingContrib: Math.round(this.contributions[playerId] || 0),
+        },
+      });
+      console.log(`[Shop] A purchase: ${pname} → ${itemId} (price ${cfg.price}, remaining ${this.contributions[playerId]})`);
+    } else if (cfg.category === 'B') {
+      // B 类：owned 检查
+      if (!this._playerShopInventory[playerId]) this._playerShopInventory[playerId] = [];
+      const owned = this._playerShopInventory[playerId];
+      if (owned.includes(itemId)) {
+        return this._shopFailPurchase('already_owned', itemId);
+      }
+
+      // 余额校验（B 类从 _contribBalance 扣）
+      const balance = this._contribBalance[playerId] || 0;
+      if (balance < cfg.price) {
+        return this._shopFailPurchase('insufficient', itemId);
+      }
+      // 扣费 + 入库存
+      this._contribBalance[playerId] = balance - cfg.price;
+      owned.push(itemId);
+
+      // B 类广播购买成功（带 remainingBalance，不带 remainingContrib）
+      this._broadcast({
+        type: 'shop_purchase_confirm',
+        data: {
+          playerId,
+          playerName: pname,
+          itemId,
+          category: 'B',
+          remainingBalance: Math.round(this._contribBalance[playerId] || 0),
+        },
+      });
+      console.log(`[Shop] B purchase: ${pname} → ${itemId} (price ${cfg.price}, balance ${this._contribBalance[playerId]})`);
+    }
+  }
+
+  /**
+   * §39 A 类效果执行（由 handleShopPurchase 扣费成功后调用）
+   * worker_pep_talk: 下一波前 30s 采矿 +15%
+   * gate_quickpatch: 城门 +100 HP（不超 maxHp）
+   * emergency_alert: 立即广播 monster_wave_incoming
+   * spotlight:       10s 高亮 + BarrageMessageUI 下一条弹幕 ★
+   */
+  _shopApplyAEffect(itemId, sourcePlayerId, sourcePlayerName) {
+    const now = Date.now();
+    switch (itemId) {
+      case 'worker_pep_talk': {
+        // §39.2 A1：下一波出场前 30s 全员采矿 +15%（MVP 简化为"从现在起 30s 内"）
+        //   _applyWorkEffect 用 Math.max(pepTalkBoost, eff666Boost) 与 666/ability_pill 并取
+        this._peptTalkBoostUntil = now + SHOP_PEP_TALK_DURATION_MS;
+        this._broadcast({
+          type: 'shop_effect_triggered',
+          data: {
+            itemId,
+            sourcePlayerId,
+            sourcePlayerName,
+            targetPlayerId: '',
+            durationSec: Math.floor(SHOP_PEP_TALK_DURATION_MS / 1000),
+          },
+        });
+        console.log(`[Shop] worker_pep_talk active for 30s by ${sourcePlayerName}`);
+        break;
+      }
+
+      case 'gate_quickpatch': {
+        // §39.2 A2：立即 +100 HP（不超 gateMaxHp）
+        const hpBefore = Math.round(this.gateHp);
+        this.gateHp = Math.min(this.gateMaxHp, this.gateHp + SHOP_GATE_QUICKPATCH_HP);
+        const hpAfter = Math.round(this.gateHp);
+        this._broadcast({
+          type: 'shop_effect_triggered',
+          data: {
+            itemId,
+            sourcePlayerId,
+            sourcePlayerName,
+            targetPlayerId: '',
+            durationSec: 0,
+            metadata: { gateHpBefore: hpBefore, gateHpAfter: hpAfter, waveIdx: 0, leadSec: 0 },
+          },
+        });
+        // 同步资源（gateHp 改变）
+        this._broadcastResourceUpdate();
+        console.log(`[Shop] gate_quickpatch by ${sourcePlayerName}: ${hpBefore} → ${hpAfter}`);
+        break;
+      }
+
+      case 'emergency_alert': {
+        // §39.2 A3：立即推送一次 monster_wave_incoming；标记 _shopEmergencyAlertUsedWave
+        const leadSec = SHOP_EMERGENCY_ALERT_LEAD_SEC;
+        const waveIdx = this.currentDay; // MVP 简化：以 currentDay 代理 waveIdx
+        const spawnsAt = now + leadSec * 1000;
+        const firstAttackAt = spawnsAt + 3000;
+        this._shopEmergencyAlertUsedWave[sourcePlayerId] = waveIdx;
+        this._broadcast({
+          type: 'monster_wave_incoming',
+          data: {
+            waveIndex: waveIdx,
+            spawnsAt,
+            firstAttackAt,
+            leadSec,
+          },
+        });
+        this._broadcast({
+          type: 'shop_effect_triggered',
+          data: {
+            itemId,
+            sourcePlayerId,
+            sourcePlayerName,
+            targetPlayerId: '',
+            durationSec: 0,
+            metadata: { gateHpBefore: 0, gateHpAfter: 0, waveIdx, leadSec },
+          },
+        });
+        console.log(`[Shop] emergency_alert by ${sourcePlayerName}: waveIdx=${waveIdx} leadSec=${leadSec}`);
+        break;
+      }
+
+      case 'spotlight': {
+        // §39.2 A4：10s 高亮 + 本局限 1 次
+        const endsAt = now + SHOP_SPOTLIGHT_DURATION_MS;
+        this._shopSpotlightActive[sourcePlayerId] = { endsAt };
+        // setTimeout 10s 清理激活并标记本局已用
+        if (this._shopSpotlightTimers[sourcePlayerId]) {
+          clearTimeout(this._shopSpotlightTimers[sourcePlayerId]);
+        }
+        this._shopSpotlightTimers[sourcePlayerId] = setTimeout(() => {
+          delete this._shopSpotlightActive[sourcePlayerId];
+          delete this._shopSpotlightTimers[sourcePlayerId];
+          this._shopSpotlightUsedThisGame[sourcePlayerId] = true;
+        }, SHOP_SPOTLIGHT_DURATION_MS);
+        this._broadcast({
+          type: 'shop_effect_triggered',
+          data: {
+            itemId,
+            sourcePlayerId,
+            sourcePlayerName,
+            targetPlayerId: sourcePlayerId,  // spotlight 目标 = 源自己
+            durationSec: Math.floor(SHOP_SPOTLIGHT_DURATION_MS / 1000),
+          },
+        });
+        console.log(`[Shop] spotlight by ${sourcePlayerName} for 10s`);
+        break;
+      }
+
+      default:
+        console.warn(`[Shop] _shopApplyAEffect: unknown itemId=${itemId}`);
+    }
+  }
+
+  /**
+   * handleShopEquip: 装备槽切换（C→S shop_equip）
+   * 校验：slot ∈ {title,frame,entrance,barrage} + itemId ∈ owned + SHOP_CATALOG[itemId].slot === slot + 2s 冷却
+   * 成功 → 更新 _playerShopEquipped + _shopLastEquipAt，unicast shop_equip_changed
+   * 失败 → unicast shop_equip_failed { reason: slot_mismatch | not_owned | too_frequent, slot, itemId }
+   */
+  handleShopEquip(playerId, slot, itemId) {
+    if (!playerId) return;
+    const validSlots = ['title', 'frame', 'entrance', 'barrage'];
+    if (!validSlots.includes(slot)) {
+      return this._broadcast({
+        type: 'shop_equip_failed',
+        data: { playerId, reason: 'slot_mismatch', slot: slot || '', itemId: itemId || '' },
+      });
+    }
+
+    // 2s 冷却（卸下也走同冷却）
+    const now = Date.now();
+    const last = this._shopLastEquipAt[playerId] || 0;
+    if (now - last < SHOP_EQUIP_COOLDOWN_MS) {
+      return this._broadcast({
+        type: 'shop_equip_failed',
+        data: { playerId, reason: 'too_frequent', slot, itemId: itemId || '' },
+      });
+    }
+
+    if (itemId === null || itemId === undefined || itemId === '') {
+      // 卸下该槽位
+      if (!this._playerShopEquipped[playerId]) this._playerShopEquipped[playerId] = {};
+      delete this._playerShopEquipped[playerId][slot];
+      this._shopLastEquipAt[playerId] = now;
+      return this._broadcast({
+        type: 'shop_equip_changed',
+        data: { playerId, slot, itemId: '' },
+      });
+    }
+
+    // 装上：owned 校验 + slot 匹配
+    const cfg = SHOP_CATALOG[itemId];
+    if (!cfg) {
+      return this._broadcast({
+        type: 'shop_equip_failed',
+        data: { playerId, reason: 'not_owned', slot, itemId },
+      });
+    }
+    if (cfg.slot !== slot) {
+      return this._broadcast({
+        type: 'shop_equip_failed',
+        data: { playerId, reason: 'slot_mismatch', slot, itemId },
+      });
+    }
+    const owned = this._playerShopInventory[playerId] || [];
+    if (!owned.includes(itemId)) {
+      return this._broadcast({
+        type: 'shop_equip_failed',
+        data: { playerId, reason: 'not_owned', slot, itemId },
+      });
+    }
+
+    // 成功：更新装备 + 冷却
+    if (!this._playerShopEquipped[playerId]) this._playerShopEquipped[playerId] = {};
+    this._playerShopEquipped[playerId][slot] = itemId;
+    this._shopLastEquipAt[playerId] = now;
+
+    this._broadcast({
+      type: 'shop_equip_changed',
+      data: { playerId, slot, itemId },
+    });
+
+    // 若装上 entrance_spark → 触发入场特效（若 VIP 广播路径存在则复用；MVP log 占位）
+    if (itemId === 'entrance_spark') {
+      // TODO §39.13 / §17 VIPAnnouncementUI：若房间已有 VIPAnnouncement 路径则触发
+      //   MVP：log 占位，避免依赖未落地的 VIP 协议
+      console.log(`[Shop] entrance_spark equipped by ${this._getPlayerName(playerId)} — VIP path TODO`);
+    }
+
+    console.log(`[Shop] equip: ${this._getPlayerName(playerId)} slot=${slot} itemId=${itemId}`);
+  }
+
+  /**
+   * §39.7 pending TTL 扫描（_tick 内调用，每秒一次）
+   * 超时 pending 自动清理；客户端若发 shop_purchase 会收到 pending_invalid
+   */
+  _shopCleanupExpiredPending() {
+    const now = Date.now();
+    for (const [pid, p] of this._shopPendingPurchases) {
+      if (now > p.expiresAt) {
+        this._shopPendingPurchases.delete(pid);
+      }
+    }
+  }
+
+  // ==================== end §39 ====================
+
   _clearTick() {
     if (this._tickTimer) { clearInterval(this._tickTimer); this._tickTimer = null; }
     if (this._resourceSyncTimer) { clearInterval(this._resourceSyncTimer); this._resourceSyncTimer = null; }
@@ -3555,6 +4185,10 @@ class SurvivalGameEngine {
     for (const [, info] of this._buildingInProgress) {
       if (info.timer) { clearTimeout(info.timer); info.timer = null; }
     }
+
+    // §39 商店系统：清 spotlight 过期定时器（不清 _shopSpotlightActive，交给 reset() 决定）
+    for (const t of Object.values(this._shopSpotlightTimers || {})) clearTimeout(t);
+    this._shopSpotlightTimers = {};
   }
 }
 
