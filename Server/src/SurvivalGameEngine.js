@@ -475,6 +475,46 @@ class SurvivalGameEngine {
     this.foodBonus           = 1.0;  // 食物采集加成（丰收事件改为 1.5）
     this.oreBonus            = 1.0;  // 矿石采集加成（矿脉事件改为 2.0）
     this._randomEventTimers  = [];   // setTimeout 句柄列表（用于 reset 清理）
+
+    // §35 跨直播间攻防战：SurvivalRoom 构造后 setRoomContext() 注入 { room, tribeWarMgr }
+    //   room       — 所属 SurvivalRoom 实例（用于查 roomId）
+    //   tribeWarMgr— 全局 TribeWarManager 单例（用于能量/夜晚入口/结算断开）
+    this.room         = null;
+    this.tribeWarMgr  = null;
+  }
+
+  // ==================== §35 Tribe War 外部注入 ====================
+
+  /**
+   * SurvivalRoom 构造后调用，注入 room 引用和 TribeWarManager 单例。
+   * 可选项；如果不调用，tribeWarMgr 相关逻辑自动 no-op。
+   */
+  setRoomContext(room, tribeWarMgr) {
+    this.room        = room || null;
+    this.tribeWarMgr = tribeWarMgr || null;
+  }
+
+  /** §35 Tribe War：获取当前 roomId（未注入 room 时返 null）*/
+  _getRoomId() {
+    return (this.room && this.room.roomId) || null;
+  }
+
+  /**
+   * §35 Tribe War：礼物/弹幕产生攻击能量 → 通知 TribeWarManager 累积到 session。
+   * 遵守策划案 §35.3 能量表：
+   *   弹幕 1/2/3/4/6 → +1；T1=1 / T2=5 / T3=10 / T4=20 / T5=50 / T6=100
+   * 若本房间不是任何 session 的攻击方，manager 自动 no-op。
+   */
+  _tribeWarAddEnergy(delta) {
+    if (!this.tribeWarMgr) return;
+    const rid = this._getRoomId();
+    if (!rid || !delta || delta <= 0) return;
+    this.tribeWarMgr.onEnergyAdded(rid, delta);
+  }
+
+  /** §35 Tribe War：暴露 getWaveConfig 给 TribeWarSession（远征怪属性 = 守方当日普通怪） */
+  _getWaveConfigForDay(day) {
+    return getWaveConfig(day);
   }
 
   // ==================== 对外接口 ====================
@@ -864,6 +904,7 @@ class SurvivalGameEngine {
       // 攻击指令（夜晚有效）
       if (this.state === 'night') {
         this._handleAttack(playerId, playerName);
+        this._tribeWarAddEnergy(1);  // §35 攻击能量：cmd=6 夜战 +1
       }
     } else if (content_trim === '探') {
       // §38 探险指令：派出自己的矿工外出探险
@@ -885,6 +926,7 @@ class SurvivalGameEngine {
       }
       this.efficiency666Timer = 30;
       this._trackContribution(playerId, 2, 'barrage');
+      this._tribeWarAddEnergy(1);  // §35 攻击能量：666 弹幕 +1
       this.broadcast({ type: 'special_effect', timestamp: Date.now(), data: { effect: 'glow_all', duration: 3 } });
       console.log(`[SurvivalEngine] 666 bonus activated by ${playerName}, efficiency +${Math.round((this.efficiency666Bonus-1)*100)}% for 30s`);
     }
@@ -940,6 +982,10 @@ class SurvivalGameEngine {
 
     // 贡献值 = 礼物得分（策划案 §9）
     this._trackContribution(playerId, gift.score, 'gift');
+    // §35 Tribe War 攻击能量（策划案 §35.3）：T1=1 / T2=5 / T3=10 / T4=20 / T5=50 / T6=100
+    // 按 tier 映射（gift.tier 是 1~6）；兜底按 score 阈值
+    const _tribeEnergyByTier = { 1: 1, 2: 5, 3: 10, 4: 20, 5: 50, 6: 100 };
+    this._tribeWarAddEnergy(_tribeEnergyByTier[gift.tier] || 1);
     // 积分池：礼物得分入池（§37 market 抬升 ×1.1）
     const _marketMult = this._buildings.has('market') ? 1.1 : 1.0;
     this.scorePool += gift.score * _marketMult;
@@ -1504,6 +1550,20 @@ class SurvivalGameEngine {
       }
     }, 3000);
     this._waveTimers.push(nightStartDelay);
+
+    // §35 Tribe War：本房间若正在被其他房间攻击 → 通知 TribeWarManager 释放远征怪
+    // （延迟 4s 跟随 nightStartDelay，保证夜晚 wave 调度先起；manager 内部 no-op 若未被攻击）
+    if (this.tribeWarMgr) {
+      const rid = this._getRoomId();
+      if (rid) {
+        const tribeWarRelease = setTimeout(() => {
+          if (this.state === 'night' && this.tribeWarMgr) {
+            try { this.tribeWarMgr.onDefenderEnterNight(rid); } catch (e) { /* ignore */ }
+          }
+        }, 4000);
+        this._waveTimers.push(tribeWarRelease);
+      }
+    }
   }
 
   _enterSettlement(result, reason) {
@@ -1513,6 +1573,14 @@ class SurvivalGameEngine {
     // 当前无 §36 堡垒日升/降，以失败结算近似处理（TODO §36 接入后迁移到 fortressDay 降级路径）
     if (result === 'lose') {
       this._demoteBuildings('demoted');
+    }
+
+    // §35 Tribe War：本房间进入结算 → 立即断开参与的所有 session（攻击方/防守方均断）
+    if (this.tribeWarMgr) {
+      const rid = this._getRoomId();
+      if (rid) {
+        try { this.tribeWarMgr.onRoomSettlement(rid); } catch (e) { /* ignore */ }
+      }
     }
 
     this._clearAllTimers();
@@ -1816,6 +1884,7 @@ class SurvivalGameEngine {
     }
 
     this._trackContribution(playerId, 1, 'barrage'); // 工作贡献值=1（弹幕来源，阶2被动 ×1.5）
+    this._tribeWarAddEnergy(1);  // §35 攻击能量：工作指令弹幕 cmd 1/2/3/4 +1
   }
 
   // ==================== 内部：怪物追踪 ====================
