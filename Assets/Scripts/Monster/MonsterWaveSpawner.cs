@@ -273,6 +273,114 @@ namespace DrscfZ.Monster
             Debug.Log($"[WaveSpawner] Monster died: {monster.MonsterId} ({monster.Type})");
         }
 
+        // ==================== §35 跨直播间攻防战 — 远征怪生成 ====================
+
+        /// <summary>红色 tint（MaterialPropertyBlock 复写 _BaseColor / _Color）</summary>
+        private static readonly Color TribeWarTint = new Color(1f, 0.35f, 0.35f, 1f);
+
+        /// <summary>
+        /// §35.4 生成红色远征怪（Tribe War Expedition）。
+        /// 复用现有怪物 Prefab / 初始化流程，差异点：
+        ///   - 刷怪点固定为 SpawnTop（(5,0,28) 附近，与策划案 §35.4 对齐）
+        ///   - 每只怪 Renderer 通过 MaterialPropertyBlock 覆盖 _BaseColor/_Color（不新建材质）
+        ///   - 头顶名字显示 attackerName（MVP：若 MonsterController 未实现 name 字段，Debug.Log 占位）
+        ///   - 属性与当前天数 (_currentDay) 的普通怪一致（与 SpawnOneMonster 同公式）
+        ///   - 仍遵守 maxAliveMonsters = 15 上限（超上限时直接丢弃，避免阻塞协程）
+        /// </summary>
+        public void SpawnTribeWarExpedition(int count, string attackerName)
+        {
+            if (count <= 0) return;
+            StartCoroutine(SpawnTribeWarExpeditionCoroutine(count, attackerName));
+        }
+
+        private IEnumerator SpawnTribeWarExpeditionCoroutine(int count, string attackerName)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                // 超上限时等待（与 SpawnBatch 一致）；但不阻塞太久——给出最长 5s 等待窗口
+                float waitAcc = 0f;
+                while (_activeMonsters.Count >= _maxAliveMonsters && waitAcc < 5f)
+                {
+                    yield return new WaitForSeconds(0.5f);
+                    waitAcc += 0.5f;
+                }
+                if (_activeMonsters.Count >= _maxAliveMonsters)
+                {
+                    Debug.LogWarning($"[WaveSpawner] 远征怪超上限 {_maxAliveMonsters}，跳过 {count - i} 只（attacker={attackerName}）");
+                    yield break;
+                }
+                SpawnOneTribeWarMonster(attackerName);
+                yield return new WaitForSeconds(0.1f + UnityEngine.Random.Range(0f, 0.1f));
+            }
+        }
+
+        private void SpawnOneTribeWarMonster(string attackerName)
+        {
+            // 刷怪点固定为 top（策划案 §35.4）
+            Vector3 spawnPos = GetSpawnPos("top");
+
+            var prefabToUse = (_monsterPrefab2 != null && UnityEngine.Random.value > 0.5f)
+                              ? _monsterPrefab2 : _monsterPrefab;
+
+            GameObject go;
+            if (prefabToUse != null)
+            {
+                go = Instantiate(prefabToUse, spawnPos, Quaternion.identity);
+                float s = Mathf.Max(0.001f, _monsterScale);
+                go.transform.localScale = Vector3.one * s;
+            }
+            else
+            {
+                go = new GameObject("TribeWarExpedition_Placeholder");
+                go.transform.position = spawnPos;
+                Debug.LogWarning("[WaveSpawner] Monster prefab missing! Tribe War expedition uses invisible placeholder.");
+            }
+
+            string monsterId = $"tw_exp_{_activeMonsters.Count}_{UnityEngine.Random.Range(1000,9999)}";
+            go.name = $"TWExp_{monsterId}_{attackerName}";
+
+            var ctrl = go.GetComponent<MonsterController>() ?? go.AddComponent<MonsterController>();
+
+            // 与当前天数普通怪属性一致（§35.4）
+            int hp    = Mathf.RoundToInt(20f + _currentDay * 8f);
+            int atk   = Mathf.RoundToInt(3f + _currentDay * 1.5f);
+            float spd = 1.8f + _currentDay * 0.1f;
+            ctrl.Initialize(hp, atk, spd, _cityGateTarget);
+            ctrl.SetMonsterIdAndType(monsterId, DrscfZ.Monster.MonsterType.Normal);
+            ctrl.OnDead += HandleMonsterDead;
+            _activeMonsters.Add(ctrl);
+
+            // 红色 tint（MaterialPropertyBlock，不新建材质）
+            ApplyTribeWarRedTint(go);
+
+            // MVP 占位：MonsterController 未实现 name 字段，Debug.Log 记录 attackerName
+            // 后续补强 PlayerNameTag-style head tag 时可填充。
+            if (!string.IsNullOrEmpty(attackerName))
+            {
+                Debug.Log($"[WaveSpawner] 远征怪生成：id={monsterId} attacker={attackerName} (头顶名字待视觉任务实现)");
+            }
+        }
+
+        /// <summary>对 go 的所有 Renderer 应用红色 tint（MaterialPropertyBlock）。
+        /// 兼容 URP Lit (_BaseColor) / Built-in Standard (_Color) 两种常见属性名。</summary>
+        private static void ApplyTribeWarRedTint(GameObject go)
+        {
+            if (go == null) return;
+            var renderers = go.GetComponentsInChildren<Renderer>(true);
+            if (renderers == null || renderers.Length == 0) return;
+            var mpb = new MaterialPropertyBlock();
+            foreach (var r in renderers)
+            {
+                if (r == null) continue;
+                r.GetPropertyBlock(mpb);
+                // URP Lit / Simple Lit
+                mpb.SetColor("_BaseColor", TribeWarTint);
+                // Built-in Standard（无 _BaseColor 时仍有 _Color；同时设不冲突）
+                mpb.SetColor("_Color", TribeWarTint);
+                r.SetPropertyBlock(mpb);
+            }
+        }
+
         /// <summary>根据MonsterId查找活跃的MonsterController</summary>
         public MonsterController FindMonsterById(string monsterId)
         {

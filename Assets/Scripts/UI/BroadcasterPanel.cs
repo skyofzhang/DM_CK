@@ -44,6 +44,9 @@ namespace DrscfZ.UI
         [Header("🛒 商店 Tab 按钮（§39 🆕 v1.27，委托给 ShopUI；Prefab 绑定由人工补）")]
         [SerializeField] private Button   _shopTabButton;
 
+        [Header("⚔️ 跨直播间攻防战按钮（§35 🆕 v1.27，委托给 TribeWarLobbyUI；Prefab 绑定由人工补）")]
+        [SerializeField] private Button   _tribeWarButton;
+
         // ==================== 颜色常量 ====================
 
         // ⚡ 按钮：可用/CD两种状态背景色
@@ -93,6 +96,8 @@ namespace DrscfZ.UI
                 _rouletteButton.onClick.AddListener(OnRouletteClicked);
             if (_shopTabButton != null)
                 _shopTabButton.onClick.AddListener(OnShopClicked);
+            if (_tribeWarButton != null)
+                _tribeWarButton.onClick.AddListener(OnTribeWarClicked);
 
             // 初始化UI状态
             ResetBoostBtn();
@@ -257,6 +262,24 @@ namespace DrscfZ.UI
             else
             {
                 Debug.LogWarning("[BroadcasterPanel] OnShopClicked：ShopUI.Instance 为 null，检查是否挂载 ShopUI 脚本");
+            }
+        }
+
+        /// <summary>
+        /// ⚔️ 跨直播间攻防战入口（§35）— 打开大厅面板并请求最新房间列表。
+        /// Prefab 绑定待补：_tribeWarButton 需要人工在 Inspector 中拖入；
+        /// TribeWarLobbyUI.Instance 须挂在 Canvas 下的 TribeWarLobbyPanel（always-active 父对象），
+        /// 否则点击时会 Log 占位。
+        /// </summary>
+        private void OnTribeWarClicked()
+        {
+            if (TribeWarLobbyUI.Instance != null)
+            {
+                TribeWarLobbyUI.Instance.OpenPanel();
+            }
+            else
+            {
+                Debug.LogWarning("[BroadcasterPanel] OnTribeWarClicked：TribeWarLobbyUI.Instance 为 null，检查是否挂载 TribeWarLobbyUI 脚本");
             }
         }
 

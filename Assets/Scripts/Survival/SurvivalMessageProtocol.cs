@@ -85,5 +85,18 @@ namespace DrscfZ.Survival
         public const string ShopEffectTriggered       = "shop_effect_triggered";        // S→C：A 类效果触发房间广播
         // C→S 消息（客户端发送时直接用字面量，无需此常量解析）：
         //   shop_list / shop_purchase_prepare / shop_purchase / shop_equip
+
+        // ----- §35 跨直播间攻防战（Tribe War，🆕 v1.27） -----
+        public const string TribeWarRoomListResult       = "tribe_war_room_list_result";       // S→C：大厅列表应答
+        public const string TribeWarAttackFailed         = "tribe_war_attack_failed";          // S→C：攻击/反击失败（unicast 发起方）
+        public const string TribeWarAttackStarted        = "tribe_war_attack_started";         // S→C：攻击开始广播（双方房间）
+        public const string TribeWarUnderAttack          = "tribe_war_under_attack";           // S→C：被攻击通知（仅防守方房间）
+        public const string TribeWarExpeditionSent       = "tribe_war_expedition_sent";        // S→C：远征怪已派出（仅攻击方房间）
+        public const string TribeWarExpeditionIncoming   = "tribe_war_expedition_incoming";    // S→C：远征怪来袭（仅防守方房间）
+        public const string TribeWarCombatReport         = "tribe_war_combat_report";          // S→C：攻击方战报
+        public const string TribeWarCombatReportDefense  = "tribe_war_combat_report_defense";  // S→C：防守方战报
+        public const string TribeWarAttackEnded          = "tribe_war_attack_ended";           // S→C：攻击结束广播（双方房间）
+        // C→S 消息（客户端发送时直接用字面量，无需此常量解析）：
+        //   tribe_war_room_list / tribe_war_attack / tribe_war_stop / tribe_war_retaliate
     }
 }
