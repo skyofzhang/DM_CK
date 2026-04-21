@@ -20,6 +20,9 @@ namespace DrscfZ.Survival
         public int    gateMaxHp;
         public int    gateLevel;     // 城门当前等级（1-4）
         public int    scorePool;     // 当前积分池总量
+        // §16 v1.27 永续模式：recovery 期间服务端推送 'recovery'，常规为 'normal'
+        // （旧消息缺失时反序列化回落默认 "normal"，向下兼容）
+        public string variant = "normal";
         // 注：服务端还发送 workerHp（dict），因 JsonUtility 不支持 Dictionary，
         //     由独立的 worker_hp_update 消息负责同步，此处忽略
     }
@@ -46,6 +49,10 @@ namespace DrscfZ.Survival
         public string phase;         // "day" | "night"
         public int    day;           // 第几天
         public float  phaseDuration; // 本阶段秒数
+        // §16 v1.27 永续模式：variant 仅在恢复期为 "recovery"，常规白天/黑夜为 "normal"
+        // 服务器内部 recovery 态对外仍以 phase="day" 推送，客户端靠 variant 识别
+        // 旧消息缺失此字段时反序列化回落 "normal"（JsonUtility 对默认值生效）
+        public string variant = "normal";
     }
 
     /// <summary>怪物波次信息</summary>
@@ -110,20 +117,34 @@ namespace DrscfZ.Survival
         public int    payout;       // 本局积分池瓜分所得（D：积分池系统）
     }
 
-    /// <summary>游戏结算</summary>
+    /// <summary>阶段性结算（🆕 v1.26 永续模式：无胜利分支，仅失败降级 + 恢复期）
+    /// 字段顺序严格对齐服务端 Object.keys（§16.6）：
+    ///   reason, dayssurvived, fortressDayBefore, fortressDayAfter, newbieProtected,
+    ///   totalScore, rankings, scorePool, distributed, carryover, payoutRate</summary>
     [Serializable]
     public class SurvivalGameEndedData
     {
-        public string result;       // "win" | "lose"
-        public string reason;       // "survived" | "food_depleted" | "temp_freeze" | "gate_breached"
-        public int    dayssurvived; // 存活天数
-        public float  totalScore;   // 总贡献值
-        public SurvivalRankingEntry[] rankings; // 贡献排行（服务器 Top 10）
+        // 🆕 v1.26：移除 result 字段（无胜利分支），reason 枚举新增 all_dead，保留 manual（§16.4）
+        public string reason;             // "food_depleted" | "temp_freeze" | "gate_breached" | "all_dead" | "manual"
+        public int    dayssurvived;       // 本次周期（上次恢复→本次失败）存活天数
+        public int    fortressDayBefore;  // 🆕 §16.6 本次失败前的堡垒日
+        public int    fortressDayAfter;   // 🆕 §16.6 降级后的堡垒日（新手保护期下 =before；manual 时等于 before）
+        public bool   newbieProtected;    // 🆕 §16.6 是否触发新手保护（Day 1-10）
+        public float  totalScore;         // 本次周期内全局总贡献值之和
+        public SurvivalRankingEntry[] rankings; // Top10（含 payout）
         // D：积分池
-        public int    scorePool;    // 本局总积分池
-        public int    distributed;  // 实际瓜分金额
-        public int    carryover;    // 结余（流入主播下局）
-        public float  payoutRate;   // 瓜分比率（胜利0.6，失败0.3）
+        public int    scorePool;          // 本次周期积分池
+        public int    distributed;        // 实际瓜分金额
+        public int    carryover;          // 结余（进入恢复期后的下一周期初始积分池）
+        public float  payoutRate;         // 固定 0.3（失败，永续模式无胜利分支）
+    }
+
+    /// <summary>end_game 被服务端拒绝（仅 state !∈ {day,night} 时返回，§16.4）</summary>
+    [Serializable]
+    public class EndGameFailedData
+    {
+        public string reason;        // 当前仅 "wrong_phase"
+        public string currentState;  // 'idle'|'loading'|'settlement'|'recovery' 等
     }
 
     /// <summary>Boss出现通知（服务器每夜推送）</summary>

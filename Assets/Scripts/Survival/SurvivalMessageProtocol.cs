@@ -27,6 +27,11 @@ namespace DrscfZ.Survival
         // ----- 城门系统 -----
         public const string GateUpgradeFailed = "gate_upgrade_failed";
 
+        // ----- §16 永续模式失败降级 -----
+        // EndGameFailed：end_game 在非 day/night 时被服务端拒（reason='wrong_phase'，§16.4）
+        // RoomFailed 常量见下方 §36 section（与堡垒日降级同帧推送）
+        public const string EndGameFailed = "end_game_failed";
+
         // ----- 矿工HP系统 -----
         public const string WorkerDied      = "worker_died";
         public const string WorkerRevived   = "worker_revived";
