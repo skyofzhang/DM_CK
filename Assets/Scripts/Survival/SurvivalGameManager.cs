@@ -1398,7 +1398,7 @@ namespace DrscfZ.Survival
         /// <summary>§30.3 阶6 15% 格挡触发（worker_blocked）→ 矿工一闪金光 + 跑马灯</summary>
         private void HandleWorkerBlocked(WorkerBlockedData data)
         {
-            // 占位视觉：借用 WorkerVisual.TriggerSpecial 的金色光晕表达"格挡生效"
+            // 占位视觉：借用 WorkerVisual.TriggerAssignmentFlash 的金色闪烁表达"格挡生效"
             var worker = WorkerManager.Instance?.ActiveWorkers;
             if (worker != null)
             {
@@ -1406,7 +1406,7 @@ namespace DrscfZ.Survival
                 {
                     if (w != null && w.PlayerId == data.playerId)
                     {
-                        w.GetComponent<WorkerVisual>()?.TriggerSpecial();
+                        w.GetComponent<WorkerVisual>()?.TriggerAssignmentFlash();
                         break;
                     }
                 }
