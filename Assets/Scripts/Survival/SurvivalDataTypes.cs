@@ -782,7 +782,7 @@ namespace DrscfZ.Survival
         public string detail;
     }
 
-    /// <summary>攻击结束广播（type=tribe_war_attack_ended，双方房间均广播）。
+    /// <summary>攻击结束广播（type=tribe_war_attack_ended,双方房间均广播）。
     /// reason 枚举：manual_stop / zero_energy_timeout / game_ended / season_ended。
     /// stolen* 为本次会话累计被偷取的资源量（防守方视角 = 本房间被偷走的量）。</summary>
     [Serializable]
@@ -793,5 +793,77 @@ namespace DrscfZ.Survival
         public int    stolenFood;
         public int    stolenCoal;
         public int    stolenOre;
+    }
+
+    // ==================== §36 全服同步 + 赛季制（Global Sync + Season，🆕 v1.27） ====================
+    // 协议详见策划案 §36.9 / §19.2；客户端 MVP 极简版：仅脚本,Prefab 绑定留给人工。
+    //
+    // 客户端 MVP 范围：world_clock_tick / season_state / fortress_day_changed / room_failed /
+    //                  season_started(映射 season_state) / season_settlement
+    // 协议字段对齐说明：
+    //  - world_clock_tick 每秒 1 次由服务端广播（见 §36.9）,携带 phase/seasonDay/themeId/phaseRemainingSec。
+    //  - fortress_day_changed 的 reason 枚举包含 'promoted'/'demoted'/'newbie_protected'/'cap_blocked'/'cap_reset'（见 §36.5.1）。
+    //  - FortressDayChangedData.daily* 4 字段由 §36.5.1 扩展；服务端未开启 cap flag 时 dailyCapMax 可能为 0。
+    //  - RoomFailedData.demotionReason 与 §16.1 失败规则 + survival_game_ended.reason 统一枚举。
+
+    /// <summary>全服时钟每秒广播（type=world_clock_tick）</summary>
+    [Serializable]
+    public class WorldClockTickData
+    {
+        public string phase;              // "day" | "night"
+        public int    seasonDay;          // 1-7
+        public int    seasonId;           // 当前赛季 id（int 表示；服务端可能发字符串 id，此处保持 MVP 简化版）
+        public string themeId;            // classic_frozen / blood_moon / snowstorm / dawn / frenzy / serene
+        public int    phaseRemainingSec;  // 本阶段剩余秒数
+    }
+
+    /// <summary>赛季状态快照（type=season_state，连接/主动请求时推送）</summary>
+    [Serializable]
+    public class SeasonStateData
+    {
+        public int    seasonId;
+        public int    seasonDay;
+        public string themeId;
+    }
+
+    /// <summary>堡垒日变更（type=fortress_day_changed，挺过/降级/新手保护/cap_blocked/cap_reset 后推送）</summary>
+    [Serializable]
+    public class FortressDayChangedData
+    {
+        public int    oldFortressDay;
+        public int    newFortressDay;
+        public string reason;                    // 'promoted'/'demoted'/'newbie_protected'/'cap_blocked'/'cap_reset'
+        public int    seasonDay;
+        // §36.5.1 每日闯关上限扩展 4 字段（服务端未启用 cap flag 时 dailyCapMax 可能为 0）
+        public int    dailyFortressDayGained;
+        public int    dailyCapMax;
+        public long   dailyResetAt;              // Unix ms，下次 UTC+8 05:00
+        public bool   dailyCapBlocked;
+    }
+
+    /// <summary>房间失败降级补充数据（type=room_failed，与 fortress_day_changed 同帧推送）</summary>
+    [Serializable]
+    public class RoomFailedData
+    {
+        public int    oldFortressDay;
+        public int    newFortressDay;
+        public string demotionReason;            // 'gate_breached'/'food_depleted'/'temp_freeze'/'all_dead'
+        public bool   newbieProtected;
+    }
+
+    /// <summary>赛季开始（type=season_started，MVP 占位；服务端若使用 season_state 替代时此消息可不下发）</summary>
+    [Serializable]
+    public class SeasonStartedData
+    {
+        public int    seasonId;
+        public string themeId;
+    }
+
+    /// <summary>赛季结算（type=season_settlement，D7 夜晚结束或 Boss 池归零后广播）</summary>
+    [Serializable]
+    public class SeasonSettlementData
+    {
+        public int    seasonId;
+        public string nextThemeId;
     }
 }

@@ -56,6 +56,13 @@ namespace DrscfZ.UI
         // 助威模式 §33（🆕 v1.27）
         private int _supporterCount = 0;
 
+        // §36 全服同步（🆕 v1.27 MVP）：最近一次 world_clock_tick/season_state 快照
+        private int    _seasonDay;
+        private string _themeId;
+        private int    _fortressDay;
+        // 订阅 §36 事件标志（独立于 _subscribed 的子系统聚合订阅，避免两条路径错位）
+        private bool _sgmSubscribedS36 = false;
+
         private void Awake()
         {
             if (Instance != null && Instance != this) { /* 保留先进入的实例 */ return; }
@@ -122,6 +129,23 @@ namespace DrscfZ.UI
                 sgm.OnPlayerJoined     += _ => UpdatePlayerCount();
                 sgm.OnScorePoolUpdated += HandleScorePoolUpdated;
                 UpdatePlayerCount();
+
+                // §36 全服同步订阅
+                if (!_sgmSubscribedS36)
+                {
+                    sgm.OnWorldClockTick     += HandleWorldClockTick;
+                    sgm.OnSeasonState        += HandleSeasonState;
+                    sgm.OnFortressDayChanged += HandleFortressDayChanged;
+                    _sgmSubscribedS36 = true;
+                    // 若已有缓存则立即同步一次
+                    var snap = sgm.CurrentSeasonState;
+                    if (snap != null)
+                    {
+                        _seasonDay = snap.seasonDay;
+                        _themeId   = snap.themeId;
+                        UpdatePhaseDisplay();
+                    }
+                }
             }
 
             _subscribed = true;
@@ -141,6 +165,14 @@ namespace DrscfZ.UI
 
             var sgm = SurvivalGameManager.Instance;
             if (sgm != null) sgm.OnScorePoolUpdated -= HandleScorePoolUpdated;
+
+            if (_sgmSubscribedS36 && sgm != null)
+            {
+                sgm.OnWorldClockTick     -= HandleWorldClockTick;
+                sgm.OnSeasonState        -= HandleSeasonState;
+                sgm.OnFortressDayChanged -= HandleFortressDayChanged;
+                _sgmSubscribedS36 = false;
+            }
 
             _subscribed = false;
         }
@@ -247,14 +279,74 @@ namespace DrscfZ.UI
         private void UpdatePhaseDisplay()
         {
             var dn = DayNightCycleManager.Instance;
-            if (dn != null && phaseText)
+            if (!phaseText) return;
+
+            // §36 MVP：若已收到 world_clock_tick/season_state → 显示组合"堡垒 X / 赛季 Y (主题)"
+            // 否则退化为旧版"第 N 天 · 白天/夜晚"
+            bool hasSeasonData = _seasonDay > 0 && !string.IsNullOrEmpty(_themeId);
+            bool hasFortressDay = _fortressDay > 0;
+
+            if (hasSeasonData || hasFortressDay)
+            {
+                string themeName = SurvivalGameManager.GetSeasonThemeName(_themeId);
+                string fortressStr = _fortressDay > 0 ? $"堡垒 {_fortressDay}" : "";
+                string seasonStr   = _seasonDay > 0
+                    ? (string.IsNullOrEmpty(themeName) ? $"赛季 D{_seasonDay}" : $"赛季 D{_seasonDay}({themeName})")
+                    : "";
+                phaseText.text = string.IsNullOrEmpty(fortressStr)
+                    ? seasonStr
+                    : (string.IsNullOrEmpty(seasonStr) ? fortressStr : $"{fortressStr} / {seasonStr}");
+            }
+            else if (dn != null)
             {
                 phaseText.text = dn.GetPhaseDisplayName();
-                // 夜晚时文字变冰蓝
-                phaseText.color = dn.IsNight
-                    ? new Color(0.6f, 0.85f, 1f)  // 冰蓝
-                    : new Color(1f, 0.95f, 0.6f);  // 暖黄
             }
+
+            // 夜晚时文字变冰蓝（依旧沿用 DayNightCycleManager 的判定，若未初始化保持默认白）
+            if (dn != null)
+            {
+                phaseText.color = dn.IsNight
+                    ? new Color(0.6f, 0.85f, 1f)
+                    : new Color(1f, 0.95f, 0.6f);
+            }
+        }
+
+        // ==================== §36 全服同步事件处理 ====================
+
+        /// <summary>world_clock_tick：1Hz 更新顶部计时器 + 缓存 phase/seasonDay/themeId。
+        /// 注意：DayNightCycleManager.OnTimeTick 已驱动 timerText；本方法仅在 tick 携带
+        /// phaseRemainingSec 且 DayNightCycleManager 未初始化时兜底写入。</summary>
+        private void HandleWorldClockTick(WorldClockTickData data)
+        {
+            if (data == null) return;
+            _seasonDay = data.seasonDay;
+            _themeId   = data.themeId;
+
+            // 兜底：若 DayNightCycleManager 未就绪（如纯 §36 服务端模式），用 world_clock_tick 写计时器
+            if (timerText && DayNightCycleManager.Instance == null && data.phaseRemainingSec > 0)
+            {
+                int min = Mathf.FloorToInt(data.phaseRemainingSec / 60f);
+                int sec = data.phaseRemainingSec % 60;
+                timerText.text = $"{min:00}:{sec:00}";
+                timerText.color = data.phaseRemainingSec <= 30 ? Color.red : Color.white;
+            }
+            UpdatePhaseDisplay();
+        }
+
+        private void HandleSeasonState(SeasonStateData data)
+        {
+            if (data == null) return;
+            _seasonDay = data.seasonDay;
+            _themeId   = data.themeId;
+            UpdatePhaseDisplay();
+        }
+
+        private void HandleFortressDayChanged(FortressDayChangedData data)
+        {
+            if (data == null) return;
+            _fortressDay = data.newFortressDay;
+            if (data.seasonDay > 0) _seasonDay = data.seasonDay;
+            UpdatePhaseDisplay();
         }
 
         private void UpdatePlayerCount()

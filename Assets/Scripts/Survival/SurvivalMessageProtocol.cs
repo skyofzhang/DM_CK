@@ -86,6 +86,14 @@ namespace DrscfZ.Survival
         // C→S 消息（客户端发送时直接用字面量，无需此常量解析）：
         //   shop_list / shop_purchase_prepare / shop_purchase / shop_equip
 
+        // ----- §36 全服同步 + 赛季制（🆕 v1.27 MVP） -----
+        public const string WorldClockTick     = "world_clock_tick";     // S→C：每秒广播（phase/seasonDay/themeId/phaseRemainingSec）
+        public const string SeasonState        = "season_state";         // S→C：赛季状态快照（连接/主动请求）
+        public const string FortressDayChanged = "fortress_day_changed"; // S→C：堡垒日变更（挺过/降级/新手保护/cap_blocked/cap_reset）
+        public const string RoomFailed         = "room_failed";          // S→C：房间失败降级补充数据（与 fortress_day_changed 同帧推送）
+        public const string SeasonStarted      = "season_started";       // S→C：赛季开始（MVP 占位；可由 season_state 替代）
+        public const string SeasonSettlement   = "season_settlement";    // S→C：赛季结算广播（D7 夜晚结束或 Boss 池归零）
+
         // ----- §35 跨直播间攻防战（Tribe War，🆕 v1.27） -----
         public const string TribeWarRoomListResult       = "tribe_war_room_list_result";       // S→C：大厅列表应答
         public const string TribeWarAttackFailed         = "tribe_war_attack_failed";          // S→C：攻击/反击失败（unicast 发起方）
