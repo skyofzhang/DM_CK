@@ -691,4 +691,107 @@ namespace DrscfZ.Survival
         public int                durationSec;     // 0 表示瞬时
         public ShopEffectMetadata metadata;
     }
+
+    // ==================== §35 跨直播间攻防战(Tribe War,🆕 v1.27) ====================
+    // 协议见策划案 §35.10 / §19；客户端 MVP P1：仅脚本，Prefab 绑定留给人工。
+    //
+    // ⚠️ 字段命名对齐备忘：协议层事件键 C# 端用 `eventName`（C# `event` 是关键字）。
+    //    服务端 tribe_war_combat_report / tribe_war_combat_report_defense 须以 `eventName`
+    //    作为字段名下发（策划案 §35.10 / §19 文案中 "type" 为描述，wire format 与前端统一）。
+    //    若后端仍用 `event`，Unity JsonUtility 将无法填充此字段，需后端对齐。
+
+    /// <summary>攻防战大厅列表中的单个房间条目（tribe_war_room_list_result.rooms[i]）。
+    /// MVP 字段子集：只保留大厅选人最小必要集（roomId/streamerName/state/day/underAttack/attackable）。
+    /// 其它后端字段（difficulty/playerCount/gateHpPct）在主版可补。</summary>
+    [Serializable]
+    public class TribeWarRoomInfo
+    {
+        public string roomId;
+        public string streamerName;
+        public string state;         // 'day' | 'night' | 'recovery' | 其它
+        public int    day;
+        public bool   underAttack;   // 当前是否正在被其他房间攻击
+        public bool   attackable;    // 是否可作为目标（综合自我限制/互斥判定，由服务端给出）
+    }
+
+    /// <summary>攻防战大厅列表应答(type=tribe_war_room_list_result)</summary>
+    [Serializable]
+    public class TribeWarRoomListResultData
+    {
+        public TribeWarRoomInfo[] rooms;
+    }
+
+    /// <summary>攻击/反击失败（type=tribe_war_attack_failed，unicast 发起方）。
+    /// reason 枚举参见策划案 §35.10 / §19.2：cannot_attack_self / in_cooldown / already_attacking /
+    /// target_already_under_attack / target_unavailable / target_not_playing / not_under_attack /
+    /// wrong_phase / feature_locked 等。</summary>
+    [Serializable]
+    public class TribeWarAttackFailedData
+    {
+        public string reason;
+    }
+
+    /// <summary>攻击开始广播（type=tribe_war_attack_started，双方房间均广播，UI 根据自身 roomId 判断攻/守视角）</summary>
+    [Serializable]
+    public class TribeWarAttackStartedData
+    {
+        public string sessionId;
+        public string attackerRoomId;
+        public string attackerStreamerName;
+        public string defenderRoomId;
+        public string defenderStreamerName;
+    }
+
+    /// <summary>被攻击通知（type=tribe_war_under_attack，仅防守方房间广播，客户端展示被攻击横幅+状态面板）</summary>
+    [Serializable]
+    public class TribeWarUnderAttackData
+    {
+        public string sessionId;
+        public string attackerRoomId;
+        public string attackerStreamerName;
+    }
+
+    /// <summary>远征怪已派出（type=tribe_war_expedition_sent，仅攻击方房间广播，更新状态面板派出数/能量消耗）</summary>
+    [Serializable]
+    public class TribeWarExpeditionSentData
+    {
+        public string sessionId;
+        public int    count;
+        public int    remainingEnergy;
+    }
+
+    /// <summary>远征怪来袭（type=tribe_war_expedition_incoming，仅防守方房间广播，
+    /// 客户端调 MonsterWaveSpawner.SpawnTribeWarExpedition 渲染红色远征怪）</summary>
+    [Serializable]
+    public class TribeWarExpeditionIncomingData
+    {
+        public string sessionId;
+        public int    count;
+        public string attackerStreamerName;
+    }
+
+    /// <summary>战报条目（type=tribe_war_combat_report / tribe_war_combat_report_defense，双方视角各自广播）。
+    /// <c>eventName</c> 对应策划案 §35.10 "type" 字段（damage/worker_killed/gate_hit/expedition_killed/resource_stolen/gate_bonus）；
+    /// detail 是前端友好的一行文案，MVP 直接渲染到战报滚动区。
+    /// ⚠️ 需后端对齐字段名 <c>eventName</c>（不用 C# 保留字 <c>event</c>）。</summary>
+    [Serializable]
+    public class TribeWarCombatReportData
+    {
+        public string sessionId;
+        public string eventName;   // damage / worker_killed / gate_hit / expedition_killed / resource_stolen / gate_bonus
+        public string detail;
+    }
+
+    /// <summary>攻击结束广播（type=tribe_war_attack_ended，双方房间均广播）。
+    /// reason 枚举：manual_stop / zero_energy_timeout / game_ended / season_ended。
+    /// stolen* 为本次会话累计被偷取的资源量（防守方视角 = 本房间被偷走的量）。</summary>
+    [Serializable]
+    public class TribeWarAttackEndedData
+    {
+        public string sessionId;
+        public string reason;
+        public int    stolenFood;
+        public int    stolenCoal;
+        public int    stolenOre;
+    }
 }

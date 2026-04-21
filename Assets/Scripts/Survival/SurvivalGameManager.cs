@@ -111,6 +111,17 @@ namespace DrscfZ.Survival
         public event Action<ShopInventoryData>              OnShopInventoryData;
         public event Action<ShopEffectTriggeredData>        OnShopEffectTriggered;
 
+        // §35 跨直播间攻防战
+        public event Action<TribeWarRoomListResultData>     OnTribeWarRoomListResult;
+        public event Action<TribeWarAttackFailedData>       OnTribeWarAttackFailed;
+        public event Action<TribeWarAttackStartedData>      OnTribeWarAttackStarted;
+        public event Action<TribeWarUnderAttackData>        OnTribeWarUnderAttack;
+        public event Action<TribeWarExpeditionSentData>     OnTribeWarExpeditionSent;
+        public event Action<TribeWarExpeditionIncomingData> OnTribeWarExpeditionIncoming;
+        public event Action<TribeWarCombatReportData>       OnTribeWarCombatReport;
+        public event Action<TribeWarCombatReportData>       OnTribeWarCombatReportDefense;
+        public event Action<TribeWarAttackEndedData>        OnTribeWarAttackEnded;
+
         // §39 本地装备缓存（自己最新的 equipped，供 UI 层做灰化/装备按钮回显）
         public ShopEquipped MyEquipped { get; private set; }
 
@@ -494,6 +505,44 @@ namespace DrscfZ.Survival
                 case "shop_effect_triggered":
                     var set_ = JsonUtility.FromJson<ShopEffectTriggeredData>(dataJson);
                     if (set_ != null) HandleShopEffectTriggered(set_);
+                    break;
+
+                // ----- §35 跨直播间攻防战 -----
+                case "tribe_war_room_list_result":
+                    var twRL = JsonUtility.FromJson<TribeWarRoomListResultData>(dataJson);
+                    if (twRL != null) HandleTribeWarRoomListResult(twRL);
+                    break;
+                case "tribe_war_attack_failed":
+                    var twAF = JsonUtility.FromJson<TribeWarAttackFailedData>(dataJson);
+                    if (twAF != null) HandleTribeWarAttackFailed(twAF);
+                    break;
+                case "tribe_war_attack_started":
+                    var twAS = JsonUtility.FromJson<TribeWarAttackStartedData>(dataJson);
+                    if (twAS != null) HandleTribeWarAttackStarted(twAS);
+                    break;
+                case "tribe_war_under_attack":
+                    var twUA = JsonUtility.FromJson<TribeWarUnderAttackData>(dataJson);
+                    if (twUA != null) HandleTribeWarUnderAttack(twUA);
+                    break;
+                case "tribe_war_expedition_sent":
+                    var twES = JsonUtility.FromJson<TribeWarExpeditionSentData>(dataJson);
+                    if (twES != null) HandleTribeWarExpeditionSent(twES);
+                    break;
+                case "tribe_war_expedition_incoming":
+                    var twEI = JsonUtility.FromJson<TribeWarExpeditionIncomingData>(dataJson);
+                    if (twEI != null) HandleTribeWarExpeditionIncoming(twEI);
+                    break;
+                case "tribe_war_combat_report":
+                    var twCR = JsonUtility.FromJson<TribeWarCombatReportData>(dataJson);
+                    if (twCR != null) HandleTribeWarCombatReport(twCR);
+                    break;
+                case "tribe_war_combat_report_defense":
+                    var twCRD = JsonUtility.FromJson<TribeWarCombatReportData>(dataJson);
+                    if (twCRD != null) HandleTribeWarCombatReportDefense(twCRD);
+                    break;
+                case "tribe_war_attack_ended":
+                    var twAE = JsonUtility.FromJson<TribeWarAttackEndedData>(dataJson);
+                    if (twAE != null) HandleTribeWarAttackEnded(twAE);
                     break;
             }
         }
@@ -1808,6 +1857,168 @@ namespace DrscfZ.Survival
                 case "spotlight_active":       return "聚光灯已激活";
                 case "per_game_limit":         return "本局该商品已达上限";
                 default:                       return reason;
+            }
+        }
+
+        // ==================== §35 跨直播间攻防战（🆕 v1.27） ====================
+
+        /// <summary>大厅列表应答：路由到 TribeWarLobbyUI.PopulateList。</summary>
+        private void HandleTribeWarRoomListResult(TribeWarRoomListResultData data)
+        {
+            OnTribeWarRoomListResult?.Invoke(data);
+            UI.TribeWarLobbyUI.Instance?.PopulateList(data);
+            int n = data.rooms == null ? 0 : data.rooms.Length;
+            Debug.Log($"[SGM] tribe_war_room_list_result: rooms={n}");
+        }
+
+        /// <summary>攻击/反击失败（unicast 发起方）：跑马灯 + 活动消息。</summary>
+        private void HandleTribeWarAttackFailed(TribeWarAttackFailedData data)
+        {
+            OnTribeWarAttackFailed?.Invoke(data);
+            string reasonText = FormatTribeWarFailReason(data.reason);
+            OnPlayerActivityMessage?.Invoke($"攻防战操作失败：{reasonText}");
+            UI.HorizontalMarqueeUI.Instance?.AddMessage("攻防战", null, reasonText);
+            Debug.Log($"[SGM] tribe_war_attack_failed: reason={data.reason}");
+        }
+
+        /// <summary>攻击开始广播（双方房间均广播）：
+        /// MVP 阶段不区分攻/守视角（缺少自身 roomId 上下文）——两边都打开对应状态面板。
+        /// 人工 QA 可根据场景选用适合视角（攻击方/防守方面板之一）。</summary>
+        private void HandleTribeWarAttackStarted(TribeWarAttackStartedData data)
+        {
+            OnTribeWarAttackStarted?.Invoke(data);
+            UI.TribeWarAttackStatusPanel.Instance?.Show(data);
+            OnPlayerActivityMessage?.Invoke($"【攻防战】{data.attackerStreamerName} → {data.defenderStreamerName}");
+            UI.HorizontalMarqueeUI.Instance?.AddMessage(
+                data.attackerStreamerName, null, $"发起攻防战 → {data.defenderStreamerName}");
+            Debug.Log($"[SGM] tribe_war_attack_started: sessionId={data.sessionId} atk={data.attackerStreamerName} def={data.defenderStreamerName}");
+        }
+
+        /// <summary>被攻击通知（仅防守方房间广播）：展示防守方状态面板 + 顶部飘字告警。</summary>
+        private void HandleTribeWarUnderAttack(TribeWarUnderAttackData data)
+        {
+            OnTribeWarUnderAttack?.Invoke(data);
+            UI.TribeWarDefenseStatusPanel.Instance?.Show(data);
+            UI.TopFloatingTextUI.Instance?.ShowDanger($"【被攻击】{data.attackerStreamerName} 发起攻势！");
+            OnPlayerActivityMessage?.Invoke($"【被攻击】{data.attackerStreamerName} 发起攻势");
+            Debug.Log($"[SGM] tribe_war_under_attack: sessionId={data.sessionId} atk={data.attackerStreamerName}");
+        }
+
+        /// <summary>远征怪已派出（仅攻击方房间广播）：更新攻击状态面板数字。</summary>
+        private void HandleTribeWarExpeditionSent(TribeWarExpeditionSentData data)
+        {
+            OnTribeWarExpeditionSent?.Invoke(data);
+            UI.TribeWarAttackStatusPanel.Instance?.UpdateExpeditionCount(data.count);
+            UI.TribeWarAttackStatusPanel.Instance?.UpdateEnergy(data.remainingEnergy);
+            Debug.Log($"[SGM] tribe_war_expedition_sent: sessionId={data.sessionId} count={data.count} remainingEnergy={data.remainingEnergy}");
+        }
+
+        /// <summary>远征怪来袭（仅防守方房间广播）：调 MonsterWaveSpawner 刷红色远征怪 + 更新防守面板 + 顶部飘字。</summary>
+        private void HandleTribeWarExpeditionIncoming(TribeWarExpeditionIncomingData data)
+        {
+            OnTribeWarExpeditionIncoming?.Invoke(data);
+            if (monsterWaveSpawner != null)
+            {
+                monsterWaveSpawner.SpawnTribeWarExpedition(data.count, data.attackerStreamerName);
+            }
+            else if (MonsterWaveSpawner.Instance != null)
+            {
+                MonsterWaveSpawner.Instance.SpawnTribeWarExpedition(data.count, data.attackerStreamerName);
+            }
+            else
+            {
+                Debug.LogWarning("[SGM] tribe_war_expedition_incoming: MonsterWaveSpawner 为 null，远征怪无法生成");
+            }
+            UI.TribeWarDefenseStatusPanel.Instance?.UpdateExpeditionCount(data.count);
+            UI.TopFloatingTextUI.Instance?.ShowDanger($"【远征怪】{data.count} 只来袭！");
+            Debug.Log($"[SGM] tribe_war_expedition_incoming: count={data.count} atk={data.attackerStreamerName}");
+        }
+
+        /// <summary>攻击方战报：追加到攻击状态面板的战报滚动区。</summary>
+        private void HandleTribeWarCombatReport(TribeWarCombatReportData data)
+        {
+            OnTribeWarCombatReport?.Invoke(data);
+            string line = FormatTribeWarCombatLine(data);
+            UI.TribeWarAttackStatusPanel.Instance?.AppendReport(line);
+
+            // 若战报含 resource_stolen 事件，把累计值同步给面板。
+            // MVP 下累计值由后续 tribe_war_attack_ended 最终给出；中途仅靠 detail 文字。
+            Debug.Log($"[SGM] tribe_war_combat_report: event={data.eventName} detail={data.detail}");
+        }
+
+        /// <summary>防守方战报：追加到防守状态面板的战报滚动区。</summary>
+        private void HandleTribeWarCombatReportDefense(TribeWarCombatReportData data)
+        {
+            OnTribeWarCombatReportDefense?.Invoke(data);
+            string line = FormatTribeWarCombatLine(data);
+            UI.TribeWarDefenseStatusPanel.Instance?.AppendReport(line);
+            Debug.Log($"[SGM] tribe_war_combat_report_defense: event={data.eventName} detail={data.detail}");
+        }
+
+        /// <summary>攻击结束（双方房间广播）：关闭攻/守状态面板、展示总结、同步偷取汇总。</summary>
+        private void HandleTribeWarAttackEnded(TribeWarAttackEndedData data)
+        {
+            OnTribeWarAttackEnded?.Invoke(data);
+            UI.TribeWarAttackStatusPanel.Instance?.UpdateStolen(data.stolenFood, data.stolenCoal, data.stolenOre);
+            UI.TribeWarDefenseStatusPanel.Instance?.UpdateStolen(data.stolenFood, data.stolenCoal, data.stolenOre);
+
+            string reasonText = FormatTribeWarEndReason(data.reason);
+            string summary = $"【攻防战结束】{reasonText} 偷取 食物+{data.stolenFood} 煤炭+{data.stolenCoal} 矿石+{data.stolenOre}";
+            UI.HorizontalMarqueeUI.Instance?.AddMessage("攻防战", null, summary);
+            OnPlayerActivityMessage?.Invoke(summary);
+
+            UI.TribeWarAttackStatusPanel.Instance?.Hide();
+            UI.TribeWarDefenseStatusPanel.Instance?.Hide();
+            Debug.Log($"[SGM] tribe_war_attack_ended: sessionId={data.sessionId} reason={data.reason} stolen=({data.stolenFood},{data.stolenCoal},{data.stolenOre})");
+        }
+
+        /// <summary>§35.10 attack_failed.reason → 中文（MVP 仅活动消息/跑马灯用）</summary>
+        private static string FormatTribeWarFailReason(string reason)
+        {
+            if (string.IsNullOrEmpty(reason)) return "未知原因";
+            switch (reason)
+            {
+                case "cannot_attack_self":          return "不能攻击自己";
+                case "in_cooldown":                 return "冷却中（60s）";
+                case "already_attacking":           return "已在攻击目标";
+                case "target_already_under_attack": return "目标已被其他房间攻击";
+                case "target_unavailable":          return "目标房间不可攻击";
+                case "target_not_playing":          return "目标房间未在游戏中";
+                case "not_under_attack":            return "未被攻击，无法反击";
+                case "wrong_phase":                 return "当前阶段不允许发起";
+                case "feature_locked":              return "功能未解锁";
+                default:                            return reason;
+            }
+        }
+
+        /// <summary>§35.10 attack_ended.reason → 中文</summary>
+        private static string FormatTribeWarEndReason(string reason)
+        {
+            if (string.IsNullOrEmpty(reason)) return "结束";
+            switch (reason)
+            {
+                case "manual_stop":         return "手动停止";
+                case "zero_energy_timeout": return "3 分钟无能量自动断开";
+                case "game_ended":          return "游戏结算";
+                case "season_ended":        return "赛季切换";
+                default:                    return reason;
+            }
+        }
+
+        /// <summary>战报格式化：优先使用 detail；若 detail 为空，退化为 eventName 本地化。</summary>
+        private static string FormatTribeWarCombatLine(TribeWarCombatReportData data)
+        {
+            if (data == null) return "";
+            if (!string.IsNullOrEmpty(data.detail)) return data.detail;
+            switch (data.eventName)
+            {
+                case "damage":             return "造成伤害";
+                case "worker_killed":      return "击杀矿工";
+                case "gate_hit":           return "击中城门";
+                case "expedition_killed":  return "远征怪阵亡";
+                case "resource_stolen":    return "偷取资源";
+                case "gate_bonus":         return "保底城门加成";
+                default:                   return data.eventName ?? "";
             }
         }
     }
