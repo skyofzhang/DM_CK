@@ -150,7 +150,9 @@ namespace DrscfZ.UI
                 var texts = row.GetComponentsInChildren<TMP_Text>(true);
                 BindFonts(texts);
 
-                string name  = Truncate(entry.playerName, 6);
+                // §39.5：昵称前缀根据 equipped.title 渲染（[守护者]/[老兵]/[大善人]）
+                string prefix = GetTitlePrefix(entry.equipped?.title);
+                string name  = $"{prefix}{Truncate(entry.playerName, 6)}";
                 string score = entry.contribution.ToString("N0");
                 string rank  = $"#{entry.rank}";
 
@@ -210,6 +212,22 @@ namespace DrscfZ.UI
             foreach (var img in images) if (img) img.color = hi;
             yield return new WaitForSeconds(0.3f);
             for (int i = 0; i < images.Length; i++) if (images[i]) images[i].color = orig[i];
+        }
+
+        /// <summary>
+        /// §39.5 商店称号 itemId → 昵称前缀。
+        /// 空 / 未知 → 空字符串；大善人的金色渲染另由 UI 层（富文本）做，不在前缀里加 color tag。
+        /// </summary>
+        private static string GetTitlePrefix(string titleItemId)
+        {
+            if (string.IsNullOrEmpty(titleItemId)) return "";
+            switch (titleItemId)
+            {
+                case "title_supporter":    return "[守护者]";
+                case "title_veteran":      return "[老兵]";
+                case "title_legend_mover": return "[大善人]"; // 金色文字由 LiveRankingUI / BobaoData 富文本处理
+                default:                    return "";
+            }
         }
     }
 }

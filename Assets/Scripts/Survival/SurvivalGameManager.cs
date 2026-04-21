@@ -101,6 +101,19 @@ namespace DrscfZ.Survival
         public event Action<BuildingDemolishedBatchData>  OnBuildingDemolishedBatch;
         public event Action<MonsterWaveIncomingData>      OnMonsterWaveIncoming;
 
+        // §39 商店系统
+        public event Action<ShopListData>                   OnShopListData;
+        public event Action<ShopPurchaseConfirmPromptData>  OnShopPurchaseConfirmPrompt;
+        public event Action<ShopPurchaseConfirmData>        OnShopPurchaseConfirm;
+        public event Action<ShopPurchaseFailedData>         OnShopPurchaseFailed;
+        public event Action<ShopEquipChangedData>           OnShopEquipChanged;
+        public event Action<ShopEquipFailedData>            OnShopEquipFailed;
+        public event Action<ShopInventoryData>              OnShopInventoryData;
+        public event Action<ShopEffectTriggeredData>        OnShopEffectTriggered;
+
+        // §39 本地装备缓存（自己最新的 equipped，供 UI 层做灰化/装备按钮回显）
+        public ShopEquipped MyEquipped { get; private set; }
+
         // 贡献追踪
         private System.Collections.Generic.Dictionary<string, float> _contributions
             = new System.Collections.Generic.Dictionary<string, float>();
@@ -447,6 +460,40 @@ namespace DrscfZ.Survival
                 case "monster_wave_incoming":
                     var mwi = JsonUtility.FromJson<MonsterWaveIncomingData>(dataJson);
                     if (mwi != null) HandleMonsterWaveIncoming(mwi);
+                    break;
+
+                // ----- §39 商店系统 -----
+                case "shop_list_data":
+                    var sld = JsonUtility.FromJson<ShopListData>(dataJson);
+                    if (sld != null) HandleShopListData(sld);
+                    break;
+                case "shop_purchase_confirm_prompt":
+                    var spp = JsonUtility.FromJson<ShopPurchaseConfirmPromptData>(dataJson);
+                    if (spp != null) HandleShopPurchaseConfirmPrompt(spp);
+                    break;
+                case "shop_purchase_confirm":
+                    var spc = JsonUtility.FromJson<ShopPurchaseConfirmData>(dataJson);
+                    if (spc != null) HandleShopPurchaseConfirm(spc);
+                    break;
+                case "shop_purchase_failed":
+                    var spf = JsonUtility.FromJson<ShopPurchaseFailedData>(dataJson);
+                    if (spf != null) HandleShopPurchaseFailed(spf);
+                    break;
+                case "shop_equip_changed":
+                    var sec = JsonUtility.FromJson<ShopEquipChangedData>(dataJson);
+                    if (sec != null) HandleShopEquipChanged(sec);
+                    break;
+                case "shop_equip_failed":
+                    var sef = JsonUtility.FromJson<ShopEquipFailedData>(dataJson);
+                    if (sef != null) HandleShopEquipFailed(sef);
+                    break;
+                case "shop_inventory_data":
+                    var sid = JsonUtility.FromJson<ShopInventoryData>(dataJson);
+                    if (sid != null) HandleShopInventoryData(sid);
+                    break;
+                case "shop_effect_triggered":
+                    var set_ = JsonUtility.FromJson<ShopEffectTriggeredData>(dataJson);
+                    if (set_ != null) HandleShopEffectTriggered(set_);
                     break;
             }
         }
@@ -1572,6 +1619,194 @@ namespace DrscfZ.Survival
                 case "supporter_not_allowed":  return "助威者无法发起";
                 case "season_ending":          return "赛季即将结束";
                 case "feature_locked":         return unlockDay > 0 ? $"功能未解锁（需第{unlockDay}天后）" : "功能未解锁";
+                default:                       return reason;
+            }
+        }
+
+        // ==================== §39 商店系统（🆕 v1.27） ====================
+
+        /// <summary>商品清单应答：路由到 ShopUI 渲染 A/B Tab 内容</summary>
+        private void HandleShopListData(ShopListData data)
+        {
+            OnShopListData?.Invoke(data);
+            UI.ShopUI.Instance?.PopulateList(data);
+            Debug.Log($"[SGM] shop_list_data: category={data.category} items={(data.items == null ? 0 : data.items.Length)}");
+        }
+
+        /// <summary>B 类 ≥1000 主播 HUD 购买：弹双确认弹窗（5s TTL 倒计时）</summary>
+        private void HandleShopPurchaseConfirmPrompt(ShopPurchaseConfirmPromptData data)
+        {
+            OnShopPurchaseConfirmPrompt?.Invoke(data);
+            UI.ShopConfirmDialogUI.Instance?.Show(data);
+            Debug.Log($"[SGM] shop_purchase_confirm_prompt: pendingId={data.pendingId} itemId={data.itemId} price={data.price} expiresAt={data.expiresAt}");
+        }
+
+        /// <summary>购买成功房间广播：跑马灯 + 活动消息；A 类由 shop_effect_triggered 另行处理视觉</summary>
+        private void HandleShopPurchaseConfirm(ShopPurchaseConfirmData data)
+        {
+            OnShopPurchaseConfirm?.Invoke(data);
+
+            string buyerName = string.IsNullOrEmpty(data.playerName) ? (string.IsNullOrEmpty(data.playerId) ? "匿名" : data.playerId) : data.playerName;
+            string itemDisplay = GetShopItemDisplayName(data.itemId);
+            UI.HorizontalMarqueeUI.Instance?.AddMessage(buyerName, null, $"购得 {itemDisplay}");
+            OnPlayerActivityMessage?.Invoke($"{buyerName} 购得 {itemDisplay}");
+            Debug.Log($"[SGM] shop_purchase_confirm: {data.playerId} itemId={data.itemId} category={data.category} remContrib={data.remainingContrib} remBal={data.remainingBalance}");
+        }
+
+        /// <summary>购买失败（unicast）：MVP 仅 Log + 活动消息提示发起方失败原因</summary>
+        private void HandleShopPurchaseFailed(ShopPurchaseFailedData data)
+        {
+            OnShopPurchaseFailed?.Invoke(data);
+            string reasonText = FormatShopFailReason(data.reason, data.unlockDay, data.minLifetimeContrib);
+            string itemDisplay = GetShopItemDisplayName(data.itemId);
+            OnPlayerActivityMessage?.Invoke($"购买 {itemDisplay} 失败：{reasonText}");
+            Debug.Log($"[SGM] shop_purchase_failed: itemId={data.itemId} reason={data.reason} unlockDay={data.unlockDay} minLifetimeContrib={data.minLifetimeContrib}");
+        }
+
+        /// <summary>装备切换成功（unicast）：更新本地 MyEquipped 缓存 + 通知 UI 刷新</summary>
+        private void HandleShopEquipChanged(ShopEquipChangedData data)
+        {
+            // 更新本地装备缓存（当服务器下发的是自己时）
+            if (MyEquipped == null) MyEquipped = new ShopEquipped();
+            switch (data.slot)
+            {
+                case "title":    MyEquipped.title    = data.itemId; break;
+                case "frame":    MyEquipped.frame    = data.itemId; break;
+                case "entrance": MyEquipped.entrance = data.itemId; break;
+                case "barrage":  MyEquipped.barrage  = data.itemId; break;
+            }
+            OnShopEquipChanged?.Invoke(data);
+            Debug.Log($"[SGM] shop_equip_changed: {data.playerId} slot={data.slot} itemId={data.itemId}");
+        }
+
+        /// <summary>装备切换失败（unicast）：MVP 仅 Log</summary>
+        private void HandleShopEquipFailed(ShopEquipFailedData data)
+        {
+            OnShopEquipFailed?.Invoke(data);
+            Debug.Log($"[SGM] shop_equip_failed: slot={data.slot} itemId={data.itemId} reason={data.reason}");
+        }
+
+        /// <summary>进房/重连时的背包 + 装备快照：路由到 ShopUI 渲染；若是自己则更新本地缓存</summary>
+        private void HandleShopInventoryData(ShopInventoryData data)
+        {
+            OnShopInventoryData?.Invoke(data);
+
+            // 更新本地缓存（若是自己的数据）：MVP 暂以 data.playerId 为判据，自身 id 由上层上下文决定
+            if (data.equipped != null)
+                MyEquipped = data.equipped;
+
+            UI.ShopUI.Instance?.UpdateInventory(data);
+            Debug.Log($"[SGM] shop_inventory_data: {data.playerId} owned={(data.owned == null ? 0 : data.owned.Length)}");
+        }
+
+        /// <summary>A 类效果触发：按 itemId dispatch 到对应视觉/行为模块</summary>
+        private void HandleShopEffectTriggered(ShopEffectTriggeredData data)
+        {
+            OnShopEffectTriggered?.Invoke(data);
+            if (data == null || string.IsNullOrEmpty(data.itemId)) return;
+
+            string sourceName = string.IsNullOrEmpty(data.sourcePlayerName)
+                ? (string.IsNullOrEmpty(data.sourcePlayerId) ? "匿名" : data.sourcePlayerId)
+                : data.sourcePlayerName;
+
+            switch (data.itemId)
+            {
+                case "worker_pep_talk":
+                {
+                    float dur = data.durationSec > 0 ? data.durationSec : 30f;
+                    WorkerManager.Instance?.ActivateAllWorkersGlow(dur);
+                    UI.AnnouncementUI.Instance?.ShowAnnouncement(
+                        "工地喊话！",
+                        $"全员矿工效率+15%（{Mathf.RoundToInt(dur)}s）",
+                        new Color(1f, 0.85f, 0.1f), 2f);
+                    break;
+                }
+                case "gate_quickpatch":
+                {
+                    int before = data.metadata != null ? data.metadata.gateHpBefore : 0;
+                    int after  = data.metadata != null ? data.metadata.gateHpAfter  : 0;
+                    int delta  = after - before;
+                    string subText = delta > 0 ? $"+{delta} HP" : "城门血量回复";
+                    UI.AnnouncementUI.Instance?.ShowAnnouncement(
+                        "城门已修补",
+                        subText,
+                        new Color(0.3f, 1f, 0.5f), 2f);
+                    break;
+                }
+                case "emergency_alert":
+                {
+                    int leadSec = data.metadata != null ? data.metadata.leadSec : 10;
+                    UI.AnnouncementUI.Instance?.ShowAnnouncement(
+                        "预警来袭！",
+                        $"{leadSec} 秒后出怪",
+                        new Color(1f, 0.3f, 0.3f), 3f);
+                    break;
+                }
+                case "spotlight":
+                {
+                    // targetPlayerId 通常 == sourcePlayerId；UI 高亮/弹幕星标等效果由后续 LiveRankingUI 或 BarrageMessageUI 消费时自行识别
+                    float dur = data.durationSec > 0 ? data.durationSec : 10f;
+                    // MVP 占位：Log + 跑马灯提示；具体 LiveRankingUI 金色高亮留待后续视觉任务实现
+                    UI.HorizontalMarqueeUI.Instance?.AddMessage(sourceName, null, $"成为聚光灯焦点（{Mathf.RoundToInt(dur)}s）");
+                    Debug.Log($"[SGM] shop_effect_triggered spotlight: source={data.sourcePlayerId} target={data.targetPlayerId} duration={dur}s (占位：UI 高亮效果待视觉任务实现)");
+                    break;
+                }
+                default:
+                    Debug.Log($"[SGM] shop_effect_triggered: 未处理 itemId={data.itemId}");
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// §39 itemId → 中文显示名（用于跑马灯/toast/活动消息）。
+        /// 未知 id 直接回显原文，保证不崩溃。
+        /// </summary>
+        public static string GetShopItemDisplayName(string itemId)
+        {
+            if (string.IsNullOrEmpty(itemId)) return "未知商品";
+            switch (itemId)
+            {
+                // A 类
+                case "worker_pep_talk":   return "工地喊话";
+                case "gate_quickpatch":   return "快速修补";
+                case "emergency_alert":   return "紧急警报";
+                case "spotlight":         return "聚光灯";
+                // B 类固定 8 款
+                case "title_supporter":     return "守护者称号";
+                case "title_veteran":       return "老兵称号";
+                case "title_legend_mover":  return "大善人称号";
+                case "frame_bronze":        return "青铜头像框";
+                case "frame_silver":        return "白银头像框";
+                case "entrance_spark":      return "火花入场";
+                case "barrage_glow":        return "弹幕发光";
+                case "barrage_crown":       return "皇冠弹幕";
+                default:                    return itemId; // 限定 SKU / 未知 id 回显原文
+            }
+        }
+
+        /// <summary>§39.11 失败原因枚举 → 中文描述（MVP 仅用于活动消息/Log）</summary>
+        private static string FormatShopFailReason(string reason, int unlockDay, int minLifetimeContrib)
+        {
+            if (string.IsNullOrEmpty(reason)) return "未知原因";
+            switch (reason)
+            {
+                case "insufficient":           return "贡献/余额不足";
+                case "wrong_phase":            return "当前阶段不可购买";
+                case "no_effect":              return "无需使用（已满）";
+                case "feature_locked":         return unlockDay > 0 ? $"功能未解锁（需第{unlockDay}天后）" : "功能未解锁";
+                case "item_not_found":         return "商品不存在";
+                case "already_owned":          return "已拥有";
+                case "pending_expired":        return "确认超时";
+                case "pending_invalid":        return "确认凭证无效";
+                case "limit_exceeded":         return "本局限购";
+                case "supporter_not_allowed":  return "助威者不可购买战术道具";
+                case "not_unlocked_yet":
+                    if (minLifetimeContrib > 0) return $"需累计 {minLifetimeContrib} 贡献";
+                    if (unlockDay > 0)          return $"赛季第 {unlockDay} 天解锁";
+                    return "尚未解锁";
+                case "season_locked":          return "赛季末 5 分钟不可购买 B 类";
+                case "spotlight_active":       return "聚光灯已激活";
+                case "per_game_limit":         return "本局该商品已达上限";
                 default:                       return reason;
             }
         }

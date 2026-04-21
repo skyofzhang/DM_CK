@@ -221,6 +221,9 @@ namespace DrscfZ.Survival
         public string playerId;
         public string playerName;
         public int    contribution;
+
+        // §39.5 商店装备（服务端捎带推送；JsonUtility 对 null 引用会反序列化为 null，对端未下发时保持 null）
+        public ShopEquipped equipped;
     }
 
     /// <summary>实时贡献榜（type=live_ranking）——贡献变化时服务器防抖推送</summary>
@@ -570,5 +573,122 @@ namespace DrscfZ.Survival
     public class StreamerRankingData
     {
         public StreamerRankingEntry[] rankings; // Top 10
+    }
+
+    // ==================== §39 商店系统（Shop System，🆕 v1.27） ====================
+    // 协议见策划案 §39.9（C→S 4 + S→C 8 = 12 个新协议 + LiveRankingEntry.equipped 扩展字段）。
+    // 客户端 MVP：仅脚本，Prefab 绑定留给人工。
+
+    /// <summary>单个商品定义（§39.2 A/B 两类清单）</summary>
+    [Serializable]
+    public class ShopItem
+    {
+        public string itemId;             // 'worker_pep_talk' / 'title_supporter' / ...
+        public string name;               // 中文名
+        public int    price;              // 价格（A 类用 contributions，B 类用 _contribBalance）
+        public string slot;               // B 类才有 'title' | 'frame' | 'entrance' | 'barrage'；A 类为 null
+        public string category;           // 'A' | 'B'
+        public string effect;             // 效果描述（前端直接显示）
+        public int    minLifetimeContrib; // 赛季限定 SKU 才有，默认 0
+        public string limitedSeasonId;    // 赛季限定 SKU 才有；非限定为 null
+    }
+
+    /// <summary>商品清单响应（type=shop_list_data，§39.9）</summary>
+    [Serializable]
+    public class ShopListData
+    {
+        public string     category;   // 'A' | 'B'
+        public ShopItem[] items;
+    }
+
+    /// <summary>B 类 ≥1000 主播 HUD 购买触发双确认弹窗（type=shop_purchase_confirm_prompt，§39.7）</summary>
+    [Serializable]
+    public class ShopPurchaseConfirmPromptData
+    {
+        public string pendingId;   // 一次性凭证 UUID
+        public string itemId;
+        public int    price;
+        public long   expiresAt;   // Unix ms（5s TTL）
+    }
+
+    /// <summary>购买成功，房间广播（type=shop_purchase_confirm，§39.9）</summary>
+    [Serializable]
+    public class ShopPurchaseConfirmData
+    {
+        public string playerId;
+        public string playerName;
+        public string itemId;
+        public string category;         // 'A' | 'B'
+        public int    remainingContrib; // 本局剩余贡献（A 类扣费后）
+        public int    remainingBalance; // 终身余额（B 类扣费后）
+    }
+
+    /// <summary>购买失败，仅回发起方（type=shop_purchase_failed，§39.11）</summary>
+    [Serializable]
+    public class ShopPurchaseFailedData
+    {
+        public string reason;             // insufficient / wrong_phase / no_effect / feature_locked / item_not_found / already_owned / pending_expired / pending_invalid / limit_exceeded / supporter_not_allowed / not_unlocked_yet / season_locked / spotlight_active / per_game_limit
+        public string itemId;
+        public int    unlockDay;          // 仅 feature_locked / not_unlocked_yet 时有效
+        public int    minLifetimeContrib; // 仅 not_unlocked_yet 时有效
+    }
+
+    /// <summary>装备切换成功，unicast 发起方（type=shop_equip_changed，§39.5）</summary>
+    [Serializable]
+    public class ShopEquipChangedData
+    {
+        public string playerId;
+        public string slot;      // 'title' | 'frame' | 'entrance' | 'barrage'
+        public string itemId;    // null 表示卸下
+    }
+
+    /// <summary>装备切换失败，unicast 发起方（type=shop_equip_failed）</summary>
+    [Serializable]
+    public class ShopEquipFailedData
+    {
+        public string reason;    // not_owned / slot_mismatch / too_frequent
+        public string slot;
+        public string itemId;
+    }
+
+    /// <summary>玩家当前装备的 4 槽位（§39.5，LiveRankingEntry.equipped 字段与 ShopInventoryData.equipped 共用）</summary>
+    [Serializable]
+    public class ShopEquipped
+    {
+        public string title;
+        public string frame;
+        public string entrance;
+        public string barrage;
+    }
+
+    /// <summary>背包/装备快照，进房或重连时推送（type=shop_inventory_data）</summary>
+    [Serializable]
+    public class ShopInventoryData
+    {
+        public string       playerId;
+        public string[]     owned;
+        public ShopEquipped equipped;
+    }
+
+    /// <summary>A 类效果元数据（随 shop_effect_triggered 下发的附加信息）</summary>
+    [Serializable]
+    public class ShopEffectMetadata
+    {
+        public int gateHpBefore;
+        public int gateHpAfter;
+        public int waveIdx;
+        public int leadSec;
+    }
+
+    /// <summary>A 类购买成功后的视觉/行为效果事件，房间广播（type=shop_effect_triggered）</summary>
+    [Serializable]
+    public class ShopEffectTriggeredData
+    {
+        public string             itemId;
+        public string             sourcePlayerId;
+        public string             sourcePlayerName;
+        public string             targetPlayerId;  // spotlight 可能为空；其余通常 == sourcePlayerId
+        public int                durationSec;     // 0 表示瞬时
+        public ShopEffectMetadata metadata;
     }
 }
