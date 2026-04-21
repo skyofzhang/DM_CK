@@ -12,6 +12,16 @@ import subprocess
 import sys
 import os
 
+# Windows 控制台默认 GBK 编码，print 含非 GBK 字符（✅ 等）会抛 UnicodeEncodeError。
+# 强制 stdout/stderr 走 UTF-8，保证中文 + emoji 都能打印。
+try:
+    if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+        sys.stdout.reconfigure(encoding='utf-8')
+    if sys.stderr.encoding and sys.stderr.encoding.lower() != 'utf-8':
+        sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
+
 SERVER = "root@101.34.30.65"
 REMOTE_PATH = "/opt/drscfz"
 LOCAL_SERVER = os.path.join(os.path.dirname(__file__), "Server")
@@ -54,7 +64,7 @@ def main():
     time.sleep(3)
     run(f'curl -s http://101.34.30.65:8081/health | python3 -m json.tool', check=False)
 
-    print("\n✅ 部署完成！")
+    print("\n[OK] 部署完成！")
 
 if __name__ == "__main__":
     main()

@@ -217,33 +217,87 @@ namespace DrscfZ.EditorTools
 
             var bpSO = new SerializedObject(bp);
             // feature id 对齐 §36.12（与 FeatureUnlockConfig.js / SurvivalMessageProtocol.FeatureXxx 一致）
-            var mapping = new (string propName, string featureId)[]
+            // (propName, featureId, placeholderLabel, placeholderPosY) — placeholder 仅在字段未绑定时使用
+            var mapping = new (string propName, string featureId, string label, float posY)[]
             {
-                ("_boostBtn",       "broadcaster_boost"),
-                ("_eventBtn",       "broadcaster_boost"),
-                ("_rouletteButton", "roulette"),
-                ("_shopTabButton",  "shop"),
-                ("_tribeWarButton", "tribe_war"),
-                ("_btnUpgradeGate", "gate_upgrade_basic"),
+                ("_boostBtn",       "broadcaster_boost",  "加", 60f),
+                ("_eventBtn",       "broadcaster_boost",  "浪", -60f),
+                ("_rouletteButton", "roulette",           "盘", 180f),
+                ("_shopTabButton",  "shop",               "购", -180f),
+                ("_tribeWarButton", "tribe_war",          "战", -300f),
+                ("_btnUpgradeGate", "gate_upgrade_basic", "升", 300f),
             };
 
+            // 找到一个已存在的 Button GO 作为模板（用于为未绑定字段建占位）
+            Button templateBtn = bp.GetType().GetField("_boostBtn",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?.GetValue(bp) as Button;
+            if (templateBtn == null)
+            {
+                // 兜底：从 mapping 第一个有绑定的字段拿
+                foreach (var m in mapping)
+                {
+                    var p = bpSO.FindProperty(m.propName);
+                    if (p != null && p.objectReferenceValue is Button b) { templateBtn = b; break; }
+                }
+            }
+            Transform templateParent = templateBtn != null ? templateBtn.transform.parent : null;
+
             int count = 0;
-            foreach (var (propName, featureId) in mapping)
+            foreach (var (propName, featureId, label, posY) in mapping)
             {
                 var prop = bpSO.FindProperty(propName);
-                if (prop == null || prop.objectReferenceValue == null)
-                {
-                    Debug.Log($"[Setup36UI] BroadcasterPanel.{propName} 未绑定，跳过。");
-                    continue;
-                }
+                Button btn = prop != null ? (prop.objectReferenceValue as Button) : null;
 
-                // prop 是 Button 引用；取 Button 所在的 GameObject
-                Button btn = prop.objectReferenceValue as Button;
+                // 未绑定 → 创建占位按钮（不再跳过；决策 6 要求不留未完成给用户）
                 if (btn == null)
                 {
-                    Debug.LogWarning($"[Setup36UI] {propName} 的引用不是 Button，跳过。");
-                    continue;
+                    if (templateBtn == null || templateParent == null)
+                    {
+                        Debug.LogWarning($"[Setup36UI] 无模板按钮可用，{propName} 无法建占位，跳过。");
+                        continue;
+                    }
+
+                    string goName = propName.TrimStart('_');
+                    goName = char.ToUpperInvariant(goName[0]) + goName.Substring(1);   // _rouletteButton → RouletteButton
+
+                    var existing = templateParent.Find(goName);
+                    GameObject newGO;
+                    if (existing != null)
+                    {
+                        newGO = existing.gameObject;
+                    }
+                    else
+                    {
+                        newGO = Object.Instantiate(templateBtn.gameObject, templateParent);
+                        newGO.name = goName;
+                        // 移除 template 遗留的 onClick Persistent 监听（占位按钮暂不响应）
+                        var newBtn = newGO.GetComponent<Button>();
+                        if (newBtn != null)
+                        {
+                            newBtn.onClick.RemoveAllListeners();
+                            var soBtn = new SerializedObject(newBtn);
+                            var calls = soBtn.FindProperty("m_OnClick.m_PersistentCalls.m_Calls");
+                            if (calls != null) calls.arraySize = 0;
+                            soBtn.ApplyModifiedPropertiesWithoutUndo();
+                        }
+                    }
+                    // 调位置 + 改文本
+                    var rt = newGO.GetComponent<RectTransform>();
+                    if (rt != null) rt.anchoredPosition = new Vector2(rt.anchoredPosition.x, posY);
+                    var newTmp = newGO.GetComponentInChildren<TMP_Text>();
+                    if (newTmp != null) newTmp.text = label;
+
+                    // 回写 BroadcasterPanel SerializedField
+                    btn = newGO.GetComponent<Button>();
+                    if (btn != null && prop != null)
+                    {
+                        prop.objectReferenceValue = btn;
+                    }
+                    Debug.Log($"[Setup36UI] 占位按钮已创建: {GetPath(newGO.transform)}  label='{label}'");
                 }
+
+                if (btn == null) continue;
 
                 var go = btn.gameObject;
                 var overlay = go.GetComponent<FeatureLockOverlay>();
@@ -252,7 +306,6 @@ namespace DrscfZ.EditorTools
                 var so = new SerializedObject(overlay);
                 so.FindProperty("_featureId").stringValue = featureId;
 
-                // 绑 _btnBackground（同 GO 的 Image）和 _btnLabel（子 TMP_Text）
                 var bg = go.GetComponent<Image>();
                 if (bg != null) Bind(so, "_btnBackground", bg);
                 var tmp = go.GetComponentInChildren<TMP_Text>();
@@ -262,6 +315,10 @@ namespace DrscfZ.EditorTools
                 count++;
                 Debug.Log($"[Setup36UI] FeatureLockOverlay attached: {GetPath(go.transform)}  featureId={featureId}");
             }
+
+            // 回写 BroadcasterPanel（新创建的按钮字段）
+            bpSO.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(bp);
 
             return count;
         }
