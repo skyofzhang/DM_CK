@@ -17,9 +17,11 @@ const SurvivalRoom = require('./SurvivalRoom');
 class RoomManager {
   /**
    * @param {object} gameConfig - 游戏配置（传给每个Room的GameEngine）
+   * @param {object} [tribeWarMgr] - §35 TribeWarManager 单例（可选）
    */
-  constructor(gameConfig) {
+  constructor(gameConfig, tribeWarMgr = null) {
     this.gameConfig = gameConfig;
+    this.tribeWarMgr = tribeWarMgr;  // §35:可在构造后注入(see index.js)
 
     // roomId → Room
     this.rooms = new Map();
@@ -56,7 +58,7 @@ class RoomManager {
     }
 
     if (!room) {
-      room = new SurvivalRoom(roomId, this.gameConfig);
+      room = new SurvivalRoom(roomId, this.gameConfig, this.tribeWarMgr);
       room.pauseTimeout = this.pauseTimeout;
       this.rooms.set(roomId, room);
       console.log(`[RoomManager] Room created: ${roomId} (total: ${this.rooms.size})`);

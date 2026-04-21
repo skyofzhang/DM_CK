@@ -50,6 +50,13 @@ const wss = new WebSocket.Server({ server });
 // ==================== 核心模块 ====================
 const roomManager = new RoomManager(config.game);
 
+// §35 Tribe War:全局 TribeWarManager 单例,反向注入给 RoomManager
+// 房间创建时自动 setRoomContext() 到 SurvivalGameEngine
+const TribeWarManager = require('./TribeWarManager');
+const tribeWarManager = new TribeWarManager(roomManager);
+roomManager.tribeWarMgr = tribeWarManager;
+console.log('[index] TribeWarManager attached to RoomManager');
+
 // 抖音API（评论/礼物/点赞回调路由到RoomManager）
 const douyinAPI = new DouyinAPI({
   appId: process.env.DOUYIN_APP_ID,

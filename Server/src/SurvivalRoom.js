@@ -22,7 +22,7 @@ class SurvivalRoom {
    * @param {string} roomId    - 房间ID（通常=抖音直播间ID）
    * @param {object} gameConfig - 来自 config/default.json
    */
-  constructor(roomId, gameConfig) {
+  constructor(roomId, gameConfig, tribeWarMgr = null) {
     this.roomId       = roomId;
     this.gameConfig   = gameConfig;
     this.createdAt    = Date.now();
@@ -44,6 +44,14 @@ class SurvivalRoom {
       gameConfig,
       (msg) => this.broadcast(msg)
     );
+
+    // §35 跨直播间攻防战：注入 TribeWarManager 单例 + room 反向引用
+    //   未注入（tribeWarMgr == null）时,tribeWar 相关逻辑 no-op
+    this.streamerName = roomId;  // MVP:以 roomId 作展示名,真实主播名由抖音 API 另行同步
+    if (tribeWarMgr && typeof this.survivalEngine.setRoomContext === 'function') {
+      this.survivalEngine.setRoomContext(this, tribeWarMgr);
+    }
+    this.tribeWarMgr = tribeWarMgr;
 
     // 本周贡献榜持久化存储（每周日23:59→周一00:00 UTC+8 自动重置）
     this.weeklyRanking = new WeeklyRankingStore(roomId);
@@ -500,6 +508,60 @@ class SurvivalRoom {
           console.log(`[SurvivalRoom:${this.roomId}] GM: simulate_monster`);
         }
         break;
+
+      // ==================== §35 Tribe War C→S ====================
+      case 'tribe_war_room_list': {
+        if (!this.tribeWarMgr) {
+          ws.send(JSON.stringify({ type: 'tribe_war_room_list_result', timestamp: Date.now(), data: { rooms: [] } }));
+          break;
+        }
+        const rooms = this.tribeWarMgr.getRoomList(this.roomId);
+        ws.send(JSON.stringify({ type: 'tribe_war_room_list_result', timestamp: Date.now(), data: { rooms } }));
+        break;
+      }
+      case 'tribe_war_attack': {
+        if (!this.tribeWarMgr) break;
+        const targetRoomId = data && data.targetRoomId;
+        if (!targetRoomId) {
+          ws.send(JSON.stringify({ type: 'tribe_war_attack_failed', timestamp: Date.now(), data: { reason: 'room_not_found' } }));
+          break;
+        }
+        // TODO _roomCreatorId 鉴权放开(MVP,同 §24.4/§37/§39)
+        const res = this.tribeWarMgr.startAttack(this.roomId, targetRoomId);
+        if (!res.ok) {
+          ws.send(JSON.stringify({ type: 'tribe_war_attack_failed', timestamp: Date.now(), data: { reason: res.reason } }));
+        }
+        break;
+      }
+      case 'tribe_war_stop': {
+        if (!this.tribeWarMgr) break;
+        const sid = this.tribeWarMgr._attackerToSession.get(this.roomId);
+        if (sid) {
+          this.tribeWarMgr.stopAttack(sid, 'manual');
+        }
+        break;
+      }
+      case 'tribe_war_retaliate': {
+        // 仅防守方(被攻击中)可反击;damageMultiplier 由服务端生成(MVP 默认 1.0,TODO §37 beacon)
+        if (!this.tribeWarMgr) break;
+        const underAttackSid = this.tribeWarMgr._defenderToSession.get(this.roomId);
+        if (!underAttackSid) {
+          ws.send(JSON.stringify({ type: 'tribe_war_attack_failed', timestamp: Date.now(), data: { reason: 'not_under_attack' } }));
+          break;
+        }
+        const atkSession = this.tribeWarMgr._sessions.get(underAttackSid);
+        const targetRoomId = (data && data.targetRoomId) ||
+                             (atkSession && atkSession.attacker && atkSession.attacker.roomId);
+        if (!targetRoomId) {
+          ws.send(JSON.stringify({ type: 'tribe_war_attack_failed', timestamp: Date.now(), data: { reason: 'room_not_found' } }));
+          break;
+        }
+        const res = this.tribeWarMgr.startAttack(this.roomId, targetRoomId, { damageMultiplier: 1.0 });
+        if (!res.ok) {
+          ws.send(JSON.stringify({ type: 'tribe_war_attack_failed', timestamp: Date.now(), data: { reason: res.reason } }));
+        }
+        break;
+      }
 
       default:
         console.log(`[SurvivalRoom:${this.roomId}] Unknown client message: ${msgType}`);
