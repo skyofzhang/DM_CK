@@ -249,10 +249,13 @@ class SurvivalRoom {
         }
       }
       // 更新主播排行榜
+      // §16 v1.26：永续模式下无胜利分支，survival_game_ended 移除 result 字段，此处固定按 'lose' 入榜
+      // （StreamerRankingStore 仅在 result === 'win' 时计胜场，现在永续循环不再累加胜场；
+      //   totalGames / maxDays / score 按最佳记录正常更新）
       try {
         const difficulty = this.survivalEngine._difficulty || 'normal';
         const streamerName = this.roomId; // 房间ID即主播标识，后续可改为真实昵称
-        this.streamerRanking.addGameResult(this.roomId, streamerName, difficulty, d.dayssurvived || 0, d.result || 'lose');
+        this.streamerRanking.addGameResult(this.roomId, streamerName, difficulty, d.dayssurvived || 0, 'lose');
         setTimeout(() => this._broadcastStreamerRanking(), 600);
       } catch (e) {
         console.error(`[SurvivalRoom:${this.roomId}] StreamerRanking update error: ${e.message}`);
@@ -398,18 +401,30 @@ class SurvivalRoom {
         }
         break;
 
-      case 'end_game':
-        // GM 手动结束游戏 → 强制触发失败结算
+      case 'end_game': {
+        // §16.4 GM 手动结束游戏 → 阶段性结算（走失败结算 UI，但不触发 fortressDay 降级 / 不重置每日 cap）
         // §36 结束前保存一次（_enterSettlement 内部会再保存；此处双保险）
         if (this.roomPersistence) {
           try { this.roomPersistence.save(this); } catch (e) { /* ignore */ }
         }
         this._stopSimulation();
-        if (this.survivalEngine.state === 'day' || this.survivalEngine.state === 'night') {
-          this.survivalEngine._enterSettlement('lose', 'manual');
+        // §16.4 v1.27 修正语病：必须逐项比较（state === 'day' || 'night' 按 JS 语义恒真，原表达有 bug）
+        const engineState = this.survivalEngine.state;
+        if (engineState === 'day' || engineState === 'night') {
+          this.survivalEngine._enterSettlement('manual');  // 🆕 v1.26 单参签名
           console.log(`[SurvivalRoom:${this.roomId}] GM 手动结束游戏`);
+        } else {
+          // §16.4：loading / settlement / recovery / idle 下 GM 按钮应灰化；服务端兜底返回 wrong_phase
+          // 按 upgrade_gate 失败消息风格广播 end_game_failed（主播客户端会据此收敛 UI）
+          this.broadcast({
+            type: 'end_game_failed',
+            timestamp: Date.now(),
+            data: { reason: 'wrong_phase', currentState: engineState },
+          });
+          console.log(`[SurvivalRoom:${this.roomId}] GM end_game rejected: wrong_phase (state=${engineState})`);
         }
         break;
+      }
       case 'leave_room':
         // 客户端主动离开，忽略（连接断开由 WebSocket close 事件处理）
         break;

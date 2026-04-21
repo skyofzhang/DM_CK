@@ -367,9 +367,19 @@ class SurvivalGameEngine {
     this._workerRespawnMs  = (config.workerRespawnSec ?? 30) * 1000;
 
     // 游戏状态
-    this.state          = 'idle';   // idle | day | night | settlement
+    // §16 v1.26 永续模式：状态机 idle | day | night | settlement | recovery
+    //   settlement (~8s) → recovery (120s，不生成新波次) → night(day+1)，无胜利终点
+    this.state          = 'idle';
     this.currentDay     = 0;
     this.remainingTime  = 0;
+
+    // §16 恢复期 120s 定时器（_enterRecovery 启动，_clearAllTimers 清理）
+    this._recoveryTimer = null;
+
+    // §16.1 all_dead 失败路径：夜晚最近一次有矿工存活的时刻（Unix ms）
+    // 更新时机：_initWorkerHp / _reviveWorker / _reviveAllWorkers / 夜晚伤害结算时任一矿工仍存活
+    // 清零时机：constructor / reset() / _enterSettlement（避免跨局误触发）
+    this._lastAliveAt   = 0;
 
     // 贡献追踪 { playerId: float }
     this.contributions  = {};
@@ -676,6 +686,8 @@ class SurvivalGameEngine {
     this.state = 'idle';
     this.currentDay = 0;
     this.remainingTime = 0;
+    // §16 all_dead 判定基准：reset 时归零，夜晚由 _initWorkerHp / 存活刷新
+    this._lastAliveAt = 0;
     this.food        = this.config.initFood        ?? 500;
     this.coal        = this.config.initCoal        ?? 300;
     this.ore         = this.config.initOre         ?? 150;
@@ -796,7 +808,9 @@ class SurvivalGameEngine {
   /** WS客户端连接时发送当前状态 */
   getFullState() {
     return {
-      state:        this.state,
+      // §4.2 v1.27 recovery 规范化：客户端只认 day/night 两态（HandleGameState 无 case "recovery"）；
+      //   服务端内部保留 state='recovery'，对外转为 'day' + variant='recovery'（与 phase_changed 一致）
+      state:        this.state === 'recovery' ? 'day' : this.state,
       day:          this.currentDay,
       remainingTime: Math.round(this.remainingTime),
       food:         Math.round(this.food),
@@ -821,6 +835,8 @@ class SurvivalGameEngine {
       themeId:               this.seasonMgr ? this.seasonMgr.themeId : 'classic_frozen',
       phase:                 this.globalClock ? this.globalClock._phase : (this.state === 'night' ? 'night' : 'day'),
       phaseRemainingSec:     this.globalClock ? this.globalClock.getPhaseRemainingSec() : Math.round(this.remainingTime),
+      // §4.2 v1.27 recovery variant：客户端重连时通过 variant 区分"普通白天 vs 恢复期白天"，默认 'normal'
+      variant:               this.state === 'recovery' ? 'recovery' : 'normal',
       // §36.5.1 每日闯关上限 4 字段
       dailyFortressDayGained: this._dailyFortressDayGained || 0,
       dailyCapMax:            DAILY_FORTRESS_CAP_MAX,
@@ -1694,6 +1710,12 @@ class SurvivalGameEngine {
 
     this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
 
+    // §16 v1.27 tick 幂等重启：从 recovery 过来时 tick 仍是轻量分支（recovery），需切换到完整分支；
+    //   从 _enterDay 过来时 tick 已在跑（_startTick 内部 _clearTick 保证幂等，无副作用）。
+    //   这一行保障 _decayResources / _checkDefeat / remainingTime / 666buff / ore 修门 / 助威衰减
+    //   全部在夜晚正常运转（修复 Reviewer Round 1 Critical：tick 断链）。
+    this._startTick();
+
     // 播报 Boss 出现
     const cfg = getWaveConfig(day);
     if (cfg.boss) {
@@ -1731,12 +1753,22 @@ class SurvivalGameEngine {
     }
   }
 
-  _enterSettlement(result, reason) {
-    if (this.state === 'settlement') return;
+  /**
+   * 阶段性结算（§16.6）—— 🆕 v1.26 永续模式改造：
+   *   - 单参数 `reason`（无 result）：'food_depleted' / 'temp_freeze' / 'gate_breached' / 'all_dead' / 'manual'
+   *   - 固定 payoutRate = 0.3（无胜利分支）
+   *   - manual：跳过 _demoteBuildings / _onRoomFail（fortressDay 不变，也不广播 room_failed）
+   *   - 结算数据新增 fortressDayBefore / fortressDayAfter / newbieProtected（§16.6）
+   *   - ~8s 后自动进入恢复期（_enterRecovery），不再 reset + startGame
+   */
+  _enterSettlement(reason) {
+    if (this.state === 'settlement' || this.state === 'recovery') return;
 
-    // §37.5 失败降级：失败时按 BUILDING_KEEP_ON_DEMOTE 部分保留，其余清除（不返还资源）
-    // 当前无 §36 堡垒日升/降，以失败结算近似处理（TODO §36 接入后迁移到 fortressDay 降级路径）
-    if (result === 'lose') {
+    // §16.4 manual：GM 主动终止不触发降级；其他 reason 均为失败，走降级路径
+    const isManual = (reason === 'manual');
+
+    // §37.5 失败降级（manual 跳过）：按 BUILDING_KEEP_ON_DEMOTE 部分保留，其余清除
+    if (!isManual) {
       this._demoteBuildings('demoted');
     }
 
@@ -1751,11 +1783,14 @@ class SurvivalGameEngine {
     this._clearAllTimers();
     this.state = 'settlement';
 
+    // §16.6 fortressDayBefore：_onRoomFail 会修改 this.fortressDay，必须先缓存
+    const fortressDayBefore = this.fortressDay || 1;
+
     const rankings = this._buildRankings();
 
-    // ===== 积分池分配（策划案 §D）=====
-    // 胜利瓜分60%，失败瓜分30%；剩余流入主播下局（上限=本局积分池50%）
-    const payoutRate  = result === 'win' ? 0.6 : 0.3;
+    // ===== 积分池分配（§12.3 / §16.6）=====
+    // 🆕 v1.26 固定 0.3（无胜利分支）；剩余流入下一周期（上限=本局积分池 50%）
+    const payoutRate  = 0.3;
     const payoutTotal = Math.floor(this.scorePool * payoutRate);
     const rawCarryover = this.scorePool - payoutTotal;
     this._carryoverPool = Math.min(rawCarryover, Math.floor(this.scorePool * 0.5));
@@ -1769,41 +1804,125 @@ class SurvivalGameEngine {
 
     console.log(`[SurvivalEngine] ScorePool=${Math.round(this.scorePool)}, payout=${payoutTotal}(${(payoutRate*100)|0}%), carryover=${this._carryoverPool}`);
 
-    const data = {
-      result,          // 'win' | 'lose'
-      reason,          // 'survived' | 'food_depleted' | 'temp_freeze' | 'gate_breached'
-      dayssurvived: this.currentDay,
-      totalScore: Object.values(this.contributions).reduce((a, b) => a + b, 0),
-      rankings,
-      // 积分池字段
-      scorePool:   Math.round(this.scorePool),
-      distributed: payoutTotal,
-      carryover:   this._carryoverPool,
-      payoutRate,
-    };
-
-    this.broadcast({ type: 'survival_game_ended', timestamp: Date.now(), data });
-    console.log(`[SurvivalEngine] Game ended: ${result} (${reason}), day=${this.currentDay}`);
-
-    // §36.5 堡垒日降级：失败走 _onRoomFail（新手保护 / 10% demote 公式 + room_failed 广播）
-    if (result === 'lose') {
+    // §36.5 堡垒日降级（manual 跳过）：新手保护 / 10% demote 公式 + room_failed 广播
+    //   注意：先调 _onRoomFail（会修改 this.fortressDay）再读 fortressDayAfter
+    if (!isManual) {
       try { this._onRoomFail(); } catch (e) {
         console.warn(`[SurvivalEngine] _onRoomFail error: ${e.message}`);
       }
     }
+    const fortressDayAfter = this.fortressDay || fortressDayBefore;
+    const newbieProtected  = fortressDayBefore <= FORTRESS_NEWBIE_PROTECT_DAY;
+
+    // §16.6 data 字段（key 顺序严格按策划案表；移除 result，新增 fortressDay*/newbieProtected）
+    const data = {
+      reason,
+      dayssurvived:      this.currentDay,
+      fortressDayBefore,
+      fortressDayAfter,
+      newbieProtected,
+      totalScore:        Object.values(this.contributions).reduce((a, b) => a + b, 0),
+      rankings,
+      // 积分池字段
+      scorePool:         Math.round(this.scorePool),
+      distributed:       payoutTotal,
+      carryover:         this._carryoverPool,
+      payoutRate,
+    };
+
+    this.broadcast({ type: 'survival_game_ended', timestamp: Date.now(), data });
+    console.log(`[SurvivalEngine] Settlement: reason=${reason}, day=${this.currentDay}, fortressDay ${fortressDayBefore}→${fortressDayAfter} (newbie=${newbieProtected})`);
 
     // §36 持久化：结算 → 保存一次快照
     if (this.roomPersistence && this.room) {
       try { this.roomPersistence.save(this.room); } catch (e) { /* ignore */ }
     }
 
-    // F1: 10s → 30s (策划案 §34 F1) —— 结算是付费转化黄金窗口，给观众更多停留时间
-    // 三屏结算序列共 11s (3+5+3)；30s 允许主播点"重新开始"跳过
-    setTimeout(() => {
-      console.log('[SurvivalEngine] Auto-restarting game after settlement...');
-      this.reset();
-      this.startGame(this._difficulty || 'normal');
-    }, 30000);
+    // §16.2 step 1 + §16.4：~8s 结算 UI 展示后进入恢复期，不再 reset + startGame 自动重启
+    this._recoveryTimer = setTimeout(() => {
+      this._recoveryTimer = null;
+      this._enterRecovery();
+    }, 8000);
+  }
+
+  /**
+   * 恢复期（§16.2 step 3 + §4.2 恢复期进入/离开）—— 🆕 v1.26：
+   *   - 服务端独立 state='recovery'；客户端收 phase='day'，靠 variant='recovery' 区分
+   *   - 120s 基础补给 + 城门满血 + 矿工复活；不启动新波次
+   *   - 夜晚遗留 _activeMonsters 不清（已刷出的不蒸发；客户端继续可视化）
+   *   - 120s 结束 → _enterNight(currentDay + 1)
+   */
+  _enterRecovery() {
+    if (this.state === 'recovery') return;
+
+    // ===== §16.2 note 周期边界清零（四件事同一同步帧内完成）=====
+    // 1) carryover → 赋给新周期起始 scorePool（_carryoverPool 由 _enterSettlement 算好）
+    this.scorePool      = this._carryoverPool || 0;
+    this._carryoverPool = 0;
+
+    // 2) weekly_ranking.addGameResult(contributions)：由 SurvivalRoom.broadcast 拦截
+    //    survival_game_ended 消息时已同步执行（见 SurvivalRoom.js:240），此处无需重复调用
+
+    // 3) contributions 清零：新周期从 0 累计
+    this.contributions = {};
+
+    // 4) §33 助威者 totalContrib 清零（Map 本身保留，身份位延续）
+    if (this._supporters && typeof this._supporters.forEach === 'function') {
+      for (const entry of this._supporters.values()) {
+        if (entry) entry.totalContrib = 0;
+      }
+    }
+    // ⚠️ _lifetimeContrib / _contribBalance 绝不清零（§30 / §39 跨周期永续）
+
+    this.state = 'recovery';
+    // §4.2 recovery 阶段时长 120s → remainingTime 供客户端倒计时（_tick 每秒递减）
+    this.remainingTime = 120;
+    // §3.1 流程：recovery 替代"失败周期那个白天"，currentDay 不推进（由 120s 结束后 _enterNight(currentDay+1) 推进）
+
+    // ===== §16.2 资源基础补给（考虑 §5.1 上限）=====
+    this.food = Math.min(2000, this.food + 100);
+    this.coal = Math.min(1500, this.coal + 50);
+    this.ore  = Math.min(800,  this.ore  + 20);
+
+    // ===== 城门 HP 重置到当前等级上限 =====
+    const gateMax = GATE_MAX_HP_BY_LEVEL[Math.max(0, (this.gateLevel || 1) - 1)]
+                  || this.gateMaxHp
+                  || 1000;
+    this.gateMaxHp = gateMax;
+    this.gateHp    = gateMax;
+
+    // ===== 矿工全员复活（_reviveAllWorkers 内部刷新 _lastAliveAt）=====
+    this._reviveAllWorkers('recovery');
+
+    // ===== §4.2 广播 phase_changed（phase='day' + variant='recovery'，phaseDuration=120）=====
+    this.broadcast({
+      type: 'phase_changed',
+      timestamp: Date.now(),
+      data: {
+        phase:         'day',
+        day:           this.currentDay,
+        phaseDuration: 120,
+        variant:       'recovery',
+      },
+    });
+
+    // 同步完整状态（客户端刷新资源条/城门/矿工 HP）
+    this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
+
+    console.log(`[SurvivalEngine] ===== Recovery Start (120s, day=${this.currentDay}) =====`);
+
+    // ===== §16 v1.27 恢复期 tick 重启 =====
+    //   _enterSettlement → _clearAllTimers 已清 tick；此处重启让 remainingTime 倒计时生效，
+    //   客户端 5s resource_update 可读 120s → 0 倒计时。_tick 在 state='recovery' 下走轻量分支，
+    //   不触发 decay / defeat / spawn / 666buff / 助威衰减。
+    //   _enterNight → _initActiveMonsters 会清 _activeMonsters，此处不重复清理。
+    this._startTick();
+
+    // ===== 120s 后进入下一个夜晚（currentDay + 1）=====
+    this._recoveryTimer = setTimeout(() => {
+      this._recoveryTimer = null;
+      this._enterNight((this.currentDay || 0) + 1);
+    }, 120_000);
   }
 
   // ==================== 内部：Tick ====================
@@ -1814,13 +1933,23 @@ class SurvivalGameEngine {
     this._tickTimer = setInterval(() => this._tick(), 200);
 
     // 5秒全量同步（独立定时器，避免被tick覆盖）
+    // §16 v1.27：recovery 也纳入同步，客户端读 remainingTime 倒计时（120s → 0）
     this._resourceSyncTimer = setInterval(() => {
-      if (this.state === 'day' || this.state === 'night')
+      if (this.state === 'day' || this.state === 'night' || this.state === 'recovery')
         this._broadcastResourceUpdate();
     }, 5000);
   }
 
   _tick() {
+    // §16 v1.27 recovery 轻量 tick：仅倒计时 remainingTime，不跑 decay / defeat / spawn / 666buff / 助威衰减
+    //   120s 进入 0 后由 _enterRecovery 中的 setTimeout(120_000) 触发 _enterNight 推进到下一夜
+    if (this.state === 'recovery') {
+      this._tickCounter++;
+      if (this._tickCounter % 5 === 0) {
+        this.remainingTime = Math.max(0, this.remainingTime - 1);
+      }
+      return;
+    }
     if (this.state !== 'day' && this.state !== 'night') return;
     this._tickCounter++;
 
@@ -1903,14 +2032,13 @@ class SurvivalGameEngine {
   _enterDayFromClock() {
     if (this.state !== 'night') return;  // 本房间未处于 night → 不做 phase 切换
 
-    // 走原 _endNight 逻辑（可能转入 _enterDay / _enterSettlement('win')）
+    // 走原 _endNight 逻辑（§16 v1.26 后只会转入 _enterDay，不再有 _enterSettlement('win') 分支）
     const oldState = this.state;
     this._endNight();
 
     // 挺过一夜 → 堡垒日 +1
-    // _endNight 后 state 可能为：
-    //   - 'day'        → 新的 Day 开始（正常情况）
-    //   - 'settlement' → 已到达 totalDays 胜利收尾（此时也视作成功）
+    //   _endNight 永远转入 _enterDay（§16 永续模式），state === 'day' 即代表成功挺夜
+    //   保留 'settlement' 分支仅为防御性兼容（理论上不会发生，第三方补丁插入结算时不误判失败）
     if (oldState === 'night' && (this.state === 'day' || this.state === 'settlement')) {
       this._onRoomSuccess();
     }
@@ -2142,12 +2270,11 @@ class SurvivalGameEngine {
     this.scorePool += nightBonus;
     console.log(`[SurvivalEngine] Night ${this.currentDay} cleared [${this._difficulty}], scorePool +${nightBonus} = ${Math.round(this.scorePool)}`);
 
+    // §16 v1.26 永续模式：无胜利终点。原 `if (nextDay > totalDays) _enterSettlement('win','survived')`
+    //   已移除——永续循环由失败降级（§36.5）自平衡压力，挺过的夜直接进入下一天。
+    //   `totalDays` 字段仍保留于 config/数值平衡参考，但不再触发"胜利结算"。
     const nextDay = this.currentDay + 1;
-    if (nextDay > this.totalDays) {
-      this._enterSettlement('win', 'survived');
-    } else {
-      this._enterDay(nextDay);
-    }
+    this._enterDay(nextDay);
   }
 
   // ==================== 矿工HP系统 ====================
@@ -2165,6 +2292,8 @@ class SurvivalGameEngine {
         respawnAt: 0,
       };
     }
+    // §16.1 all_dead 判定基准：夜晚开始时刷新（此刻全员满血）
+    if (Object.keys(this._workerHp).length > 0) this._lastAliveAt = Date.now();
     // 同步完整矿工HP状态到客户端
     this._broadcastWorkerHp();
     console.log(`[SurvivalEngine] Worker HP initialized for ${Object.keys(this._workerHp).length} players`);
@@ -2177,6 +2306,8 @@ class SurvivalGameEngine {
     w.hp        = w.maxHp;
     w.isDead    = false;
     w.respawnAt = 0;
+    // §16.1 all_dead 判定：复活 → 刷新存活基准
+    this._lastAliveAt = Date.now();
     this._broadcast({
       type: 'worker_revived',
       timestamp: Date.now(),
@@ -2200,6 +2331,8 @@ class SurvivalGameEngine {
       }
     }
     if (count > 0) {
+      // §16.1 all_dead 判定：批量复活 → 刷新存活基准
+      this._lastAliveAt = Date.now();
       this._broadcastWorkerHp();
       console.log(`[SurvivalEngine] Revived ${count} workers (reason: ${reason})`);
     }
@@ -2253,17 +2386,30 @@ class SurvivalGameEngine {
   }
 
   _checkDefeat() {
+    // §16.2 step 3 + §16.4：recovery / settlement 期间不再触发失败（缓冲期保护）
+    if (this.state === 'recovery' || this.state === 'settlement') return false;
+
     if (this.food <= 0) {
-      this._enterSettlement('lose', 'food_depleted');
+      this._enterSettlement('food_depleted');
       return true;
     }
     if (this.furnaceTemp <= this.minTemp) {
-      this._enterSettlement('lose', 'temp_freeze');
+      this._enterSettlement('temp_freeze');
       return true;
     }
     if (this.gateHp <= 0) {
-      this._enterSettlement('lose', 'gate_breached');
+      this._enterSettlement('gate_breached');
       return true;
+    }
+    // §16.1 §v1.27 新增 all_dead 分支：夜晚 + 全员已死 + 最近 5 分钟无复活
+    //   罕见 safety net（30s 自动复活覆盖 99% 场景）；仅在复活定时器被清除 / _lastAliveAt 未写入时触发
+    if (this.state === 'night' && this._lastAliveAt > 0) {
+      const workers = Object.values(this._workerHp || {});
+      if (workers.length > 0 && workers.every((w) => w && w.isDead === true)
+          && Date.now() - this._lastAliveAt >= 300_000) {
+        this._enterSettlement('all_dead');
+        return true;
+      }
     }
     return false;
   }
@@ -2658,6 +2804,12 @@ class SurvivalGameEngine {
     remainingDamage = Math.max(0, remainingDamage);
     if (remainingDamage > 0) {
       this.gateHp = Math.max(0, this.gateHp - remainingDamage);
+    }
+
+    // §16.1 all_dead 判定：本轮伤害结算后仍有矿工存活 → 刷新基准
+    //   若全员死亡则 _lastAliveAt 保持上一次活着的时刻，_checkDefeat 据此判 5 分钟窗口
+    if (Object.values(this._workerHp).some((w) => !w.isDead)) {
+      this._lastAliveAt = Date.now();
     }
 
     // 广播矿工HP更新
@@ -3270,9 +3422,9 @@ class SurvivalGameEngine {
     }, 1500);
   }
 
-  /** 广播当前局 Top5 实时贡献榜 */
+  /** 广播当前局 Top5 实时贡献榜（§19.2: state ∈ { 'day', 'night', 'recovery' }，其他状态跳过） */
   _broadcastLiveRanking() {
-    if (this.state !== 'day' && this.state !== 'night') return;
+    if (this.state !== 'day' && this.state !== 'night' && this.state !== 'recovery') return;
     const top5 = Object.entries(this.contributions)
       .sort(([, a], [, b]) => b - a)
       .slice(0, 5)
@@ -4658,6 +4810,8 @@ class SurvivalGameEngine {
   _clearAllTimers() {
     this._clearTick();
     this._clearNightWaves();
+    // §16 恢复期定时器（_enterSettlement 的 8s UI 定时器 / _enterRecovery 的 120s 定时器共用同一句柄）
+    if (this._recoveryTimer) { clearTimeout(this._recoveryTimer); this._recoveryTimer = null; }
     // 清除 per-player 临时 boost 定时器（能量电池）
     for (const t of Object.values(this._playerTempBoostTimers || {})) clearTimeout(t);
     this._playerTempBoostTimers = {};
