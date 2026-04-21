@@ -443,6 +443,112 @@ namespace DrscfZ.Survival
         public int    unlockDay;   // 仅 reason='feature_locked' 时有效；其他场景序列化为 0
     }
 
+    // ==================== §37 建造系统（Building System，🆕 v1.27）====================
+    // 协议详见 §37.6；所有消息走 SurvivalGameManager.HandleMessage 分发。
+    // ⚠️ 协议口径：BuildVoteUpdateData 使用"并行数组"（voteBuildIds / voteCounts）而非 map，
+    //   因 Unity JsonUtility 不支持 Dictionary<string,int> 反序列化。
+    //   需后端对齐：广播 build_vote_update 时序列化为 { proposalId, voteBuildIds:["watchtower","market"],
+    //   voteCounts:[3,1], totalVoters:4 }；若后端仍发 { votes:{buildId:count} } 映射则客户端解析为空——
+    //   本次按"并行数组"实现，后端对齐前 UI 将显示为 0 票（Reviewer 会标 gap）。
+
+    /// <summary>投票开始（type=build_vote_started）</summary>
+    [Serializable]
+    public class BuildVoteStartedData
+    {
+        public string   proposalId;
+        public string   proposerName;
+        public string[] options;        // 长度 1~3（单项退化场景）
+        public long     votingEndsAt;   // Unix ms
+    }
+
+    /// <summary>投票实时更新（type=build_vote_update）
+    /// ⚠️ 并行数组格式：voteBuildIds[i] 与 voteCounts[i] 按索引对应；
+    ///   JsonUtility 不支持 Dictionary，后端须配合此格式。</summary>
+    [Serializable]
+    public class BuildVoteUpdateData
+    {
+        public string   proposalId;
+        public string[] voteBuildIds;   // 并列键：['watchtower','market',...]
+        public int[]    voteCounts;     // 并列值：[3,1,...]
+        public int      totalVoters;
+    }
+
+    /// <summary>投票结束（type=build_vote_ended）
+    /// winnerId 可为 null（0 票流产时），服务端随后不广播 build_started。</summary>
+    [Serializable]
+    public class BuildVoteEndedData
+    {
+        public string proposalId;
+        public string winnerId;         // 可为 null（0 票流产）
+        public int    totalVoters;
+    }
+
+    /// <summary>JSON 友好的 Vector3 序列化结构（§37 首次引入，其他系统复用）</summary>
+    [Serializable]
+    public class Vector3Data
+    {
+        public float x;
+        public float y;
+        public float z;
+    }
+
+    /// <summary>建造开始（type=build_started）</summary>
+    [Serializable]
+    public class BuildStartedData
+    {
+        public string      buildId;
+        public long        completesAt;   // Unix ms
+        public Vector3Data position;
+    }
+
+    /// <summary>建造完成（type=build_completed）</summary>
+    [Serializable]
+    public class BuildCompletedData
+    {
+        public string buildId;
+    }
+
+    /// <summary>单个建筑拆除（type=build_demolished）</summary>
+    [Serializable]
+    public class BuildDemolishedData
+    {
+        public string buildId;
+        public string reason;           // 'manual'/'attacked'/'demoted'/'demoted_during_build'
+    }
+
+    /// <summary>建造提议被拒（type=build_propose_failed）</summary>
+    [Serializable]
+    public class BuildProposeFailedData
+    {
+        public string reason;           // 完整枚举见 §19.2 / §37.3
+        public int    unlockDay;        // 仅 reason='feature_locked' 时有效
+    }
+
+    /// <summary>投票通过但扣费失败导致建造取消（type=build_cancelled）</summary>
+    [Serializable]
+    public class BuildCancelledData
+    {
+        public string buildId;
+        public string reason;           // 当前仅 'insufficient_resources'
+    }
+
+    /// <summary>失败降级批量拆除（type=building_demolished_batch）</summary>
+    [Serializable]
+    public class BuildingDemolishedBatchData
+    {
+        public string[] buildingIds;
+        public string   reason;         // 当前固定为 'demoted'
+    }
+
+    /// <summary>瞭望塔 10s 预告怪物波次（type=monster_wave_incoming）</summary>
+    [Serializable]
+    public class MonsterWaveIncomingData
+    {
+        public int  waveIndex;
+        public long spawnsAt;           // Unix ms
+        public long firstAttackAt;      // Unix ms ≈ spawnsAt + 3500
+    }
+
     // ==================== 主播排行榜（type=streamer_ranking）====================
 
     /// <summary>主播排行榜单条记录</summary>
