@@ -46,6 +46,10 @@ namespace DrscfZ.Survival
         // 血条平滑动画
         private float _hpBarTargetFill = 1f;
 
+        /// <summary>当前 HP 相对比例（0~1）——由服务器 worker_hp_update 推送。
+        /// §31 Assassin 怪物用其按 HP 升序选目标（比例最低即残血矿工）。</summary>
+        public float CurrentHpRatio => _hpBarTargetFill;
+
         [Header("特效材质")]
         [SerializeField] private Material _hitExplosionMaterial; // 拖入 Mat_ParticleAdd
 
@@ -471,6 +475,12 @@ namespace DrscfZ.Survival
                     break;
                 case State.Frozen:
                     CancelInvoke(nameof(OnFrozenEnd));
+                    // 🆕 §31 动态冻结协程也要清理（Freeze/Unfreeze 手动也会 Stop；这里兜底）
+                    if (_freezeCoroutine != null)
+                    {
+                        StopCoroutine(_freezeCoroutine);
+                        _freezeCoroutine = null;
+                    }
                     break;
 
                 case State.Dead:
@@ -766,6 +776,84 @@ namespace DrscfZ.Survival
             TransitionTo(State.Frozen);
         }
 
+        // ==================== §31 个人动态冻结（冰封怪命中）====================
+
+        private Coroutine _freezeCoroutine;
+
+        /// <summary>
+        /// 🆕 §31 进入 Frozen 状态（动态时长）。
+        /// 与 TriggerFrozen() 区别：
+        ///   - 不触发 FrozenStatusUI 全局横幅（策划案 §31.3：个人冻结不与全局事件冲突）
+        ///   - 气泡文字显示"冻结 Xs"倒计时
+        ///   - duration 秒后自动 Unfreeze()（路径独立于 OnFrozenEnd 的 30s 固定 Invoke）
+        /// 服务端 worker_unfrozen 抵达时会主动调 Unfreeze() 打断此协程（如 T4 提前解冻）。
+        /// </summary>
+        public void Freeze(float durationSec)
+        {
+            if (_state == State.Frozen)
+            {
+                // 已在 Frozen：仅重置倒计时（取最大时长）
+                if (_freezeCoroutine != null) StopCoroutine(_freezeCoroutine);
+                _freezeCoroutine = StartCoroutine(DynamicFreezeCoroutine(durationSec));
+                return;
+            }
+
+            _stateBeforeSpecial = _state;
+
+            // 切 Frozen 前先 Cancel 固定 30s Invoke（避免 EnterState(Frozen) 又挂 30s 定时）
+            CancelInvoke(nameof(OnFrozenEnd));
+            _state = State.Frozen;
+
+            // 只应用视觉（蓝色材质），不调用 ShowSpecial("冰")——改用动态倒计时文字
+            if (_visual != null) _visual.SetFrozen(true);
+            if (_bubble  != null) _bubble.ShowSpecial($"冻结 {Mathf.CeilToInt(durationSec)}s",
+                                                      new Color(0.533f, 0.8f, 1.0f, 0.9f));
+
+            if (_freezeCoroutine != null) StopCoroutine(_freezeCoroutine);
+            _freezeCoroutine = StartCoroutine(DynamicFreezeCoroutine(durationSec));
+        }
+
+        /// <summary>
+        /// 🆕 §31 解除 Frozen 状态（由 worker_unfrozen 协议或倒计时到期触发）。
+        /// 从 Frozen 回到进入前状态（_stateBeforeSpecial），与 OnFrozenEnd 路径统一。
+        /// </summary>
+        public void Unfreeze()
+        {
+            if (_state != State.Frozen) return;
+
+            if (_freezeCoroutine != null)
+            {
+                StopCoroutine(_freezeCoroutine);
+                _freezeCoroutine = null;
+            }
+            CancelInvoke(nameof(OnFrozenEnd));
+
+            // 恢复视觉 + 清气泡
+            if (_visual != null) _visual.Reset();
+            if (_bubble != null) _bubble.Hide();
+
+            // 复用 OnFrozenEnd 路径：切回 _stateBeforeSpecial
+            _state = _stateBeforeSpecial;
+            EnterState(_state);
+        }
+
+        private IEnumerator DynamicFreezeCoroutine(float durationSec)
+        {
+            float remaining = durationSec;
+            while (remaining > 0f && _state == State.Frozen)
+            {
+                remaining -= Time.deltaTime;
+                if (remaining < 0f) remaining = 0f;
+                // 每 0.25s 刷一次气泡倒计时
+                if (_bubble != null)
+                    _bubble.ShowSpecial($"冻结 {Mathf.CeilToInt(remaining)}s",
+                                        new Color(0.533f, 0.8f, 1.0f, 0.9f));
+                yield return new WaitForSeconds(0.25f);
+            }
+            _freezeCoroutine = null;
+            if (_state == State.Frozen) Unfreeze();
+        }
+
         /// <summary>服务器通知矿工死亡（夜间HP归零）</summary>
         /// <param name="respawnAtMs">复活时间点（Unix毫秒），0=不计时</param>
         public void EnterDead(long respawnAtMs)
@@ -853,6 +941,7 @@ namespace DrscfZ.Survival
             _moveCoroutine       = null;
             _returnHomeCoroutine = null;
             _deadCoroutine       = null;
+            _freezeCoroutine     = null;   // 🆕 §31 动态冻结协程也要清理
 
             // 若该 Worker 持有围炉槽位，归还计数（静态计数器由 WorkerManager.ClearAll 统一清零）
             _myFireSlot = -1;

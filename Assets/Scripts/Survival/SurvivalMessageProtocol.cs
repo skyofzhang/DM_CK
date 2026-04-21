@@ -38,6 +38,11 @@ namespace DrscfZ.Survival
         public const string WorkerRevived   = "worker_revived";
         public const string WorkerHpUpdate  = "worker_hp_update";
 
+        // ----- §31 怪物多样性系统 -----
+        public const string WorkerFrozen   = "worker_frozen";    // S→C：冰封怪冻结单名矿工（动态时长）
+        public const string WorkerUnfrozen = "worker_unfrozen";  // S→C：冻结解除（到期 or T4 解冻）
+        public const string BossEnraged    = "boss_enraged";     // S→C：首领卫兵全部死亡 → Boss 暴走
+
         // ----- 助威模式 §33 -----
         public const string SupporterJoined   = "supporter_joined";
         public const string SupporterAction   = "supporter_action";
