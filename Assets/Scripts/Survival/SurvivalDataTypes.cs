@@ -27,6 +27,10 @@ namespace DrscfZ.Survival
         public string   gateTierName;       // 城门层级名（"木栅栏"/"加固木门"/.../"巨龙要塞"）
         public string[] gateFeatures;       // 已激活的特性（如 ["thorns_20", "frost_aura_6"]）
         public bool     gateDailyUpgraded;  // 当前天是否已升级（时机限制）
+        // 🆕 v1.27 §36.12 分时段解锁：截至当前 seasonDay 的已解锁功能 id 全集
+        //   老用户豁免时服务端返全集；getFullState 每次推送
+        //   feature id 常量见 SurvivalMessageProtocol.FeatureXxx
+        public string[] unlockedFeatures;
         // 注：服务端还发送 workerHp（dict），因 JsonUtility 不支持 Dictionary，
         //     由独立的 worker_hp_update 消息负责同步，此处忽略
     }
@@ -58,9 +62,14 @@ namespace DrscfZ.Survival
         public int    day;           // 第几天
         public float  phaseDuration; // 本阶段秒数
         // §16 v1.27 永续模式：variant 仅在恢复期为 "recovery"，常规白天/黑夜为 "normal"
+        // §36.5 v1.27 和平夜扩展：variant 可为 "peace_night"（D1 整夜柔光罩）
+        //   / "peace_night_silent"（D2 无怪但不显示 UI）/ "peace_night_prelude"（D3 前 30s 和平）
         // 服务器内部 recovery 态对外仍以 phase="day" 推送，客户端靠 variant 识别
         // 旧消息缺失此字段时反序列化回落 "normal"（JsonUtility 对默认值生效）
         public string variant = "normal";
+        // §36.5 v1.27 peace_night_prelude 专用：prelude 结束（怪物开始刷新）的 Unix ms 时间戳。
+        // 其它 variant 服务端不下发（JsonUtility 反序列化默认为 0）
+        public long   peacePreludeEndsAt;
     }
 
     /// <summary>单只怪物元数据（🆕 §31 多样性系统：monster_wave.monsters[] 数组元素）。
@@ -835,6 +844,8 @@ namespace DrscfZ.Survival
     public class TribeWarAttackFailedData
     {
         public string reason;
+        // 🆕 v1.27 §36.12：reason='feature_locked' 时附带解锁所需赛季日（D7 解锁 tribe_war）
+        public int    unlockDay;
     }
 
     /// <summary>攻击开始广播（type=tribe_war_attack_started，双方房间均广播，UI 根据自身 roomId 判断攻/守视角）</summary>
@@ -921,6 +932,10 @@ namespace DrscfZ.Survival
         public int    seasonId;           // 当前赛季 id（int 表示；服务端可能发字符串 id，此处保持 MVP 简化版）
         public string themeId;            // classic_frozen / blood_moon / snowstorm / dawn / frenzy / serene
         public int    phaseRemainingSec;  // 本阶段剩余秒数
+        // 🆕 v1.27 §36.12 分时段解锁：仅在 seasonDay 从 N→N+1 递增的那一秒服务端携带；
+        //   其他 tick 服务端不下发（JsonUtility 反序列化默认为 null）。
+        //   feature id 常量见 SurvivalMessageProtocol.FeatureXxx。
+        public string[] newlyUnlockedFeatures;
     }
 
     /// <summary>赛季状态快照（type=season_state，连接/主动请求时推送）</summary>
@@ -930,6 +945,10 @@ namespace DrscfZ.Survival
         public int    seasonId;
         public int    seasonDay;
         public string themeId;
+        // 🆕 v1.27 §36.12 分时段解锁：截至当前 seasonDay 的已解锁功能 id 全集（与 FEATURE_UNLOCK_DAY 一致）。
+        //   客户端据此初始化 BroadcasterPanel 按钮灰化/🔒 状态，避免错过 world_clock_tick.newlyUnlockedFeatures 的中途进场永久不知解锁状态。
+        //   老用户豁免时服务端返全集。
+        public string[] unlockedFeatures;
     }
 
     /// <summary>堡垒日变更（type=fortress_day_changed，挺过/降级/新手保护/cap_blocked/cap_reset 后推送）</summary>
@@ -971,5 +990,47 @@ namespace DrscfZ.Survival
     {
         public int    seasonId;
         public string nextThemeId;
+    }
+
+    // ==================== §36.4 赛季 Boss Rush（🆕 v1.27） ====================
+
+    /// <summary>赛季 Boss Rush 启动（type=season_boss_rush_start，D7 夜晚开始时广播）</summary>
+    [Serializable]
+    public class BossRushStartedData
+    {
+        public int      seasonId;
+        public int      bossHpTotal;          // 全服 Boss 血量池（=5000 × activeRooms）
+        public string[] participatingRooms;   // 注册房间 roomId 快照
+        public string   nextThemeId;          // 下一赛季主题预告（D7 夜晚开始时就已决定）
+    }
+
+    /// <summary>赛季 Boss Rush 已击杀（type=season_boss_rush_killed，全服 HP 池归零时去重广播一次）</summary>
+    [Serializable]
+    public class BossRushKilledData
+    {
+        public int  seasonId;
+        public long killedAt;   // Unix ms
+    }
+
+    // ==================== §36.12 分时段解锁 —— 老用户豁免（🆕 v1.27） ====================
+
+    /// <summary>老用户豁免（type=veteran_unlocked，玩家首次达标时推送）</summary>
+    [Serializable]
+    public class VeteranUnlockedData
+    {
+        public string openId;
+        public string reason;   // 'lifetime_contrib' / 'fortress_day' / 'seasons_completed'
+    }
+
+    // ==================== §36.12 分时段解锁 —— broadcaster_action_failed（🆕 v1.27） ====================
+
+    /// <summary>主播 ⚡加速/🌊事件触发失败（type=broadcaster_action_failed，unicast 发起方）
+    /// reason 枚举：feature_locked / in_cooldown / wrong_phase</summary>
+    [Serializable]
+    public class BroadcasterActionFailedData
+    {
+        public string reason;     // 失败原因
+        public int    unlockDay;  // 仅 reason='feature_locked' 时有效（§36.12 broadcaster_boost.minDay=2）
+        public string action;     // 子动作名 'efficiency_boost' / 'trigger_event'
     }
 }

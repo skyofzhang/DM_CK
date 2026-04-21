@@ -106,6 +106,35 @@ namespace DrscfZ.Survival
         public const string SeasonStarted      = "season_started";       // S→C：赛季开始（MVP 占位；可由 season_state 替代）
         public const string SeasonSettlement   = "season_settlement";    // S→C：赛季结算广播（D7 夜晚结束或 Boss 池归零）
 
+        // ----- §36.4 赛季 Boss Rush（🆕 v1.27） -----
+        public const string SeasonBossRushStart  = "season_boss_rush_start";   // S→C：D7 夜晚开始赛季 Boss Rush
+        public const string SeasonBossRushKilled = "season_boss_rush_killed";  // S→C：全服 Boss 血量池归零（dedup）
+
+        // ----- §36.12 分时段解锁 & 老用户豁免（🆕 v1.27） -----
+        public const string VeteranUnlocked          = "veteran_unlocked";            // S→C：玩家首次达到老用户豁免条件
+        public const string BroadcasterActionFailed  = "broadcaster_action_failed";   // S→C：主播 ⚡加速/🌊事件触发失败（含 feature_locked）
+
+        // ----- §36.12 reason 通用常量 -----
+        public const string ReasonFeatureLocked = "feature_locked";
+
+        // ----- §36.5 phase_changed.variant 常量 -----
+        public const string PhaseVariantPeaceNight        = "peace_night";          // D1 整夜（柔光罩 + UI 提示）
+        public const string PhaseVariantPeaceNightSilent  = "peace_night_silent";   // D2 整夜（无怪但不显示 UI）
+        public const string PhaseVariantPeaceNightPrelude = "peace_night_prelude";  // D3 前 30s 和平期
+        public const string PhaseVariantNormal            = "normal";               // 常规白天/夜晚
+        public const string PhaseVariantRecovery          = "recovery";             // §16 永续模式恢复期
+
+        // ----- §36.12 feature id 常量（FEATURE_UNLOCK_DAY 键，供客户端查锁）-----
+        public const string FeatureGateUpgradeBasic = "gate_upgrade_basic";   // Lv1–Lv4（D1 解锁）
+        public const string FeatureGateUpgradeHigh  = "gate_upgrade_high";    // Lv5–Lv6（D4 解锁）
+        public const string FeatureRoulette         = "roulette";             // §24.4 主播事件轮盘（D1 解锁）
+        public const string FeatureBroadcasterBoost = "broadcaster_boost";    // §24.1 ⚡加速+🌊事件（D2 解锁）
+        public const string FeatureShop             = "shop";                 // §39 商店系统（D2 解锁）
+        public const string FeatureBuilding         = "building";             // §37 建造系统（D3 解锁）
+        public const string FeatureExpedition       = "expedition";           // §38 探险系统（D5 解锁）
+        public const string FeatureSupporterMode    = "supporter_mode";       // §33 助威模式（D6 解锁）
+        public const string FeatureTribeWar         = "tribe_war";            // §35 跨直播间攻防战（D7 解锁）
+
         // ----- §35 跨直播间攻防战（Tribe War，🆕 v1.27） -----
         public const string TribeWarRoomListResult       = "tribe_war_room_list_result";       // S→C：大厅列表应答
         public const string TribeWarAttackFailed         = "tribe_war_attack_failed";          // S→C：攻击/反击失败（unicast 发起方）
