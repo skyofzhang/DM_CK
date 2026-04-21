@@ -95,6 +95,27 @@ const EVENT_NAMES = {
   E05_ore_vein:     '矿脉发现',
 };
 
+// ==================== §37 建造系统（Building System，MVP）====================
+// 5 种建筑：watchtower / market / hospital / altar / beacon
+// 投票窗口 45s；每日 1 次（跨日重置）；建造时长 3–5 min
+// PM 决策（MVP）：
+//   - §36.12 feature_locked 跳过（暂不门槛）
+//   - §35 tribeWar 远征怪攻击骨架逻辑跳过（beacon 仅存 state，TODO §35）
+//   - Altar 对 efficiency666Bonus 采用未拆分 Math.max 版（未实现 P5 拆分 → 1.15→1.25 触发值）
+//   - Hospital 通过 §30 _getWorkerRespawnSec 接入，公式 max(5, 30 - 10*hasLv31 - 15*hasHospital)
+//   - _roomCreatorId 暂不引入（TODO）
+//   - 每日限 1 次用 _buildVoteUsedToday bool + _enterDay 重置
+const BUILDING_CATALOG = {
+  watchtower: { cost: { ore: 80,  coal: 40  }, buildMs: 180000, position: { x: 1.5, y: 0, z: -2 } },
+  market:     { cost: { ore: 100, food: 200 }, buildMs: 180000, position: { x: 0,   y: 0, z: 8  } },
+  hospital:   { cost: { ore: 120, coal: 60  }, buildMs: 240000, position: { x: -4,  y: 0, z: 10 } },
+  altar:      { cost: { ore: 150, food: 80  }, buildMs: 240000, position: { x: 6,   y: 0, z: 10 } },
+  beacon:     { cost: { ore: 200, coal: 100 }, buildMs: 300000, position: { x: 1.5, y: 0, z: 2  } },
+};
+const BUILDING_IDS = Object.keys(BUILDING_CATALOG);
+const BUILD_VOTE_WINDOW_MS = 45000;
+const BUILDING_KEEP_ON_DEMOTE = ['watchtower', 'market'];
+
 // ==================== §24.4 主播事件轮盘（Broadcaster Event Roulette） ====================
 // 充能 300s；6 张事件卡随机抽 3 展示，从 3 张中随机定格 1；spin→apply 两步防客户端跳过动画
 // PM 决策（MVP）：堡垒日 ≥30 黄金版 +20% 不实现（TODO §36.5）；
@@ -364,6 +385,17 @@ class SurvivalGameEngine {
     // mystic_rune 24h 滑动窗口（最多 3 次）——MVP 内存 Map，TODO 接入 RoomPersistence 避免主播刷重启
     this._runeChargeLog         = [];
 
+    // ── §37 建造系统（Building System，MVP）────────────────────────────
+    // _buildings: 已建成建筑 ID 集合；跨夜/跨堡垒日保留，失败降级按 BUILDING_KEEP_ON_DEMOTE 部分保留
+    // _buildingInProgress: buildId -> { completesAt, timer }
+    // _buildVote: 当前活跃投票 { proposalId, options, startAt, votingEndsAt, votes, proposerName, timer }
+    // _buildVoteUsedToday: 每日限 1 次投票；_enterDay 重置
+    this._buildings          = new Set();
+    this._buildingInProgress = new Map();
+    this._buildVote          = null;
+    this._buildVoteUsedToday = false;
+    this._proposalIdCounter  = 0;
+
     // 点赞统计
     this.totalLikes = 0;
 
@@ -527,6 +559,16 @@ class SurvivalGameEngine {
     this._expeditionIdCounter   = 0;
     this._meteorFragmentPending = false;
 
+    // §37 建造系统重置：清建筑、清进行中、清投票
+    this._buildings.clear();
+    for (const [, info] of this._buildingInProgress) {
+      if (info.timer) clearTimeout(info.timer);
+    }
+    this._buildingInProgress.clear();
+    if (this._buildVote?.timer) clearTimeout(this._buildVote.timer);
+    this._buildVote           = null;
+    this._buildVoteUsedToday  = false;
+
     this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
   }
 
@@ -572,6 +614,18 @@ class SurvivalGameEngine {
   handleComment(playerId, playerName, avatarUrl, content) {
     if (this.state !== 'day' && this.state !== 'night') return;
     const content_trim = (content || '').trim();
+
+    // ── §37.3 建造投票弹幕：`建X`（X=1..options.length，对应活跃投票的候选列表）──
+    // 投票不活跃时静默忽略（避免与 cmd 1-6 冲突由 `^建\d+$` 限定）；活跃时调用 handleBuildVote
+    const buildMatch = content_trim.match(/^建(\d{1,2})$/);
+    if (buildMatch) {
+      if (!this._buildVote) return;
+      const idx = parseInt(buildMatch[1]) - 1;
+      if (idx >= 0 && idx < this._buildVote.options.length) {
+        this.handleBuildVote(playerId, this._buildVote.proposalId, this._buildVote.options[idx]);
+      }
+      return;
+    }
 
     // ── §30.7 换肤弹幕：`换肤` / `换肤N`（1~10）──────────────────────────
     // 必须在数字指令解析前处理（regex 仅匹配 `换肤` 前缀，不会与 cmd 1-6 冲突）
@@ -688,8 +742,9 @@ class SurvivalGameEngine {
       if (!playerId) return;
       this._handleExpeditionRecall(playerId, playerName);
     } else if (content_trim === '666') {
-      // 666弹幕：全员效率+15%，持续30秒（策划案 §4.3）
-      this.efficiency666Bonus = 1.15;
+      // 666弹幕：全员效率+15%（已建 altar 时 1.25），持续30秒（策划案 §4.3 / §37.2 altar）
+      // §37 altar 抬升 666 触发值：1.15 → 1.25（未拆分 P5 版，用 Math.max 合并 T2 ability_pill 的 1.5/1.6）
+      this.efficiency666Bonus = this._buildings.has('altar') ? 1.25 : 1.15;
       // §38 meteor_fragment：若 pending，本次 666 ×2.0（单次消费）
       if (this._meteorFragmentPending) {
         this.efficiency666Bonus = this.efficiency666Bonus * 2.0;
@@ -753,8 +808,9 @@ class SurvivalGameEngine {
 
     // 贡献值 = 礼物得分（策划案 §9）
     this._trackContribution(playerId, gift.score, 'gift');
-    // 积分池：礼物得分入池
-    this.scorePool += gift.score;
+    // 积分池：礼物得分入池（§37 market 抬升 ×1.1）
+    const _marketMult = this._buildings.has('market') ? 1.1 : 1.0;
+    this.scorePool += gift.score * _marketMult;
 
     // ── 矿工复活：送礼时若该玩家的矿工已死亡，立即复活 ──────────────
     //   助威者无 _workerHp 条目，本段自然跳过（?.isDead 为 undefined）
@@ -779,12 +835,14 @@ class SurvivalGameEngine {
 
       case 'ability_pill': {
         // 全员采矿效率+50%，持续30s（复用 efficiency666 系统）
-        this.efficiency666Bonus = Math.max(this.efficiency666Bonus, 1.5); // +50%，不叠加只刷新
+        // §37 altar 抬升 T2 触发值：1.5 → 1.6（与 666 同一独立轨道，未拆分 P5 版）
+        const pillVal = this._buildings.has('altar') ? 1.6 : 1.5;
+        this.efficiency666Bonus = Math.max(this.efficiency666Bonus, pillVal); // +50%/60%，不叠加只刷新
         this.efficiency666Timer = 30;
-        effects.globalEfficiencyBoost = 1.5;
+        effects.globalEfficiencyBoost = pillVal;
         effects.globalEfficiencyDuration = 30;
         needsResourceSync = true;
-        console.log(`[SurvivalEngine] ability_pill: global efficiency +50% for 30s by ${playerName}`);
+        console.log(`[SurvivalEngine] ability_pill: global efficiency +${((pillVal-1)*100)|0}% for 30s by ${playerName}`);
         break;
       }
 
@@ -1016,8 +1074,9 @@ class SurvivalGameEngine {
     }
 
     // 贡献与积分池（不走 handleGift 的默认累加路径，避免重复计入）
+    // §37 market 抬升 ×1.1
     this._trackContribution(playerId, 1);
-    this.scorePool += 1;
+    this.scorePool += 1 * (this._buildings.has('market') ? 1.1 : 1.0);
 
     const giftData = {
       playerId,
@@ -1076,9 +1135,9 @@ class SurvivalGameEngine {
     this.gateHp = Math.min(this.gateMaxHp, this.gateHp + 200);
     effects.addGateHp = 200;
 
-    // 贡献 + 积分池
+    // 贡献 + 积分池（§37 market 抬升 ×1.1）
     this._trackContribution(playerId, gift.score);
-    this.scorePool += gift.score;
+    this.scorePool += gift.score * (this._buildings.has('market') ? 1.1 : 1.0);
 
     const giftData = {
       playerId,
@@ -1232,6 +1291,9 @@ class SurvivalGameEngine {
     // 每天开始时重置随机事件计时器（90-120s后触发首次事件）
     this._nextEventTimer = 90 + Math.random() * 30;
 
+    // §37 建造系统：每日重置投票限额（每日 1 次跨日重置）
+    this._buildVoteUsedToday = false;
+
     // §24.4 首次进入 Running（day=1）→ 轮盘立即就绪（策划案 §24.4.2）
     if (!this._rouletteRunningInited) {
       this._rouletteRunningInited = true;
@@ -1314,6 +1376,13 @@ class SurvivalGameEngine {
 
   _enterSettlement(result, reason) {
     if (this.state === 'settlement') return;
+
+    // §37.5 失败降级：失败时按 BUILDING_KEEP_ON_DEMOTE 部分保留，其余清除（不返还资源）
+    // 当前无 §36 堡垒日升/降，以失败结算近似处理（TODO §36 接入后迁移到 fortressDay 降级路径）
+    if (result === 'lose') {
+      this._demoteBuildings('demoted');
+    }
+
     this._clearAllTimers();
     this.state = 'settlement';
 
@@ -2067,6 +2136,284 @@ class SurvivalGameEngine {
     this._applyRandomEvent(eventId);
   }
 
+  // ==================== §37 建造系统（Building System，MVP）====================
+
+  /**
+   * 发起建造投票（C→S build_propose）
+   * 前置：state==='day' + 无活跃投票 + 非助威者 + 未当日用完 + buildId 合法且未建成 + 资源充足
+   * 候选生成：buildId 必入 options[0]；剩余 2 张从"未建造 + 资源够"随机抽；不足补"已建造可重建"；退化 [buildId]
+   */
+  handleBuildPropose(playerId, playerName, buildId) {
+    // 1) 仅白天受理（策划案 §37.3 / §10.5 口径统一，不含 recovery）
+    if (this.state !== 'day') {
+      return this._broadcast({
+        type: 'build_propose_failed',
+        data: { reason: 'wrong_phase', unlockDay: 0 },
+      });
+    }
+    // 2) 已有活跃投票
+    if (this._buildVote !== null) {
+      return this._broadcast({
+        type: 'build_propose_failed',
+        data: { reason: 'already_voting', unlockDay: 0 },
+      });
+    }
+    // 3) 每日限 1 次
+    if (this._buildVoteUsedToday) {
+      return this._broadcast({
+        type: 'build_propose_failed',
+        data: { reason: 'daily_limit', unlockDay: 0 },
+      });
+    }
+    // 4) 助威者不能发起（可投票但不能提案）
+    if (playerId && this._supporters.has(playerId)) {
+      return this._broadcast({
+        type: 'build_propose_failed',
+        data: { reason: 'supporter_not_allowed', unlockDay: 0 },
+      });
+    }
+    // 5) 非法 buildId（当作 already_built 口径统一）
+    if (!BUILDING_CATALOG[buildId]) {
+      return this._broadcast({
+        type: 'build_propose_failed',
+        data: { reason: 'already_built', unlockDay: 0 },
+      });
+    }
+    // 6) 已建成（同类建筑唯一）
+    if (this._buildings.has(buildId)) {
+      return this._broadcast({
+        type: 'build_propose_failed',
+        data: { reason: 'already_built', unlockDay: 0 },
+      });
+    }
+    // 7) 资源不足
+    if (!this._hasBuildResources(buildId)) {
+      return this._broadcast({
+        type: 'build_propose_failed',
+        data: { reason: 'insufficient_resources', unlockDay: 0 },
+      });
+    }
+
+    // ---- 生成候选 options（长度 1~3）----
+    //  1. buildId 必入 options[0]
+    //  2. 剩余从"未建造 + 资源够"随机抽 2
+    //  3. 不足则补"已建造但可重建"（MVP：唯一性硬限 → 留空）
+    //  4. 仍不足则退化 [buildId]
+    const options  = [buildId];
+    const candidates = BUILDING_IDS.filter(id =>
+      id !== buildId && !this._buildings.has(id) && this._hasBuildResources(id)
+    );
+    // Fisher-Yates 洗牌
+    for (let i = candidates.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+    }
+    for (const c of candidates) {
+      if (options.length >= 3) break;
+      options.push(c);
+    }
+    // 不足则尝试补"已建造可重建"——MVP 唯一性硬限，跳过（TODO §37.2 拆除重建）
+    // 最终退化：options 至少有 [buildId]
+
+    const proposalId = `prop_${Date.now()}_${++this._proposalIdCounter}`;
+    const startAt       = Date.now();
+    const votingEndsAt  = startAt + BUILD_VOTE_WINDOW_MS;
+    this._buildVote = {
+      proposalId,
+      options,
+      startAt,
+      votingEndsAt,
+      votes:         new Map(),
+      proposerName:  playerName || playerId || 'Unknown',
+      timer:         setTimeout(() => this._closeBuildVote(), BUILD_VOTE_WINDOW_MS),
+    };
+
+    this._broadcast({
+      type: 'build_vote_started',
+      data: {
+        proposalId,
+        proposerName: this._buildVote.proposerName,
+        options,
+        votingEndsAt,
+      },
+    });
+    console.log(`[Building] propose: ${playerName} → buildId=${buildId} options=[${options.join(',')}] votingEndsAt=+45s`);
+  }
+
+  /**
+   * 投票（C→S build_vote 或 弹幕 `建X`）
+   * 校验 proposalId 匹配 + buildId 在 options 内；每位玩家 1 票，重复投票覆盖
+   * 广播并行数组格式 build_vote_update；全员投完（正式守护者，不含助威者）则立即 _closeBuildVote
+   */
+  handleBuildVote(playerId, proposalId, buildId) {
+    if (!playerId || !this._buildVote) return;
+    if (this._buildVote.proposalId !== proposalId) return;
+    if (!this._buildVote.options.includes(buildId)) return;
+
+    this._buildVote.votes.set(playerId, buildId);
+
+    // 聚合 build_vote_update（并行数组格式：与客户端协议对齐）
+    const tally = new Map();
+    for (const [, bid] of this._buildVote.votes) {
+      tally.set(bid, (tally.get(bid) || 0) + 1);
+    }
+    const voteBuildIds = [...tally.keys()];
+    const voteCounts   = voteBuildIds.map(bid => tally.get(bid));
+    const totalVoters  = this._buildVote.votes.size;
+
+    this._broadcast({
+      type: 'build_vote_update',
+      data: {
+        proposalId: this._buildVote.proposalId,
+        voteBuildIds,
+        voteCounts,
+        totalVoters,
+      },
+    });
+
+    // 全员投完（仅统计正式守护者，不含助威者）→ 立即结算
+    // 正式守护者数 = Object.keys(contributions).length（§33 助威者不在 contributions 中）
+    const guardianCount = Object.keys(this.contributions).length;
+    const guardianVotes = [...this._buildVote.votes.keys()].filter(
+      pid => this.contributions[pid] !== undefined
+    ).length;
+    if (guardianCount > 0 && guardianVotes >= guardianCount) {
+      this._closeBuildVote();
+    }
+  }
+
+  /** 结束投票并决定 winnerId；有票则 _startBuild，0 票则流产 */
+  _closeBuildVote() {
+    if (!this._buildVote) return;
+    const vote = this._buildVote;
+    // 先停定时器再清引用（防定时器兜底重入）
+    if (vote.timer) { clearTimeout(vote.timer); vote.timer = null; }
+
+    // 聚合 + 选 winner（0 票 → null；有票取 count 最大，平票按 options 顺序靠前）
+    const tally = new Map();
+    for (const [, bid] of vote.votes) {
+      tally.set(bid, (tally.get(bid) || 0) + 1);
+    }
+    const totalVoters = vote.votes.size;
+    let winnerId = null;
+    if (tally.size > 0) {
+      let maxCount = -1;
+      for (const optId of vote.options) {
+        const cnt = tally.get(optId) || 0;
+        if (cnt > maxCount) {
+          maxCount = cnt;
+          winnerId = optId;
+        }
+      }
+      if (maxCount <= 0) winnerId = null;   // 0 票流产
+    }
+
+    this._broadcast({
+      type: 'build_vote_ended',
+      data: {
+        proposalId: vote.proposalId,
+        winnerId,
+        totalVoters,
+      },
+    });
+
+    // 每日限额已用（即便流产也计入，避免反复刷流产——策划案 §37.3 明确）
+    this._buildVoteUsedToday = true;
+    this._buildVote = null;
+
+    if (winnerId !== null) {
+      // 二次确认资源（投票窗口期间可能被其他事件消耗掉）
+      if (!this._hasBuildResources(winnerId)) {
+        this._broadcast({
+          type: 'build_cancelled',
+          data: { buildId: winnerId, reason: 'insufficient_resources' },
+        });
+        console.log(`[Building] vote_ended winner=${winnerId} but insufficient_resources → cancelled`);
+      } else {
+        this._startBuild(winnerId);
+      }
+    } else {
+      console.log(`[Building] vote_ended: no winner (totalVoters=${totalVoters})`);
+    }
+  }
+
+  /** 扣资源并启动建造计时器，广播 build_started */
+  _startBuild(buildId) {
+    const cfg = BUILDING_CATALOG[buildId];
+    if (!cfg) return;
+    // 扣资源
+    if (cfg.cost.ore)  this.ore  = Math.max(0, this.ore  - cfg.cost.ore);
+    if (cfg.cost.coal) this.coal = Math.max(0, this.coal - cfg.cost.coal);
+    if (cfg.cost.food) this.food = Math.max(0, this.food - cfg.cost.food);
+
+    const completesAt = Date.now() + cfg.buildMs;
+    const timer = setTimeout(() => this._completeBuild(buildId), cfg.buildMs);
+    this._buildingInProgress.set(buildId, { completesAt, timer });
+
+    this._broadcast({
+      type: 'build_started',
+      data: {
+        buildId,
+        completesAt,
+        position: { x: cfg.position.x, y: cfg.position.y, z: cfg.position.z },
+      },
+    });
+    this._broadcastResourceUpdate();
+    console.log(`[Building] started: ${buildId} completesAt=+${cfg.buildMs/1000}s cost=${JSON.stringify(cfg.cost)}`);
+  }
+
+  /** 建造完成 → 加入 _buildings 集合，广播 build_completed */
+  _completeBuild(buildId) {
+    const info = this._buildingInProgress.get(buildId);
+    if (info && info.timer) clearTimeout(info.timer);
+    this._buildingInProgress.delete(buildId);
+    // 幂等：若已被 demote 清理则不重复加入
+    if (this._buildings.has(buildId)) return;
+    this._buildings.add(buildId);
+
+    this._broadcast({ type: 'build_completed', data: { buildId } });
+    console.log(`[Building] completed: ${buildId} → _buildings=[${[...this._buildings].join(',')}]`);
+
+    // TODO §37.2 watchtower：下次 wave spawn 前 10s 广播 monster_wave_incoming
+    // （建议挂载点：_initActiveMonsters(day) 或 wave spawn 处检查 _buildings.has('watchtower') 并安排 10s 预告）
+    if (buildId === 'watchtower') {
+      console.log(`[Building] watchtower built — TODO: wave spawn 10s early warning hook not yet wired`);
+    }
+  }
+
+  /** 失败降级清理（§37.5）：清除不在 BUILDING_KEEP_ON_DEMOTE 的建筑，进行中骨架全部取消（不返资源） */
+  _demoteBuildings(reason) {
+    // 1) 已建成：按清单部分保留
+    const toRemove = [...this._buildings].filter(b => !BUILDING_KEEP_ON_DEMOTE.includes(b));
+    for (const b of toRemove) this._buildings.delete(b);
+    if (toRemove.length > 0) {
+      this._broadcast({
+        type: 'building_demolished_batch',
+        data: { buildingIds: toRemove, reason: reason || 'demoted' },
+      });
+      console.log(`[Building] demote: removed ${toRemove.join(',')}, kept ${[...this._buildings].join(',') || '(none)'}`);
+    }
+    // 2) 进行中：全部取消（不返资源），广播 build_demolished
+    for (const [bid, info] of this._buildingInProgress) {
+      if (info.timer) clearTimeout(info.timer);
+      this._broadcast({
+        type: 'build_demolished',
+        data: { buildId: bid, reason: 'demoted_during_build' },
+      });
+    }
+    this._buildingInProgress.clear();
+  }
+
+  /** 资源检查（内部） */
+  _hasBuildResources(buildId) {
+    const cfg = BUILDING_CATALOG[buildId];
+    if (!cfg) return false;
+    if (cfg.cost.ore  && this.ore  < cfg.cost.ore)  return false;
+    if (cfg.cost.coal && this.coal < cfg.cost.coal) return false;
+    if (cfg.cost.food && this.food < cfg.cost.food) return false;
+    return true;
+  }
+
   // ==================== 内部：广播 ====================
 
   /**
@@ -2125,11 +2472,12 @@ class SurvivalGameEngine {
     return 100 + (lv - 1) * 3;
   }
 
-  /** 矿工复活秒数（阶4+ 20s，否则 30s） */
+  /** 矿工复活秒数（§30 阶4+ -10s；§37 hospital -15s；最低 5s） */
   _getWorkerRespawnSec(playerId) {
     const tier = this._getWorkerTier(playerId);
-    // TODO §30.13: 加入 hasHospital 减时 15s（§37 建造系统落地后接入）
-    return tier >= 4 ? 20 : 30;
+    const hasLv31     = tier >= 4;   // §30.10 阶4 起 -10s
+    const hasHospital = this._buildings.has('hospital');  // §37 医院 -15s
+    return Math.max(5, 30 - (hasLv31 ? 10 : 0) - (hasHospital ? 15 : 0));
   }
 
   /** 阶6 矿工 15% 概率格挡（本次伤害归零） */
@@ -3201,6 +3549,12 @@ class SurvivalGameEngine {
       if (exp.returnTimer)   clearTimeout(exp.returnTimer);
     }
     // 不清 _expeditions Map（由 reset() / _cancelAllExpeditions 决定清时机）
+
+    // §37 建造系统：清投票定时器 + 进行中建造定时器（不清 _buildings 集合）
+    if (this._buildVote?.timer) { clearTimeout(this._buildVote.timer); this._buildVote.timer = null; }
+    for (const [, info] of this._buildingInProgress) {
+      if (info.timer) { clearTimeout(info.timer); info.timer = null; }
+    }
   }
 }
 

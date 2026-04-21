@@ -409,6 +409,27 @@ class SurvivalRoom {
         break;
       }
 
+      // ==================== §37 建造系统 ====================
+      case 'build_propose': {
+        // { buildId, playerName? }
+        const pid   = ws._playerId || (data && data.playerId) || '';
+        // playerName 从 data.playerName 读；fallback 到引擎内 playerNames[pid] 或 pid
+        const pname = (data && data.playerName)
+                      || (this.survivalEngine.playerNames && this.survivalEngine.playerNames[pid])
+                      || pid;
+        const buildId = (data && data.buildId) || '';
+        this.survivalEngine.handleBuildPropose(pid, pname, buildId);
+        break;
+      }
+      case 'build_vote': {
+        // { proposalId, buildId }
+        const pid        = ws._playerId || (data && data.playerId) || '';
+        const proposalId = (data && data.proposalId) || '';
+        const buildId    = (data && data.buildId)    || '';
+        this.survivalEngine.handleBuildVote(pid, proposalId, buildId);
+        break;
+      }
+
       // ==================== GM 测试指令 ====================
       case 'pause_game':
         // 暂停/恢复游戏（仅限调试）
