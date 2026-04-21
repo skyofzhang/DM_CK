@@ -425,6 +425,10 @@ namespace DrscfZ.Survival
                     var tof = JsonUtility.FromJson<TraderOfferData>(dataJson);
                     if (tof != null) HandleTraderOffer(tof);
                     break;
+                case "broadcaster_trader_result":
+                    var tre = JsonUtility.FromJson<BroadcasterTraderResultData>(dataJson);
+                    if (tre != null) HandleBroadcasterTraderResult(tre);
+                    break;
 
                 // ----- §38 探险系统 -----
                 case "expedition_started":
@@ -1449,6 +1453,29 @@ namespace DrscfZ.Survival
         {
             OnTraderOffer?.Invoke(data);
             Debug.Log($"[SGM] broadcaster_trader_offer: expiresAt={data.expiresAt}");
+        }
+
+        /// <summary>神秘商人交易结果(整体复核 Critical #3 修复):显示成功/失败反馈并关闭交易面板</summary>
+        private void HandleBroadcasterTraderResult(BroadcasterTraderResultData data)
+        {
+            if (data == null) return;
+            string msg;
+            if (data.success)
+            {
+                msg = data.choice == "A"
+                    ? "商队交易成功:食物 → 矿石"
+                    : "商队交易成功:煤炭 → 城门 HP";
+                UI.AnnouncementUI.Instance?.ShowAnnouncement("交易完成", msg, new Color(0.4f, 1f, 0.6f), 2f);
+            }
+            else
+            {
+                msg = data.reason == "timeout"
+                    ? "商队已离去"
+                    : data.reason == "insufficient_resource" ? "资源不足" : data.reason;
+                UI.AnnouncementUI.Instance?.ShowAnnouncement("交易取消", msg, new Color(0.8f, 0.8f, 0.8f), 2f);
+            }
+            OnPlayerActivityMessage?.Invoke(msg);
+            Debug.Log($"[SGM] broadcaster_trader_result: success={data.success} choice={data.choice} reason={data.reason}");
         }
 
         // ==================== §38 探险系统（🆕 v1.27）====================

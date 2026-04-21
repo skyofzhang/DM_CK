@@ -383,6 +383,15 @@ namespace DrscfZ.Survival
         public long       expiresAt;   // Unix ms，到期服务端自动视作弃权
     }
 
+    /// <summary>神秘商人交易结果(type=broadcaster_trader_result,整体复核 Critical #3 修复)</summary>
+    [Serializable]
+    public class BroadcasterTraderResultData
+    {
+        public bool   success;
+        public string choice;    // 'A'|'B'|'' (timeout 时空)
+        public string reason;    // 'ok'|'insufficient_resource'|'timeout'
+    }
+
     // ==================== §38 探险系统（Expedition System，🆕 v1.27）====================
 
     /// <summary>探险开始通知（type=expedition_started）

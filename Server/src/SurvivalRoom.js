@@ -619,12 +619,18 @@ class SurvivalRoom {
     const trimmed = (content || '').trim();
     const cmd = parseInt(trimmed);
 
-    // §30.7 换肤 / §38 探险 弹幕专用前缀：均需经 handleComment 路由
-    const isSkinCmd      = /^换肤(\d{1,2})?$/.test(trimmed);
+    // 弹幕命令前缀识别(需经 handleComment 路由):
+    //   §30.7 换肤 / §38 探险 / §37 建造 / §39 商店购买/装备 / §34 F8 提示(发"5")
+    const isSkinCmd       = /^换肤(\d{1,2})?$/.test(trimmed);
     const isExpeditionCmd = (trimmed === '探' || trimmed === '召回');
+    const isBuildCmd      = /^建\d{1,2}$/.test(trimmed);         // §37
+    const isShopBuyCmd    = /^买[AB]\d{1,2}$/.test(trimmed);     // §39
+    const isShopEquipCmd  = /^装[TFEB]\d{1,2}$/.test(trimmed);  // §39
 
-    if ((cmd >= 1 && cmd <= 6) || trimmed === '666' || isSkinCmd || isExpeditionCmd) {
-      // 工作/攻击/666/换肤/探险指令 → 引擎解析
+    if ((cmd >= 1 && cmd <= 6) || trimmed === '666'
+        || isSkinCmd || isExpeditionCmd
+        || isBuildCmd || isShopBuyCmd || isShopEquipCmd) {
+      // 工作/攻击/666/换肤/探险/建造/购买/装备指令 → 引擎解析
       this.survivalEngine.handleComment(secOpenId, nickname, avatarUrl, trimmed);
     } else {
       // 任意评论 = 玩家首次加入（生存游戏不需要阵营选择）

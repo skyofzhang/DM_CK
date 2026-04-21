@@ -1301,6 +1301,25 @@ class SurvivalGameEngine {
       totalPlayers: this.totalPlayers,
     };
     this.broadcast({ type: 'survival_player_joined', timestamp: Date.now(), data });
+
+    // §39 商店:玩家首次加入/重连时推送其 owned + equipped 快照(ShopUI 背包 Tab 依赖)
+    // 整体复核 Critical #2:原实现缺此广播,导致重连后 B 类装备不可见
+    const owned    = this._playerShopInventory[playerId] || [];
+    const equipped = this._playerShopEquipped[playerId]  || {};
+    this.broadcast({
+      type: 'shop_inventory_data',
+      timestamp: Date.now(),
+      data: {
+        playerId,
+        owned: Array.isArray(owned) ? owned.slice() : [],
+        equipped: {
+          title:    equipped.title    || '',
+          frame:    equipped.frame    || '',
+          entrance: equipped.entrance || '',
+          barrage:  equipped.barrage  || '',
+        },
+      },
+    });
   }
 
   // ==================== §33 助威模式 ====================
