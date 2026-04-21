@@ -50,12 +50,42 @@ const wss = new WebSocket.Server({ server });
 // ==================== 核心模块 ====================
 const roomManager = new RoomManager(config.game);
 
+// §36 全服同步 + 赛季制（MVP）：SeasonManager → GlobalClock → RoomPersistence
+// 三者均为全局单例，注入 RoomManager 后由其构造 SurvivalRoom 时传递
+const SeasonManager = require('./SeasonManager');
+const GlobalClock = require('./GlobalClock');
+const RoomPersistence = require('./RoomPersistence');
+
+const seasonManager   = new SeasonManager();
+const globalClock     = new GlobalClock(seasonManager, {
+  // 与 easy/normal/hard 的 dayDuration/nightDuration 保持一致（均为 120s）
+  dayDurationMs:   (config.game.survivalDayDuration   || 120) * 1000,
+  nightDurationMs: (config.game.survivalNightDuration || 120) * 1000,
+});
+const roomPersistence = new RoomPersistence();
+roomManager.globalClock     = globalClock;
+roomManager.seasonMgr       = seasonManager;
+roomManager.roomPersistence = roomPersistence;
+console.log('[index] §36 GlobalClock / SeasonManager / RoomPersistence attached');
+
 // §35 Tribe War:全局 TribeWarManager 单例,反向注入给 RoomManager
 // 房间创建时自动 setRoomContext() 到 SurvivalGameEngine
 const TribeWarManager = require('./TribeWarManager');
 const tribeWarManager = new TribeWarManager(roomManager);
 roomManager.tribeWarMgr = tribeWarManager;
 console.log('[index] TribeWarManager attached to RoomManager');
+
+// §36 每 30s 自动保存所有房间快照
+const _roomPersistenceSaveInterval = setInterval(() => {
+  try {
+    const n = roomPersistence.saveAll(roomManager.rooms);
+    if (n > 0) {
+      console.log(`[index] RoomPersistence autosave: ${n} rooms`);
+    }
+  } catch (e) {
+    console.warn(`[index] RoomPersistence autosave error: ${e.message}`);
+  }
+}, 30 * 1000);
 
 // 抖音API（评论/礼物/点赞回调路由到RoomManager）
 const douyinAPI = new DouyinAPI({
@@ -355,6 +385,11 @@ wss.on('connection', (ws, req) => {
 
 function gracefulShutdown() {
   console.log('[DRSCFZ] Shutting down...');
+  // §36 停 30s 自动保存，并做一次最终保存
+  try {
+    clearInterval(_roomPersistenceSaveInterval);
+    roomPersistence.saveAll(roomManager.rooms);
+  } catch (e) { /* ignore */ }
   douyinAPI.shutdown();
   roomManager.shutdown();
   wss.close();

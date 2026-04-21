@@ -23,6 +23,11 @@ class RoomManager {
     this.gameConfig = gameConfig;
     this.tribeWarMgr = tribeWarMgr;  // §35:可在构造后注入(see index.js)
 
+    // §36 全服同步（构造后注入 see index.js）
+    this.globalClock     = null;
+    this.seasonMgr       = null;
+    this.roomPersistence = null;
+
     // roomId → Room
     this.rooms = new Map();
 
@@ -58,7 +63,11 @@ class RoomManager {
     }
 
     if (!room) {
-      room = new SurvivalRoom(roomId, this.gameConfig, this.tribeWarMgr);
+      room = new SurvivalRoom(roomId, this.gameConfig, this.tribeWarMgr, {
+        globalClock:     this.globalClock,
+        seasonMgr:       this.seasonMgr,
+        roomPersistence: this.roomPersistence,
+      });
       room.pauseTimeout = this.pauseTimeout;
       this.rooms.set(roomId, room);
       console.log(`[RoomManager] Room created: ${roomId} (total: ${this.rooms.size})`);
@@ -292,6 +301,10 @@ class RoomManager {
    */
   shutdown() {
     clearInterval(this.cleanupInterval);
+    // §36 停止 GlobalClock 定时器（destroy() 里会逐个 unregisterRoom）
+    if (this.globalClock && typeof this.globalClock.stop === 'function') {
+      try { this.globalClock.stop(); } catch (e) { /* ignore */ }
+    }
     for (const [roomId, room] of this.rooms.entries()) {
       room.destroy();
     }

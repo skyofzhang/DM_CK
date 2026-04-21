@@ -36,6 +36,7 @@ Server/node_modules/
 Server/.env
 Server/dist/
 Server/coverage/
+Server/data/
 npm-debug.log
 yarn-error.log
 

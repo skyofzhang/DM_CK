@@ -14,6 +14,15 @@
 
 const { findGiftById, findGiftByPrice, getGift, getTierNumber } = require('./GiftConfig');
 
+// ==================== §36 全服同步 / §36.5.1 每日闯关上限 常量 ====================
+// FeatureFlags：开发期可硬编码，线上可改为读 config
+const FeatureFlags = {
+  ENABLE_DAILY_CAP: true,   // §36.5.1 每日闯关上限（默认开）
+};
+const DAILY_FORTRESS_CAP_MAX = 150;                 // §36.5.1 每 dayKey 最多 +150 fortressDay
+const DAILY_RESET_HOUR_UTC8  = 5;                    // §36.5.1 UTC+8 05:00 日切
+const FORTRESS_NEWBIE_PROTECT_DAY = 10;              // §36.5 fortressDay ≤ 10 失败免罚
+
 // ==================== 怪物波次配置 ====================
 // 每天包含：
 //   normal: { hp, atk, spd, count, waves }  — 普通怪
@@ -481,17 +490,92 @@ class SurvivalGameEngine {
     //   tribeWarMgr— 全局 TribeWarManager 单例（用于能量/夜晚入口/结算断开）
     this.room         = null;
     this.tribeWarMgr  = null;
+
+    // ── §36 全服同步 + 赛季制（MVP）─────────────────────────────────────
+    // globalClock / seasonMgr 由 setRoomContext 注入；未注入时 phase 流转走原内部路径
+    // roomPersistence 由 setRoomContext 注入；存 JSON 到 ./data/rooms/{roomId}.json
+    this.globalClock     = null;
+    this.seasonMgr       = null;
+    this.roomPersistence = null;
+    this._clockDriven    = false;  // true → 内部 _tick 跳过 phase 到期切换
+
+    // ── §36 堡垒日（per-room）─────────────────────────────────────────
+    // fortressDay 表示当前推进到的堡垒日；maxFortressDay 为历史最高
+    // §36.5：首次 _onRoomSuccess +1；首次 _onRoomFail 按公式 demote
+    // §36.5.1：每日闯关上限 150，以 UTC+8 05:00 为 dayKey
+    this.fortressDay    = 1;
+    this.maxFortressDay = 1;
+
+    // §36.5.1 每日闯关上限（DAILY_CAP_MAX=150）
+    this._dailyFortressDayGained = 0;      // 本 dayKey 已获得的 fortressDay 数
+    this._dailyResetKey          = 0;      // 当前 dayKey（UTC+8 05:00 作为日切）
+    this._dailyCapBlocked        = false;  // 达到 cap → 本 dayKey 后续 success 静默
+
+    // FeatureFlags：§36.5.1 每日闯关上限默认启用
+    if (!this.constructor._featureFlagsWarned) {
+      this.constructor._featureFlagsWarned = true;
+      console.log(`[Engine] FeatureFlags: ENABLE_DAILY_CAP=${FeatureFlags.ENABLE_DAILY_CAP}`);
+    }
   }
 
   // ==================== §35 Tribe War 外部注入 ====================
 
   /**
-   * SurvivalRoom 构造后调用，注入 room 引用和 TribeWarManager 单例。
-   * 可选项；如果不调用，tribeWarMgr 相关逻辑自动 no-op。
+   * SurvivalRoom 构造后调用，注入 room 引用和各全局服务单例。
+   * 可选项；如果不调用，相关逻辑自动 no-op。
+   *
+   * @param {SurvivalRoom} room
+   * @param {TribeWarManager} [tribeWarMgr]  §35 单例
+   * @param {object} [extras]                §36 额外注入
+   * @param {GlobalClock}      [extras.globalClock]     §36 全服时钟
+   * @param {SeasonManager}    [extras.seasonMgr]       §36 赛季管理
+   * @param {RoomPersistence}  [extras.roomPersistence] §36 持久化
    */
-  setRoomContext(room, tribeWarMgr) {
+  setRoomContext(room, tribeWarMgr, extras = {}) {
     this.room        = room || null;
     this.tribeWarMgr = tribeWarMgr || null;
+
+    // §36 注入：GlobalClock / SeasonManager / RoomPersistence
+    if (extras.globalClock)     this.globalClock     = extras.globalClock;
+    if (extras.seasonMgr)       this.seasonMgr       = extras.seasonMgr;
+    if (extras.roomPersistence) this.roomPersistence = extras.roomPersistence;
+
+    this._clockDriven = !!this.globalClock;
+
+    // 持久化 load：恢复 fortressDay / _lifetimeContrib / _contribBalance / §36.5.1 daily cap
+    if (this.roomPersistence && room && room.roomId) {
+      const snap = this.roomPersistence.load(room.roomId);
+      if (snap) {
+        this._applyPersistedSnapshot(snap);
+      }
+    }
+  }
+
+  /**
+   * 从持久化快照恢复字段。schemaVersion 缺失字段回退默认值（向下兼容）。
+   */
+  _applyPersistedSnapshot(snap) {
+    if (!snap || typeof snap !== 'object') return;
+    // §36 堡垒日
+    if (typeof snap.fortressDay === 'number')    this.fortressDay    = Math.max(1, snap.fortressDay | 0);
+    if (typeof snap.maxFortressDay === 'number') this.maxFortressDay = Math.max(this.fortressDay, snap.maxFortressDay | 0);
+
+    // §30 矿工成长
+    if (snap._lifetimeContrib && typeof snap._lifetimeContrib === 'object') this._lifetimeContrib = { ...snap._lifetimeContrib };
+    if (snap._playerLevel     && typeof snap._playerLevel     === 'object') this._playerLevel     = { ...snap._playerLevel };
+    if (snap._playerSkinId    && typeof snap._playerSkinId    === 'object') this._playerSkinId    = { ...snap._playerSkinId };
+
+    // §39 商店
+    if (snap._playerShopInventory && typeof snap._playerShopInventory === 'object') this._playerShopInventory = { ...snap._playerShopInventory };
+    if (snap._playerShopEquipped  && typeof snap._playerShopEquipped  === 'object') this._playerShopEquipped  = { ...snap._playerShopEquipped };
+    if (snap._contribBalance      && typeof snap._contribBalance      === 'object') this._contribBalance      = { ...snap._contribBalance };
+
+    // §36.5.1 每日闯关上限
+    if (typeof snap._dailyFortressDayGained === 'number') this._dailyFortressDayGained = snap._dailyFortressDayGained | 0;
+    if (typeof snap._dailyResetKey          === 'number') this._dailyResetKey          = snap._dailyResetKey          | 0;
+    if (typeof snap._dailyCapBlocked        === 'boolean') this._dailyCapBlocked       = snap._dailyCapBlocked;
+
+    console.log(`[Engine:${(this.room && this.room.roomId) || '?'}] Loaded snapshot: fortressDay=${this.fortressDay} maxFortressDay=${this.maxFortressDay} dailyGained=${this._dailyFortressDayGained} dailyCapBlocked=${this._dailyCapBlocked}`);
   }
 
   /** §35 Tribe War：获取当前 roomId（未注入 room 时返 null）*/
@@ -606,6 +690,14 @@ class SurvivalGameEngine {
     this._activeMonsters.clear();
     this._monsterIdCounter = 0;
 
+    // §36 主题倍率（仅 night 生效）—— reset 时归默认；下次 _applyThemeRulesForNight 重新设置
+    this._themeHpMult        = 1.0;
+    this._themeCntMult       = 1.0;
+    this._themeMaxAliveBonus = 0;
+
+    // §36 fortressDay / maxFortressDay / §36.5.1 每日 cap 字段 —— reset 不清零（跨局永续）
+    //   持久化字段全部来自 _applyPersistedSnapshot 或 _onRoomSuccess/_onRoomFail 路径
+
     // 重置礼物效果状态
     this._playerEfficiencyBonus = {};
     this._playerTempBoost       = {};
@@ -709,6 +801,20 @@ class SurvivalGameEngine {
           hp: w.hp, maxHp: w.maxHp, isDead: w.isDead, respawnAt: w.respawnAt
         }])
       ),
+
+      // §36 全服同步 / 赛季 / 堡垒日 / 每日 cap（客户端 survival_game_state 同步）
+      fortressDay:           this.fortressDay || 1,
+      maxFortressDay:        this.maxFortressDay || 1,
+      seasonId:              this.seasonMgr ? this.seasonMgr.seasonId : 1,
+      seasonDay:             this.seasonMgr ? this.seasonMgr.seasonDay : 1,
+      themeId:               this.seasonMgr ? this.seasonMgr.themeId : 'classic_frozen',
+      phase:                 this.globalClock ? this.globalClock._phase : (this.state === 'night' ? 'night' : 'day'),
+      phaseRemainingSec:     this.globalClock ? this.globalClock.getPhaseRemainingSec() : Math.round(this.remainingTime),
+      // §36.5.1 每日闯关上限 4 字段
+      dailyFortressDayGained: this._dailyFortressDayGained || 0,
+      dailyCapMax:            DAILY_FORTRESS_CAP_MAX,
+      dailyResetAt:           this._getNextDailyResetMs(),
+      dailyCapBlocked:        this._dailyCapBlocked || false,
     };
   }
 
@@ -1620,6 +1726,18 @@ class SurvivalGameEngine {
     this.broadcast({ type: 'survival_game_ended', timestamp: Date.now(), data });
     console.log(`[SurvivalEngine] Game ended: ${result} (${reason}), day=${this.currentDay}`);
 
+    // §36.5 堡垒日降级：失败走 _onRoomFail（新手保护 / 10% demote 公式 + room_failed 广播）
+    if (result === 'lose') {
+      try { this._onRoomFail(); } catch (e) {
+        console.warn(`[SurvivalEngine] _onRoomFail error: ${e.message}`);
+      }
+    }
+
+    // §36 持久化：结算 → 保存一次快照
+    if (this.roomPersistence && this.room) {
+      try { this.roomPersistence.save(this.room); } catch (e) { /* ignore */ }
+    }
+
     // 10秒后自动重置并重启游戏（直播间持续运行）
     setTimeout(() => {
       console.log('[SurvivalEngine] Auto-restarting game after settlement...');
@@ -1691,8 +1809,8 @@ class SurvivalGameEngine {
       // 检查失败条件
       if (this._checkDefeat()) return;
 
-      // 阶段结束切换
-      if (this.remainingTime <= 0) {
+      // 阶段结束切换（§36 GlobalClock 接管后，内部 _tick 不再自发切换 phase）
+      if (this.remainingTime <= 0 && !this._clockDriven) {
         if (this.state === 'day') {
           this._enterNight(this.currentDay);
         } else {
@@ -1700,6 +1818,258 @@ class SurvivalGameEngine {
         }
       }
     }
+  }
+
+  // ==================== §36 GlobalClock 驱动入口 ====================
+
+  /**
+   * GlobalClock 触发：全服进入夜晚 phase
+   * - 如果本房间当前 state=day → 走原 _enterNight 逻辑 + 应用主题规则
+   * - 其他 state（idle/settlement/night）→ no-op（房间自己未进入 Running 或已结算）
+   */
+  _enterNightFromClock() {
+    if (this.state !== 'day') return;  // 本房间未处于 day → 不做 phase 切换
+    // 应用主题规则（blood_moon：怪物 HP ×1.2 暂存到倍率字段；由 _initActiveMonsters 消费）
+    this._applyThemeRulesForNight();
+    this._enterNight(this.currentDay);
+  }
+
+  /**
+   * GlobalClock 触发：全服进入白天 phase
+   * - 如果本房间当前 state=night → 走原 _endNight 逻辑（nextDay 推进 / 胜利判定）
+   *   然后判定堡垒日成功（只要本房 state 从 night 离开且未进入 settlement）
+   * - 其他 state → no-op
+   */
+  _enterDayFromClock() {
+    if (this.state !== 'night') return;  // 本房间未处于 night → 不做 phase 切换
+
+    // 走原 _endNight 逻辑（可能转入 _enterDay / _enterSettlement('win')）
+    const oldState = this.state;
+    this._endNight();
+
+    // 挺过一夜 → 堡垒日 +1
+    // _endNight 后 state 可能为：
+    //   - 'day'        → 新的 Day 开始（正常情况）
+    //   - 'settlement' → 已到达 totalDays 胜利收尾（此时也视作成功）
+    if (oldState === 'night' && (this.state === 'day' || this.state === 'settlement')) {
+      this._onRoomSuccess();
+    }
+  }
+
+  /**
+   * 根据当前赛季主题，设置 _themeHpMult / _themeCntMult 等倍率字段。
+   * 这些倍率在 _initActiveMonsters 中被消费（与难度 / 动态难度相乘）。
+   *
+   * MVP 实现的主题效果：
+   *   blood_moon: 怪物 HP ×1.2（资源掉落 ×1.2 暂未接入，TODO）
+   *   frenzy:     maxAliveMonsters 上浮（由客户端消费；服务端仅标记）
+   *   snowstorm:  白天采矿 ×0.9（TODO 接入 _applyWorkEffect）
+   *   dawn/serene: 仅时长调整（由 GlobalClock 内部处理）
+   */
+  _applyThemeRulesForNight() {
+    const themeId = this.seasonMgr ? this.seasonMgr.themeId : 'classic_frozen';
+    this._themeHpMult = 1.0;
+    this._themeCntMult = 1.0;
+    this._themeMaxAliveBonus = 0;
+    if (themeId === 'blood_moon') {
+      this._themeHpMult = 1.2;
+    } else if (themeId === 'frenzy') {
+      this._themeMaxAliveBonus = 2;  // 15 → 17
+    }
+    // 其他主题 MVP 不改倍率
+  }
+
+  // ==================== §36.5 堡垒日（fortressDay）升降 ====================
+
+  /**
+   * 房间成功挺过一夜 → 堡垒日 +1（§36.5.1 受每日 cap 限制）
+   * 由 _enterDayFromClock 在 night→day 成功切换后调用。
+   *
+   * 逻辑（§36.5 + §36.5.1）：
+   *   1. 先 _ensureDailyReset 检查 dayKey 翻新
+   *   2. 若 _dailyCapBlocked 为 true → 静默（reason='cap_blocked'）
+   *   3. 否则 fortressDay +1, maxFortressDay=max(...), _dailyFortressDayGained +1
+   *   4. 若 _dailyFortressDayGained 达到 cap → _dailyCapBlocked=true
+   *   5. 广播 fortress_day_changed
+   */
+  _onRoomSuccess() {
+    this._ensureDailyReset();
+
+    const oldFortressDay = this.fortressDay;
+    let reason = 'promoted';
+    let actualChange = true;
+
+    if (FeatureFlags.ENABLE_DAILY_CAP && this._dailyCapBlocked) {
+      // 已触顶 → 不再推进
+      reason = 'cap_blocked';
+      actualChange = false;
+    } else {
+      this.fortressDay = oldFortressDay + 1;
+      if (this.fortressDay > this.maxFortressDay) this.maxFortressDay = this.fortressDay;
+      if (FeatureFlags.ENABLE_DAILY_CAP) {
+        this._dailyFortressDayGained += 1;
+        if (this._dailyFortressDayGained >= DAILY_FORTRESS_CAP_MAX) {
+          this._dailyCapBlocked = true;
+        }
+      }
+    }
+
+    // 广播 fortress_day_changed
+    this.broadcast({
+      type: 'fortress_day_changed',
+      timestamp: Date.now(),
+      data: {
+        oldFortressDay,
+        newFortressDay: this.fortressDay,
+        reason,
+        seasonDay: this.seasonMgr ? this.seasonMgr.seasonDay : 1,
+        dailyFortressDayGained: this._dailyFortressDayGained,
+        dailyCapMax: DAILY_FORTRESS_CAP_MAX,
+        dailyResetAt: this._getNextDailyResetMs(),
+        dailyCapBlocked: this._dailyCapBlocked,
+      },
+    });
+
+    console.log(`[Engine:${(this.room && this.room.roomId) || '?'}] _onRoomSuccess: ${oldFortressDay}→${this.fortressDay} reason=${reason} dailyGained=${this._dailyFortressDayGained}/${DAILY_FORTRESS_CAP_MAX}`);
+  }
+
+  /**
+   * 房间失败 → 堡垒日降级
+   *   §36.5 新手保护：fortressDay <= FORTRESS_NEWBIE_PROTECT_DAY (10) 免罚
+   *   否则：fortressDay = max(1, floor(fortressDay * 0.9))
+   * 广播 room_failed
+   */
+  _onRoomFail() {
+    const oldFortressDay = this.fortressDay;
+    let demotionReason = '';
+    let newbieProtected = false;
+
+    if (oldFortressDay <= FORTRESS_NEWBIE_PROTECT_DAY) {
+      // 新手保护期
+      newbieProtected = true;
+      demotionReason = 'newbie_protected';
+    } else {
+      this.fortressDay = Math.max(1, Math.floor(oldFortressDay * 0.9));
+      demotionReason = 'demoted';
+      // 失败降级同时触发 dayKey 重置的补偿路径（§36.5.1 第三条路径）
+      if (FeatureFlags.ENABLE_DAILY_CAP && this._dailyCapBlocked) {
+        this._dailyCapBlocked = false;
+        this._dailyFortressDayGained = 0;
+        this.broadcast({
+          type: 'fortress_day_changed',
+          timestamp: Date.now(),
+          data: {
+            oldFortressDay: this.fortressDay,
+            newFortressDay: this.fortressDay,
+            reason: 'cap_reset',
+            seasonDay: this.seasonMgr ? this.seasonMgr.seasonDay : 1,
+            dailyFortressDayGained: 0,
+            dailyCapMax: DAILY_FORTRESS_CAP_MAX,
+            dailyResetAt: this._getNextDailyResetMs(),
+            dailyCapBlocked: false,
+          },
+        });
+      }
+    }
+
+    // 策划案 §36.5 要求:两种失败路径都必须同时推 fortress_day_changed(reason='demoted'|'newbie_protected')
+    //   + room_failed。§36.5.1.6 P23 规定所有 fortress_day_changed 携带 4 cap 字段。
+    this.broadcast({
+      type: 'fortress_day_changed',
+      timestamp: Date.now(),
+      data: {
+        oldFortressDay,
+        newFortressDay: this.fortressDay,
+        reason: newbieProtected ? 'newbie_protected' : 'demoted',
+        seasonDay: this.seasonMgr ? this.seasonMgr.seasonDay : 1,
+        dailyFortressDayGained: this._dailyFortressDayGained || 0,
+        dailyCapMax: DAILY_FORTRESS_CAP_MAX,
+        dailyResetAt: this._getNextDailyResetMs(),
+        dailyCapBlocked: this._dailyCapBlocked || false,
+      },
+    });
+
+    this.broadcast({
+      type: 'room_failed',
+      timestamp: Date.now(),
+      data: {
+        oldFortressDay,
+        newFortressDay: this.fortressDay,
+        demotionReason,
+        newbieProtected,
+      },
+    });
+
+    console.log(`[Engine:${(this.room && this.room.roomId) || '?'}] _onRoomFail: ${oldFortressDay}→${this.fortressDay} reason=${demotionReason}`);
+  }
+
+  // ==================== §36.5.1 每日闯关上限 ====================
+
+  /**
+   * 计算当前 dayKey（UTC+8 05:00 作为日切边界）。
+   * 返回整数 dayKey（自 1970-01-01 UTC+8 05:00 起，按日递增）。
+   */
+  _computeDayKey(nowMs = Date.now()) {
+    // UTC+8 = Asia/Shanghai；不处理 DST（中国无夏令时）
+    const UTC8_OFFSET_MS = 8 * 3600 * 1000;
+    const RESET_OFFSET_MS = DAILY_RESET_HOUR_UTC8 * 3600 * 1000;
+    // 把 UTC+8 的 05:00 作为每日零点 → 再除以一天毫秒数
+    const shifted = nowMs + UTC8_OFFSET_MS - RESET_OFFSET_MS;
+    return Math.floor(shifted / (24 * 3600 * 1000));
+  }
+
+  /** 下一次 dayKey 切换的 Unix ms（用于客户端 UI 显示倒计时） */
+  _getNextDailyResetMs(nowMs = Date.now()) {
+    const currentKey = this._computeDayKey(nowMs);
+    const UTC8_OFFSET_MS = 8 * 3600 * 1000;
+    const RESET_OFFSET_MS = DAILY_RESET_HOUR_UTC8 * 3600 * 1000;
+    return (currentKey + 1) * 24 * 3600 * 1000 + RESET_OFFSET_MS - UTC8_OFFSET_MS;
+  }
+
+  /**
+   * 保证 dayKey 与当前 _dailyResetKey 一致：
+   *   - 首次（_dailyResetKey=0） → 初始化
+   *   - currentKey > storedKey → 重置 _dailyFortressDayGained / _dailyCapBlocked（NTP 后跳时钟防御）
+   *   - currentKey <= storedKey → no-op（时钟回拨不触发重置）
+   */
+  _ensureDailyReset() {
+    if (!FeatureFlags.ENABLE_DAILY_CAP) return;
+    const currentKey = this._computeDayKey();
+    const storedKey = this._dailyResetKey || 0;
+
+    if (storedKey === 0) {
+      // 首次
+      this._dailyResetKey = currentKey;
+      return;
+    }
+    if (currentKey > storedKey) {
+      // dayKey 翻新 → 重置
+      const wasBlocked = this._dailyCapBlocked;
+      const wasGained = this._dailyFortressDayGained;
+      this._dailyResetKey = currentKey;
+      this._dailyFortressDayGained = 0;
+      this._dailyCapBlocked = false;
+
+      // 若前一日 cap_blocked，广播一次 cap_reset（让 UI 刷新徽标）
+      if (wasBlocked || wasGained > 0) {
+        this.broadcast({
+          type: 'fortress_day_changed',
+          timestamp: Date.now(),
+          data: {
+            oldFortressDay: this.fortressDay,
+            newFortressDay: this.fortressDay,
+            reason: 'cap_reset',
+            seasonDay: this.seasonMgr ? this.seasonMgr.seasonDay : 1,
+            dailyFortressDayGained: 0,
+            dailyCapMax: DAILY_FORTRESS_CAP_MAX,
+            dailyResetAt: this._getNextDailyResetMs(),
+            dailyCapBlocked: false,
+          },
+        });
+      }
+      console.log(`[Engine:${(this.room && this.room.roomId) || '?'}] Daily cap reset: dayKey ${storedKey}→${currentKey}`);
+    }
+    // currentKey <= storedKey → 时钟回拨，不重置（§36.5.1 NTP 后跳时钟防御）
   }
 
   /**
@@ -1898,9 +2268,12 @@ class SurvivalGameEngine {
 
     // 难度倍率（未设置时默认 1.0）
     // §30.6 动态难度叠加：HP 基础难度 × 动态难度（Hard 封顶+25%，Normal/Easy 封顶+50%）
+    // §36 主题倍率叠加：blood_moon 主题 → HP ×1.2（_themeHpMult 由 _applyThemeRulesForNight 设置）
     // TODO §30.6：若未来加入随机 Hard Night 事件，HP 加成取 max(_dynamicHpMult, hardNightMult)
-    const hpMult  = (this._monsterHpMult  || 1.0) * (this._dynamicHpMult  || 1.0);
-    const cntMult = (this._monsterCntMult || 1.0) * (this._dynamicCountMult || 1.0);
+    const themeHpMult  = this._themeHpMult  || 1.0;
+    const themeCntMult = this._themeCntMult || 1.0;
+    const hpMult  = (this._monsterHpMult  || 1.0) * (this._dynamicHpMult   || 1.0) * themeHpMult;
+    const cntMult = (this._monsterCntMult || 1.0) * (this._dynamicCountMult || 1.0) * themeCntMult;
 
     // 普通怪
     if (cfg.normal) {
