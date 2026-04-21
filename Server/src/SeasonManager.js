@@ -27,6 +27,21 @@ class SeasonManager {
     this.seasonId = 1;
     this.seasonDay = 1;
     this.themeId = SEASON_THEMES[0];
+
+    // §36.4 v1.27：D7 夜晚开始时就决定下一赛季主题（GlobalClock 写入），
+    // 然后 season_settlement 携带同一 nextThemeId 给客户端做预告
+    this._nextThemeId = null;
+  }
+
+  /**
+   * §36.4 v1.27：计算下一赛季主题（幂等，由 GlobalClock D7 夜晚启动 BossRush 时调用）
+   * 规则：按 SEASON_THEMES 顺序轮换（与 advanceDay 里的推进一致）
+   *
+   * @returns {string} 下一赛季的 themeId
+   */
+  computeNextThemeId() {
+    // 推进后的 seasonId 就是下一赛季；由 seasonId+1 决定主题
+    return SEASON_THEMES[this.seasonId % SEASON_THEMES.length];
   }
 
   /**
@@ -42,10 +57,17 @@ class SeasonManager {
       const oldSeasonId = this.seasonId;
       const oldThemeId = this.themeId;
 
+      // §36.4 v1.27：若 GlobalClock 已在 D7 夜晚开始时写入 _nextThemeId，则 season_settlement 优先用它
+      // （保证客户端在 D7 夜晚就看到下一赛季主题预告；否则 fallback 到计算值）
+      const settlementNextTheme = this._nextThemeId || this.computeNextThemeId();
+
       // 新赛季
       this.seasonId += 1;
       this.seasonDay = 1;
       this.themeId = SEASON_THEMES[(this.seasonId - 1) % SEASON_THEMES.length];
+
+      // 清理预告（新赛季开始）
+      this._nextThemeId = null;
 
       console.log(`[SeasonManager] Season ${oldSeasonId} ended (${oldThemeId}) → Season ${this.seasonId} started (${this.themeId})`);
 
@@ -54,13 +76,13 @@ class SeasonManager {
         for (const room of rooms) {
           try {
             if (!room || typeof room.broadcast !== 'function') continue;
-            // season_settlement（MVP 空占位）
+            // season_settlement（MVP 空占位）——携带 D7 夜晚就决定好的 nextThemeId
             room.broadcast({
               type: 'season_settlement',
               timestamp: Date.now(),
               data: {
                 seasonId: oldSeasonId,
-                nextThemeId: this.themeId,
+                nextThemeId: settlementNextTheme,
               },
             });
             // season_started

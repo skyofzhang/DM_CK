@@ -1,18 +1,27 @@
 /**
- * GlobalClock - §36 全服同步时钟（MVP 极简版）
+ * GlobalClock - §36 全服同步时钟（MVP 极简版 + §36.4 BossRush + §36.12 FEATURE_UNLOCK_DAY 广播）
  *
  * 职责：
  * 1. 所有房间共享同一 phase（day / night）
- * 2. 每秒广播 `world_clock_tick` 到所有注册房间
+ * 2. 每秒广播 `world_clock_tick` 到所有注册房间（携带 newlyUnlockedFeatures 仅在 seasonDay 递增的那一秒）
  * 3. phase 到期时，向所有房间触发 `_enterNightFromClock` / `_enterDayFromClock`
  * 4. 驱动 SeasonManager：每次 night → day 切换时 advanceDay()
  * 5. 应用主题对昼夜时长的倍率（dawn ×0.8 / serene 夜长 ×1.3）
+ * 6. §36.4 维护全服 Boss Rush HP 池（D7 夜晚启动，累加跨房间伤害）
  *
  * PM 决策（MVP 裁剪项）：
- * - 跨房间 Boss Rush 不做
- * - 赛季结算 season_settlement 广播空对象占位
+ * - 赛季结算 season_settlement 由 SeasonManager.advanceDay 负责（携带 nextThemeId）
+ * - D7 Boss 池归零 → 仅推 `season_boss_rush_killed`，不提前切换赛季（仍走 advanceDay 原路径）
  * - 不同步 fortressDay（fortressDay 仍是 per-room）
  */
+
+const {
+  getNewlyUnlockedFeatures,
+  getUnlockedFeatures,
+} = require('./config/FeatureUnlockConfig');
+
+// §36.4 BossRush HP 池基数：每个参与房间贡献 5000 HP
+const BOSS_RUSH_HP_PER_ROOM = 5000;
 
 class GlobalClock {
   /**
@@ -32,6 +41,17 @@ class GlobalClock {
     this._phase = 'day';                          // 'day' | 'night'
     this._phaseStartedAt = Date.now();
 
+    // §36.12 seasonDay 递增侦测：在 seasonDay 刚变化的那一个 tick 携带 newlyUnlockedFeatures
+    this._lastSeasonDayTicked = seasonMgr ? seasonMgr.seasonDay : 1;
+    this._pendingNewlyUnlocked = [];              // 仅首个 tick 非空，后续清空
+
+    // §36.4 BossRush 全服共享 HP 池
+    this._bossRushSeasonId = null;                 // 正在进行的 Boss Rush 赛季 id
+    this._bossRushHpPool   = 0;                    // 剩余 HP
+    this._bossRushHpTotal  = 0;                    // 总 HP（不随扣减变化，客户端进度条参考）
+    this._bossRushParticipatingRooms = new Set();  // 参与房间 id（快照；每次启动重刷）
+    this._bossRushKilled = false;                  // 本赛季是否已击杀过（防重复推送）
+
     // 启动 tick
     this._timer = setInterval(() => this._tick(), this._tickMs);
     console.log(`[GlobalClock] Started: phase=${this._phase}, dayMs=${this._baseDayDurationMs}, nightMs=${this._baseNightDurationMs}`);
@@ -41,16 +61,19 @@ class GlobalClock {
 
   registerRoom(room) {
     this._rooms.add(room);
-    // 新房间加入时立即推送一次 season_state（当前赛季信息）
+    // 新房间加入时立即推送一次 season_state（当前赛季信息 + 已解锁功能全集）
     try {
       if (room.broadcast && this._seasonMgr) {
+        const seasonDay = this._seasonMgr.seasonDay;
         room.broadcast({
           type: 'season_state',
           timestamp: Date.now(),
           data: {
             seasonId: this._seasonMgr.seasonId,
-            seasonDay: this._seasonMgr.seasonDay,
+            seasonDay,
             themeId: this._seasonMgr.themeId,
+            // §36.12：连接时同步一次已解锁列表，避免中途进场客户端错过 newlyUnlockedFeatures 横幅
+            unlockedFeatures: getUnlockedFeatures(seasonDay),
           },
         });
       }
@@ -94,6 +117,116 @@ class GlobalClock {
       : Math.round(this._baseNightDurationMs * nightMult);
   }
 
+  // ==================== §36.4 BossRush ====================
+
+  /**
+   * D7 夜晚开始时由 _tick 调用：初始化 / 广播 Boss Rush 池
+   */
+  _initBossRushForD7Night() {
+    if (!this._seasonMgr) return;
+    const seasonId = this._seasonMgr.seasonId;
+    // 每个赛季仅初始化一次（幂等；防跨 tick 或重放触发）
+    if (this._bossRushSeasonId === seasonId) return;
+
+    // 获取参与房间快照（当前注册的房间）+ 决定下一赛季主题（写入 SeasonManager）
+    const participating = [];
+    for (const room of this._rooms) {
+      if (room && room.roomId) participating.push(room.roomId);
+    }
+    const activeRooms = participating.length || 1;
+
+    const hpTotal = BOSS_RUSH_HP_PER_ROOM * activeRooms;
+    this._bossRushSeasonId = seasonId;
+    this._bossRushHpPool   = hpTotal;
+    this._bossRushHpTotal  = hpTotal;
+    this._bossRushParticipatingRooms = new Set(participating);
+    this._bossRushKilled   = false;
+
+    // 下一赛季主题预告（SeasonManager 提前决定，D7 夜晚开始时就写入 _nextThemeId）
+    let nextThemeId = null;
+    if (typeof this._seasonMgr.computeNextThemeId === 'function') {
+      nextThemeId = this._seasonMgr.computeNextThemeId();
+    } else {
+      nextThemeId = this._seasonMgr.themeId || 'classic_frozen';
+    }
+    this._seasonMgr._nextThemeId = nextThemeId;
+
+    console.log(`[GlobalClock] BossRush start: seasonId=${seasonId} rooms=${activeRooms} hpTotal=${hpTotal} nextTheme=${nextThemeId}`);
+
+    const payload = {
+      seasonId,
+      bossHpTotal: hpTotal,
+      participatingRooms: participating,
+      nextThemeId,
+    };
+    for (const room of this._rooms) {
+      try {
+        if (!room || typeof room.broadcast !== 'function') continue;
+        room.broadcast({
+          type: 'season_boss_rush_start',
+          timestamp: Date.now(),
+          data: payload,
+        });
+      } catch (e) { /* ignore */ }
+    }
+  }
+
+  /**
+   * 扣减 Boss Rush 全服血量池（由引擎在 D7 夜晚的 monster_died 路径调用）
+   * @param {number} damage 本次扣减
+   * @returns {{ok:boolean, remaining:number}} 扣减后的剩余 HP
+   */
+  damageBossRushPool(damage) {
+    if (!Number.isFinite(damage) || damage <= 0) {
+      return { ok: false, remaining: this._bossRushHpPool };
+    }
+    if (this._bossRushSeasonId === null || this._bossRushHpPool <= 0) {
+      return { ok: false, remaining: this._bossRushHpPool };
+    }
+    this._bossRushHpPool = Math.max(0, this._bossRushHpPool - Math.floor(damage));
+    // 归零 → 广播一次击杀事件（仅一次 dedup）
+    if (this._bossRushHpPool === 0 && !this._bossRushKilled) {
+      this._bossRushKilled = true;
+      const killedAt = Date.now();
+      const payload = {
+        seasonId: this._bossRushSeasonId,
+        killedAt,
+      };
+      for (const room of this._rooms) {
+        try {
+          if (!room || typeof room.broadcast !== 'function') continue;
+          room.broadcast({
+            type: 'season_boss_rush_killed',
+            timestamp: killedAt,
+            data: payload,
+          });
+        } catch (e) { /* ignore */ }
+      }
+      console.log(`[GlobalClock] BossRush KILLED at season ${this._bossRushSeasonId}`);
+    }
+    return { ok: true, remaining: this._bossRushHpPool };
+  }
+
+  /** 查询 BossRush 池状态（给外部诊断/单测用）*/
+  getBossRushState() {
+    return {
+      seasonId: this._bossRushSeasonId,
+      hpPool: this._bossRushHpPool,
+      hpTotal: this._bossRushHpTotal,
+      killed: this._bossRushKilled,
+      participating: [...this._bossRushParticipatingRooms],
+    };
+  }
+
+  /** 赛季切换（或 Boss Rush 终结）时清理池 */
+  _resetBossRushPool() {
+    this._bossRushSeasonId = null;
+    this._bossRushHpPool = 0;
+    this._bossRushHpTotal = 0;
+    this._bossRushParticipatingRooms = new Set();
+    this._bossRushKilled = false;
+  }
+
   // ==================== 内部：tick 循环 ====================
 
   _tick() {
@@ -108,6 +241,11 @@ class GlobalClock {
       this._phaseStartedAt = now;
 
       console.log(`[GlobalClock] Phase transition: ${oldPhase} → ${newPhase} (rooms=${this._rooms.size})`);
+
+      // §36.4 D7 夜晚启动 Boss Rush 池（进入 night 那一刻且 seasonDay===7）
+      if (newPhase === 'night' && this._seasonMgr && this._seasonMgr.seasonDay === 7) {
+        try { this._initBossRushForD7Night(); } catch (e) { console.warn(`[GlobalClock] BossRush init error: ${e.message}`); }
+      }
 
       // 触发所有房间的 phase 回调（容错：单房异常不影响其他房间）
       for (const room of this._rooms) {
@@ -129,10 +267,22 @@ class GlobalClock {
 
       // seasonDay 在 night → day 时推进（完成一个"日"循环）
       if (newPhase === 'day' && this._seasonMgr) {
+        const oldSeasonDay = this._seasonMgr.seasonDay;
         try {
           this._seasonMgr.advanceDay(this._rooms);
         } catch (e) {
           console.warn(`[GlobalClock] advanceDay error: ${e.message}`);
+        }
+        const newSeasonDay = this._seasonMgr.seasonDay;
+        // §36.12 seasonDay 递增 → 计算 newlyUnlockedFeatures，塞到本 tick 的 world_clock_tick
+        // 环绕时（7 → 1）getNewlyUnlockedFeatures 返回 []（设计即：不再重复推送初始解锁横幅）
+        if (newSeasonDay !== oldSeasonDay) {
+          this._pendingNewlyUnlocked = getNewlyUnlockedFeatures(oldSeasonDay, newSeasonDay);
+          this._lastSeasonDayTicked = newSeasonDay;
+          // 赛季切换（seasonDay 环绕到 1）→ 清理 Boss Rush 池
+          if (newSeasonDay < oldSeasonDay) {
+            this._resetBossRushPool();
+          }
         }
       }
     }
@@ -147,6 +297,11 @@ class GlobalClock {
       themeId: season.themeId || 'classic_frozen',
       phaseRemainingSec: remainingSec,
     };
+    // §36.12 仅在 seasonDay 刚刚递增的那一个 tick 携带（后续 tick 空数组，客户端按 length>0 判定）
+    if (this._pendingNewlyUnlocked.length > 0) {
+      payload.newlyUnlockedFeatures = this._pendingNewlyUnlocked;
+      this._pendingNewlyUnlocked = [];   // 消费完即清空
+    }
     for (const room of this._rooms) {
       try {
         if (!room || typeof room.broadcast !== 'function') continue;
@@ -176,3 +331,4 @@ class GlobalClock {
 }
 
 module.exports = GlobalClock;
+module.exports.BOSS_RUSH_HP_PER_ROOM = BOSS_RUSH_HP_PER_ROOM;

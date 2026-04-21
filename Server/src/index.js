@@ -50,11 +50,12 @@ const wss = new WebSocket.Server({ server });
 // ==================== 核心模块 ====================
 const roomManager = new RoomManager(config.game);
 
-// §36 全服同步 + 赛季制（MVP）：SeasonManager → GlobalClock → RoomPersistence
-// 三者均为全局单例，注入 RoomManager 后由其构造 SurvivalRoom 时传递
+// §36 全服同步 + 赛季制（MVP）：SeasonManager → GlobalClock → RoomPersistence + §36.12 VeteranTracker
+// 四者均为全局单例，注入 RoomManager 后由其构造 SurvivalRoom 时传递
 const SeasonManager = require('./SeasonManager');
 const GlobalClock = require('./GlobalClock');
 const RoomPersistence = require('./RoomPersistence');
+const VeteranTracker = require('./VeteranTracker');
 
 const seasonManager   = new SeasonManager();
 const globalClock     = new GlobalClock(seasonManager, {
@@ -63,10 +64,12 @@ const globalClock     = new GlobalClock(seasonManager, {
   nightDurationMs: (config.game.survivalNightDuration || 120) * 1000,
 });
 const roomPersistence = new RoomPersistence();
+const veteranTracker  = new VeteranTracker();
 roomManager.globalClock     = globalClock;
 roomManager.seasonMgr       = seasonManager;
 roomManager.roomPersistence = roomPersistence;
-console.log('[index] §36 GlobalClock / SeasonManager / RoomPersistence attached');
+roomManager.veteranTracker  = veteranTracker;
+console.log('[index] §36 GlobalClock / SeasonManager / RoomPersistence / VeteranTracker attached');
 
 // §35 Tribe War:全局 TribeWarManager 单例,反向注入给 RoomManager
 // 房间创建时自动 setRoomContext() 到 SurvivalGameEngine
