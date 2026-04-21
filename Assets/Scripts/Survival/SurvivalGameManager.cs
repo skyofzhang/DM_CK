@@ -1331,11 +1331,14 @@ namespace DrscfZ.Survival
                         ? $"Lv.{data.blockedLevel} 需第 {data.unlockDay} 天后解锁"
                         : "尚未解锁此等级";
                     break;
-                case "already_upgraded_today":
+                case "daily_limit":
                     msg = "本日已升级过，请等待明天";
                     break;
-                case "phase_disallowed":
-                    msg = "仅白天可升级城门";
+                case "wrong_phase":
+                    msg = "当前阶段不能升级城门（白天 / 夜晚濒危时段可升）";
+                    break;
+                case "boss_fight":
+                    msg = "Boss 战斗中不能升级城门";
                     break;
                 default:
                     msg = "城门升级失败";
@@ -1461,11 +1464,18 @@ namespace DrscfZ.Survival
             {
                 case "thorns":
                 {
-                    // Lv4 反伤：向受伤怪物显示黄色反伤飘字
-                    var mc = monsterWaveSpawner != null ? monsterWaveSpawner.FindById(d.monsterId) : null;
-                    if (mc != null)
-                        DamageNumber.Show(mc.transform.position + Vector3.up * 2f, d.damage, Color.yellow);
-                    Debug.Log($"[GateFX] thorns 反伤 {d.damage} → {d.monsterId}");
+                    // Lv4 反伤：服务端均分到全体活怪，遍历 hitMonsters 逐个飘字 damagePerMonster
+                    int perMonster = d.damagePerMonster;
+                    if (perMonster > 0 && d.hitMonsters != null && monsterWaveSpawner != null)
+                    {
+                        foreach (var mid in d.hitMonsters)
+                        {
+                            var mc = monsterWaveSpawner.FindById(mid);
+                            if (mc != null)
+                                DamageNumber.Show(mc.transform.position + Vector3.up * 2f, perMonster, Color.yellow);
+                        }
+                    }
+                    Debug.Log($"[GateFX] thorns 反伤 total={d.totalDamage} perMonster={perMonster} × {(d.hitMonsters?.Length ?? 0)} 只");
                     break;
                 }
                 case "frost_aura":

@@ -217,10 +217,17 @@ namespace DrscfZ.Survival
     [Serializable]
     public class GateEffectTriggeredData
     {
-        public string   effect;       // 'thorns' | 'frost_aura' | 'frost_pulse'
-        public string   monsterId;    // thorns 时有值（受反伤怪物）
-        public int      damage;       // thorns 时有值（反弹伤害值）
-        public string[] hitMonsters;  // frost_pulse 时有值（被冲击波命中的怪物ID列表）
+        public string   effect;            // 'thorns' | 'frost_aura' | 'frost_pulse'
+        // thorns：服务端 _spawnWave 批量结算反伤，均分到 _activeMonsters 全体怪物
+        //   hitMonsters = 受反伤的所有怪物 ID；damagePerMonster = 每只怪物承担的反伤；totalDamage = 总反伤
+        // frost_pulse：Lv6 寒冰冲击波 15s 周期
+        //   hitMonsters = 被冲击波命中的怪物 ID 列表；radius/damage/freezeMs = 视觉参数
+        public string[] hitMonsters;       // thorns / frost_pulse 共用
+        public int      damagePerMonster;  // thorns 时的每只怪物反伤
+        public int      totalDamage;       // thorns 时的总反伤
+        public int      radius;            // frost_pulse 时的视觉半径
+        public int      damage;            // frost_pulse 时的冲击波单次伤害
+        public int      freezeMs;          // frost_pulse 时的冻结时长
     }
 
     // ==================== 矿工HP系统 ====================

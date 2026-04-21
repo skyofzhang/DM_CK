@@ -270,7 +270,6 @@ namespace DrscfZ.UI
             Debug.Log("[BroadcasterPanel] 🌊 trigger_event 已发送");
         }
 
-<<<<<<< ours
         /// <summary>
         /// 🎰 主播事件轮盘（§24.4）— 委托给 RouletteUI。
         /// 充能状态/就绪/转轴动画全部在 RouletteUI 内部处理；本按钮仅是入口。
