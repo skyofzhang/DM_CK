@@ -41,6 +41,9 @@ namespace DrscfZ.UI
         [Header("🎰 主播事件轮盘按钮（§24.4 🆕 v1.27，委托给 RouletteUI）")]
         [SerializeField] private Button   _rouletteButton;
 
+        [Header("🛒 商店 Tab 按钮（§39 🆕 v1.27，委托给 ShopUI；Prefab 绑定由人工补）")]
+        [SerializeField] private Button   _shopTabButton;
+
         // ==================== 颜色常量 ====================
 
         // ⚡ 按钮：可用/CD两种状态背景色
@@ -88,6 +91,8 @@ namespace DrscfZ.UI
                 _eventBtn.onClick.AddListener(OnEventClicked);
             if (_rouletteButton != null)
                 _rouletteButton.onClick.AddListener(OnRouletteClicked);
+            if (_shopTabButton != null)
+                _shopTabButton.onClick.AddListener(OnShopClicked);
 
             // 初始化UI状态
             ResetBoostBtn();
@@ -235,6 +240,24 @@ namespace DrscfZ.UI
         private void OnRouletteClicked()
         {
             RouletteUI.Instance?.OpenPanel();
+        }
+
+        /// <summary>
+        /// 🛒 商店入口（§39）— 默认切到 A 类战术道具 Tab。
+        /// Prefab 绑定待补：_shopTabButton 需要人工在 Inspector 中拖入 Shop Tab Button 引用；
+        /// ShopUI.Instance 须挂在 Canvas 下的 ShopPanel（always-active 父对象），
+        /// 否则点击时会 Log 占位。
+        /// </summary>
+        private void OnShopClicked()
+        {
+            if (ShopUI.Instance != null)
+            {
+                ShopUI.Instance.OpenPanel("A");
+            }
+            else
+            {
+                Debug.LogWarning("[BroadcasterPanel] OnShopClicked：ShopUI.Instance 为 null，检查是否挂载 ShopUI 脚本");
+            }
         }
 
         // ==================== broadcaster_effect 全屏反馈 ====================

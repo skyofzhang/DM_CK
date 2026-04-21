@@ -73,5 +73,17 @@ namespace DrscfZ.Survival
         public const string BuildingDemolishedBatch = "building_demolished_batch";   // S→C：失败降级批量拆除
         public const string MonsterWaveIncoming     = "monster_wave_incoming";       // S→C：瞭望塔 10s 预告
         public const string BuildPropose            = "build_propose";               // C→S：主播或前 12 位守护者发起投票
+
+        // ----- §39 商店系统 -----
+        public const string ShopListData              = "shop_list_data";               // S→C：商品清单应答
+        public const string ShopPurchaseConfirmPrompt = "shop_purchase_confirm_prompt"; // S→C：B 类 ≥1000 主播 HUD 双确认弹窗
+        public const string ShopPurchaseConfirm       = "shop_purchase_confirm";        // S→C：购买成功房间广播
+        public const string ShopPurchaseFailed        = "shop_purchase_failed";         // S→C：购买失败（unicast）
+        public const string ShopEquipChanged          = "shop_equip_changed";           // S→C：装备切换成功（unicast）
+        public const string ShopEquipFailed           = "shop_equip_failed";            // S→C：装备切换失败（unicast）
+        public const string ShopInventoryData         = "shop_inventory_data";          // S→C：进房/重连推送 owned + equipped
+        public const string ShopEffectTriggered       = "shop_effect_triggered";        // S→C：A 类效果触发房间广播
+        // C→S 消息（客户端发送时直接用字面量，无需此常量解析）：
+        //   shop_list / shop_purchase_prepare / shop_purchase / shop_equip
     }
 }
