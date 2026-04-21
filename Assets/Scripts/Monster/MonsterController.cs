@@ -585,7 +585,7 @@ namespace DrscfZ.Monster
                                          ?? Shader.Find("Sprites/Default"));
 
             ps.Play();
-            Object.Destroy(go, 1.0f);
+            UnityEngine.Object.Destroy(go, 1.0f);
         }
 
         // ==================== 动画 ====================
