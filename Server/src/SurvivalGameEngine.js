@@ -86,6 +86,49 @@ const FROST_PULSE_RADIUS      = 8;
 const FROST_PULSE_DAMAGE      = 100;
 const FROST_PULSE_FREEZE_MS   = 2000;
 
+// ==================== §31 怪物多样性系统（Monster Variants） ====================
+// 第一/二/三阶段 variant：normal / rush / assassin / ice / summoner / guard / mini
+// 首次出现天数（Normal 难度基准；Easy +2 / Hard -1；Hard rushCount +1）
+const MONSTER_VARIANT_RUSH_DAY     = 3;
+const MONSTER_VARIANT_ASSASSIN_DAY = 4;
+const MONSTER_VARIANT_ICE_DAY      = 5;
+const MONSTER_VARIANT_SUMMONER_DAY = 7;
+const MONSTER_VARIANT_GUARD_DAY    = 3;
+// 数值调整
+const VARIANT_HP_MULT = {
+  rush:     0.5,
+  assassin: 1.0,
+  ice:      1.2,
+  summoner: 0.8,
+  guard:    1.0,   // guard HP 单独按 bossHp × 0.12 计算，此处不用
+  mini:     1.0,
+  normal:   1.0,
+};
+// §31 变种速度倍率（相对 cfg.normal.spd）
+const VARIANT_SPEED_MULT = {
+  rush:     1.6,   // §31.2 冲锋
+  assassin: 1.0,
+  ice:      0.85,  // §31.3 略慢
+  summoner: 0.9,   // §31.4 略慢
+  guard:    1.0,
+  mini:     1.0,
+  normal:   1.0,
+};
+// 冰封冻结
+const ICE_FREEZE_CHANCE = 0.30;
+const ICE_FREEZE_MS     = 5000;
+// 召唤怪死亡生成 mini 数量/HP/ATK
+const SUMMONER_MINI_COUNT = 2;
+const MINI_HP             = 30;
+const MINI_ATK            = 1;
+// 首领卫兵
+const GUARD_HP_RATIO      = 0.12;   // Boss HP × 0.12
+const GUARD_ATK_MULT      = 2;      // normal ATK × 2
+const GUARD_COUNT         = 2;
+const BOSS_ENRAGED_ATK_MULT = 1.3;
+// 同屏上限（§8.7 mini 也计入；客户端有同样的 15 上限）
+const MAX_ALIVE_MONSTERS = 15;
+
 // ==================== §38 探险系统（Expedition） ====================
 // 总时长 90s = 40s 外出 + 15s 外域事件 + 35s 返回（白天 120s 内完成）
 // 最多 3 名矿工同时在外
@@ -417,10 +460,19 @@ class SurvivalGameEngine {
     this.playerNames    = {};  // playerId → playerName（结算时填入排行榜显示名）
     this.totalPlayers   = 0;
 
-    // 夜晚活跃怪物 Map<monsterId, { id, type, maxHp, currentHp, atk }>
-    // type: 'normal' | 'elite' | 'boss'
+    // 夜晚活跃怪物 Map<monsterId, { id, type, variant, maxHp, currentHp, atk }>
+    // type: 'normal' | 'elite' | 'boss' | 'elite_raid'
+    // variant (§31): 'normal' | 'rush' | 'assassin' | 'ice' | 'summoner' | 'guard' | 'mini'
     this._activeMonsters = new Map();
     this._monsterIdCounter = 0;
+
+    // ── §31 怪物多样性系统 ────────────────────────────────────────────────
+    // _frozenWorkers: 被冰封怪冻结的矿工 Map<playerId, unfreezeAt(ms)>；与全局 simulate_freeze 独立
+    // _guardsAlive: 当晚仍存活的首领卫兵数量（2→1→0 触发 Boss 暴走）
+    // _lastBossSpawnSide: Boss 刷新侧（用于卫兵同侧生成；_enterNight 时随机选一侧）
+    this._frozenWorkers      = new Map();
+    this._guardsAlive        = 0;
+    this._lastBossSpawnSide  = 'all';
 
     // 定时器
     this._tickTimer    = null;   // 200ms tick（资源衰减+时间递减）
@@ -742,6 +794,11 @@ class SurvivalGameEngine {
     this._monsterCntMult = 1.0;
     this._activeMonsters.clear();
     this._monsterIdCounter = 0;
+
+    // §31 怪物多样性系统：清冻结矿工 Map / 卫兵计数 / Boss 刷新侧
+    this._frozenWorkers.clear();
+    this._guardsAlive        = 0;
+    this._lastBossSpawnSide  = 'all';
 
     // §36 主题倍率（仅 night 生效）—— reset 时归默认；下次 _applyThemeRulesForNight 重新设置
     this._themeHpMult        = 1.0;
@@ -1075,6 +1132,13 @@ class SurvivalGameEngine {
       }
     }
 
+    // §31.3 冻结矿工：cmd 1-4（工作）/ cmd 6（攻击）期间被冻结则静默丢弃
+    //   保留 666 / 探 / 召回 的弹幕响应（这些不依赖矿工动作）
+    if (playerId && this._frozenWorkers.has(playerId) && (cmd >= 1 && cmd <= 4 || cmd === 6)) {
+      console.log(`[SurvivalEngine] Command ${cmd} from ${playerName || playerId} dropped (frozen)`);
+      return;
+    }
+
     if (cmd >= 1 && cmd <= 4) {
       // 工作指令 1-4（策划案 v2.0 已移除指令5修城门）
       const cmdNames  = ['', 'food', 'coal', 'ore', 'heat'];
@@ -1244,6 +1308,17 @@ class SurvivalGameEngine {
         effects.addHeat           = 30;
         effects.tempBoost         = 1.3;
         effects.boostDuration     = 180;
+        // §31.3 T4 联动：额外解冻当前所有被冰封怪冻结的矿工（不改变礼物文案）
+        if (this._frozenWorkers.size > 0) {
+          const unfrozen = [];
+          for (const [pid] of this._frozenWorkers) {
+            unfrozen.push(pid);
+            this._broadcast({ type: 'worker_unfrozen', data: { playerId: pid } });
+          }
+          this._frozenWorkers.clear();
+          effects.unfrozenWorkers = unfrozen.length;
+          console.log(`[SurvivalEngine] energy_battery unfroze ${unfrozen.length} workers (ids=${unfrozen.join(',')})`);
+        }
         needsResourceSync = true;
         break;
       }
@@ -1281,6 +1356,8 @@ class SurvivalGameEngine {
           const m = this._activeMonsters.get(mid);
           this._activeMonsters.delete(mid);
           this._broadcast({ type: 'monster_died', data: { monsterId: mid, monsterType: m.type, killerId: playerId } });
+          // §31 guard/summoner 死亡后置钩子
+          this._postMonsterDeathHooks(mid, m.type, m.variant);
         }
         effects.aoeDamage     = aoeDmg;
         effects.monstersKilled = killed.length;
@@ -1517,6 +1594,8 @@ class SurvivalGameEngine {
         type: 'monster_died',
         data: { monsterId: mid, monsterType: m.type, killerId: playerId },
       });
+      // §31 guard/summoner 死亡后置钩子
+      this._postMonsterDeathHooks(mid, m.type, m.variant);
     }
     effects.aoeDamage      = aoeDmg;
     effects.monstersKilled = killed.length;
@@ -1683,6 +1762,14 @@ class SurvivalGameEngine {
     this._activeMonsters.clear();
     this.state         = 'day';
 
+    // §31.3 进入白天：清除所有冻结状态并广播解冻（对齐"天亮复活"语义）
+    if (this._frozenWorkers.size > 0) {
+      for (const [pid] of this._frozenWorkers) {
+        this._broadcast({ type: 'worker_unfrozen', data: { playerId: pid } });
+      }
+      this._frozenWorkers.clear();
+    }
+
     // 天亮时立即复活所有死亡矿工
     this._reviveAllWorkers('day_started');
     this.currentDay    = day;
@@ -1732,6 +1819,15 @@ class SurvivalGameEngine {
     this._legendReviveUsed = {};
     this._updateDynamicDifficulty();
 
+    // §31 每晚开始清零卫兵计数 + 清除上一晚的冻结状态（夜切换视为完全解冻，避免跨夜残留）
+    this._guardsAlive = 0;
+    if (this._frozenWorkers.size > 0) {
+      for (const [pid] of this._frozenWorkers) {
+        this._broadcast({ type: 'worker_unfrozen', data: { playerId: pid } });
+      }
+      this._frozenWorkers.clear();
+    }
+
     // 初始化矿工HP（夜晚开始时全员满血上阵）
     this._initWorkerHp();
 
@@ -1762,6 +1858,9 @@ class SurvivalGameEngine {
     // 播报 Boss 出现
     const cfg = getWaveConfig(day);
     if (cfg.boss) {
+      // §31 Boss 刷新侧随机选（供首领卫兵同侧刷新参考；'all' 亦允许）
+      const sides = ['left', 'right', 'top', 'all'];
+      this._lastBossSpawnSide = sides[Math.floor(Math.random() * sides.length)];
       this.broadcast({
         type: 'boss_appeared',
         timestamp: Date.now(),
@@ -1771,6 +1870,12 @@ class SurvivalGameEngine {
           bossAtk: cfg.boss.atk,
         }
       });
+      // §31.4 首领卫兵：Day 3+（Easy +2 / Hard -1），每晚 Boss 出现同时固定生成 2 只
+      const diff = this._difficulty || 'normal';
+      const guardDayOffset = diff === 'easy' ? 2 : diff === 'hard' ? -1 : 0;
+      if (day >= MONSTER_VARIANT_GUARD_DAY + guardDayOffset) {
+        this._spawnBossGuards(day);
+      }
     }
 
     // 3秒延迟后再启动夜晚怪物波次（给客户端过渡动画播放时间）
@@ -2031,6 +2136,9 @@ class SurvivalGameEngine {
 
       // §39 商店：pending TTL 扫描（每秒清理过期双确认 pending）
       this._shopCleanupExpiredPending();
+
+      // §31.3 冰封冻结到期扫描：5s 精度对玩家感知足够
+      this._checkFrozenWorkers(Date.now());
 
       // 随机事件触发检查（仅白天）
       this._checkRandomEvents();
@@ -2394,6 +2502,23 @@ class SurvivalGameEngine {
     this._broadcast({ type: 'worker_hp_update', timestamp: Date.now(), data: { workers } });
   }
 
+  /**
+   * §31.3 冰封冻结到期扫描：遍历 _frozenWorkers，now >= unfreezeAt 则解冻并广播 worker_unfrozen。
+   * 与 energy_battery / _enterNight / _damageWorker 多路径互斥（都会修改 _frozenWorkers）。
+   */
+  _checkFrozenWorkers(nowMs) {
+    if (this._frozenWorkers.size === 0) return;
+    const expired = [];
+    for (const [pid, unfreezeAt] of this._frozenWorkers) {
+      if (nowMs >= unfreezeAt) expired.push(pid);
+    }
+    for (const pid of expired) {
+      this._frozenWorkers.delete(pid);
+      this._broadcast({ type: 'worker_unfrozen', data: { playerId: pid } });
+      console.log(`[SurvivalEngine] Worker ${pid} unfrozen (expired)`);
+    }
+  }
+
   _decayResources() {
     const isNight = this.state === 'night';
 
@@ -2539,6 +2664,7 @@ class SurvivalGameEngine {
         this._activeMonsters.set(id, {
           id,
           type: 'normal',
+          variant: 'normal',  // §31
           maxHp: hp,
           currentHp: hp,
           atk: cfg.normal.atk,
@@ -2555,6 +2681,7 @@ class SurvivalGameEngine {
         this._activeMonsters.set(id, {
           id,
           type: 'elite',
+          variant: 'normal',  // §31
           maxHp: hp,
           currentHp: hp,
           atk: cfg.elite.atk,
@@ -2569,6 +2696,7 @@ class SurvivalGameEngine {
       this._activeMonsters.set(id, {
         id,
         type: 'boss',
+        variant: 'normal',  // §31（Boss 自身非变种，但 guard 死亡后会改 atk）
         maxHp: hp,
         currentHp: hp,
         atk: cfg.boss.atk,
@@ -2658,7 +2786,10 @@ class SurvivalGameEngine {
         }
       });
 
-      console.log(`[SurvivalEngine] Monster killed: ${target.id} (${target.type}) by ${nickname}`);
+      console.log(`[SurvivalEngine] Monster killed: ${target.id} (${target.type}/${target.variant}) by ${nickname}`);
+
+      // §31 guard/summoner 死亡后置钩子（必须在 monster_died 广播之后，避免 mini wave 先于 summoner_died 抵达客户端）
+      this._postMonsterDeathHooks(target.id, target.type, target.variant);
 
       // Boss 击杀 → 提前结束当夜
       if (target.type === 'boss') {
@@ -2817,11 +2948,13 @@ class SurvivalGameEngine {
         m.currentHp -= FROST_PULSE_DAMAGE;
         m.frozenUntil = now + FROST_PULSE_FREEZE_MS;
         hits.push(id);
-        if (m.currentHp <= 0) deaths.push({ id, type: m.type });
+        if (m.currentHp <= 0) deaths.push({ id, type: m.type, variant: m.variant });
       }
       for (const d of deaths) {
         this._activeMonsters.delete(d.id);
         this._broadcast({ type: 'monster_died', data: { monsterId: d.id, monsterType: d.type, killerId: 'gate_frost_pulse' } });
+        // §31 guard/summoner 死亡后置钩子
+        this._postMonsterDeathHooks(d.id, d.type, d.variant);
       }
       this._broadcast({
         type: 'gate_effect_triggered',
@@ -2874,6 +3007,115 @@ class SurvivalGameEngine {
     this._waveTimers.push(firstTimer);
   }
 
+  /**
+   * §31 怪物变种选择（行为变种 + 元素变种 + 特殊机制怪）
+   * 难度偏移（§31.6 末）：Easy 首次出现天数 +2；Hard 首次出现 -1 且 rushCount +1
+   * 优先级（策划案 §31.2 伪代码顺序）：
+   *   1. assassin  index===0 && day>=4
+   *   2. rush      index<rushCount && day>=3
+   *   3. ice       index===1 && day>=5（若 rush 占据 index=1，此分支不触发 → 符合"每波最多 1 只"设计）
+   *   4. summoner  index===2 && day>=7（若 rush/ice 占据，post-process 迁移到下一 normal 槽）
+   */
+  _selectVariant(day, index) {
+    const diff = this._difficulty || 'normal';
+    const dayOffset  = diff === 'easy' ? 2 : diff === 'hard' ? -1 : 0;
+    const rushBonus  = diff === 'hard' ? 1 : 0;
+
+    const assassinDay = MONSTER_VARIANT_ASSASSIN_DAY + dayOffset;
+    const rushDay     = MONSTER_VARIANT_RUSH_DAY     + dayOffset;
+    const iceDay      = MONSTER_VARIANT_ICE_DAY      + dayOffset;
+    const summonerDay = MONSTER_VARIANT_SUMMONER_DAY + dayOffset;
+
+    const baseRushCount = day >= 15 ? 3 : day >= 7 ? 2 : 1;
+    const rushCount     = baseRushCount + rushBonus;
+
+    if (day >= assassinDay && index === 0) return 'assassin';
+    if (day >= rushDay && index < rushCount) return 'rush';
+    if (day >= iceDay && index === 1) return 'ice';
+    if (day >= summonerDay && index === 2) return 'summoner';
+    return 'normal';
+  }
+
+  /**
+   * §31.2 刺客怪目标选择：返回存活矿工中 HP 最低者的 playerId（无存活则返 null）
+   * aliveWorkers: Array<[pid, workerHpObj]>
+   */
+  _getAssassinTarget(aliveWorkers) {
+    let minHp = Infinity;
+    let target = null;
+    for (const [pid, w] of aliveWorkers) {
+      if (!w || w.isDead) continue;
+      if (w.hp < minHp) { minHp = w.hp; target = pid; }
+    }
+    return target;
+  }
+
+  /**
+   * §31 内部：把一次"对单矿工的伤害份"施加到矿工身上，复用阶6 15% 格挡 / 阶10 免死 / 死亡广播。
+   * 返回实际扣血（用于扣除 remainingDamage 计入城门溢出）
+   * 若格挡成功返回 0（伤害归零，不顺延城门）；仅刺客伤害路径用 blockZeroes=true。
+   */
+  _damageWorker(pid, dmg, { blockZeroes = false, skipBlockForwarding = false } = {}) {
+    const w = this._workerHp[pid];
+    if (!w || w.isDead) return 0;
+
+    // §30.3 阶6 15% 格挡
+    if (this._calcWorkerBlock(pid)) {
+      this._broadcast({
+        type: 'worker_blocked',
+        data: { playerId: pid, playerName: this._getPlayerName(pid) }
+      });
+      // blockZeroes=true（刺客伤害专用）：格挡后该份伤害直接丢弃，不顺延；
+      // 否则（常规均摊）：伤害归零不扣 HP，但也不消耗 remainingDamage（调用方据返回 0 判断）
+      return 0;
+    }
+
+    const actualDmg = Math.min(w.hp, dmg);
+    w.hp -= actualDmg;
+
+    if (w.hp <= 0) {
+      // §30.3 阶10 每晚 1 次免死
+      if (this._getWorkerTier(pid) >= 10 && !this._legendReviveUsed[pid]) {
+        this._legendReviveUsed[pid] = true;
+        const maxHp = this._getWorkerMaxHp(pid);
+        w.hp = Math.ceil(maxHp * 0.25);
+        w.isDead = false;
+        w.respawnAt = 0;
+        this._broadcast({
+          type: 'legend_revive_triggered',
+          data: { playerId: pid, playerName: this._getPlayerName(pid) }
+        });
+        console.log(`[SurvivalEngine] Legend revive: ${this._getPlayerName(pid)} saved from death (${w.hp}/${maxHp} HP)`);
+        return actualDmg;
+      }
+
+      w.hp = 0;
+      w.isDead = true;
+      const respawnSec = this._getWorkerRespawnSec(pid);
+      const respawnMs  = respawnSec * 1000;
+      w.respawnAt = Date.now() + respawnMs;
+
+      this._broadcast({
+        type: 'worker_died',
+        timestamp: Date.now(),
+        data: { playerId: pid, respawnAt: w.respawnAt }
+      });
+      console.log(`[SurvivalEngine] Worker ${pid} died, respawn at +${respawnSec}s (tier=${this._getWorkerTier(pid)})`);
+
+      // §31 冻结清理：死亡矿工立即解冻（避免复活后仍被冻结标记）
+      if (this._frozenWorkers.has(pid)) {
+        this._frozenWorkers.delete(pid);
+        this._broadcast({ type: 'worker_unfrozen', data: { playerId: pid } });
+      }
+
+      const respawnTimer = setTimeout(() => {
+        if (this._workerHp[pid]?.isDead) this._reviveWorker(pid);
+      }, respawnMs);
+      this._waveTimers.push(respawnTimer);
+    }
+    return actualDmg;
+  }
+
   _spawnWave(cfg, day, waveIndex) {
     if (this.state !== 'night') return;
 
@@ -2884,12 +3126,61 @@ class SurvivalGameEngine {
     const sides = ['left', 'right', 'top', 'all'];
     const spawnSide = sides[Math.floor(Math.random() * sides.length)];
 
+    // ── §31 为本波每只怪选择 variant ─────────────────────────────
+    const variants = new Array(count);
+    for (let i = 0; i < count; i++) variants[i] = this._selectVariant(day, i);
+
+    // §31.2/31.4 summoner post-process：若 day>=summonerDay 但 index=2 被 rush 占用，
+    //   从后往前找第一个 'normal' 槽位迁移为 'summoner'（仍保证每波最多 1 只召唤怪）
+    const diff = this._difficulty || 'normal';
+    const summonerDayEff = MONSTER_VARIANT_SUMMONER_DAY + (diff === 'easy' ? 2 : diff === 'hard' ? -1 : 0);
+    if (day >= summonerDayEff && !variants.includes('summoner')) {
+      for (let i = variants.length - 1; i >= 2; i--) {
+        if (variants[i] === 'normal') { variants[i] = 'summoner'; break; }
+      }
+    }
+
+    // ── §31 构建 monsters[] 并写入 _activeMonsters（尊重 15 只上限，mini 同上限）──
+    //   rush 不进 _activeMonsters（直奔城门，客户端不展示为可攻击目标？
+    //   ↑ 策划案 §31.7：T5 AOE 对所有变种照常命中 → rush 也要进 _activeMonsters
+    //     所以 rush 也进 _activeMonsters，只是伤害路由跳过矿工均摊）
+    const baseHp       = Math.max(1, Math.round(cfg.normal ? cfg.normal.hp * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) : 50));
+    const baseAtk      = cfg.normal ? cfg.normal.atk : 3;
+    const baseSpd      = cfg.normal ? cfg.normal.spd : 2.0;
+    const waveMonsters = [];
+    let rushCountInWave     = 0;
+    let assassinCountInWave = 0;
+    let iceCountInWave      = 0;
+    for (let i = 0; i < variants.length; i++) {
+      const variant = variants[i];
+      const hp = Math.max(1, Math.floor(baseHp * (VARIANT_HP_MULT[variant] || 1.0)));
+      const speed = +(baseSpd * (VARIANT_SPEED_MULT[variant] || 1.0)).toFixed(2);
+      const id = `w_${day}_${waveIndex}_${++this._monsterIdCounter}`;
+      // §31.7 所有 variant 进 _activeMonsters（T5 AOE / 反伤 / 贡献记录都依赖 _activeMonsters 命中）
+      //   maxAliveMonsters=15 为客户端渲染上限，服务端不阻塞 wave 生成；仅 mini spawn 遵守（§31.4）
+      this._activeMonsters.set(id, {
+        id,
+        type: 'normal',     // Unity 客户端按 type 选择模型，variant 决定行为/色调
+        variant,
+        maxHp: hp,
+        currentHp: hp,
+        atk: baseAtk,
+        spd: speed,
+      });
+      waveMonsters.push({ monsterId: id, type: 'normal', variant, hp, speed });
+      if (variant === 'rush')     rushCountInWave++;
+      else if (variant === 'assassin') assassinCountInWave++;
+      else if (variant === 'ice') iceCountInWave++;
+    }
+
+    // §31.5 monster_wave 协议扩展：保留 count/monsterId 兼容旧客户端；新增 monsters[] 数组
     const waveData = {
       waveIndex,
       day,
       monsterId: cfg.monsterId,
       count,
       spawnSide,
+      monsters: waveMonsters,
     };
 
     this.broadcast({ type: 'monster_wave', timestamp: Date.now(), data: waveData });
@@ -2900,18 +3191,55 @@ class SurvivalGameEngine {
       return;
     }
 
-    // ── 怪物伤害路由：优先打矿工，矿工全死后才打城门 ──────────────────
-    const totalDamage = Math.floor(count * this.monsterGateDamage * this._workerDamageMult);
-    let remainingDamage = totalDamage;
+    // ── §31 伤害路由（分三路）────────────────────────────────────────
+    // 总伤害 = count × monsterGateDamage × _workerDamageMult（保持原公式）
+    // 1) rush 份额：rushCount × perMonsterDmg → 直接扣 gate（不均摊、不走 block、不进后续城门减伤/反伤流程）
+    //    注：rush 绕过矿工直冲城门；为避免双倍减伤，这里直接扣 gateHp，再走后续 reducedDamage=0 路径。
+    //    策划案 §31.2 明确"直接扣 gateHp（不均摊矿工）"。§10 减伤/反伤仍对普通伤害生效。
+    //    为对齐玩家体感（rush 才是主要城门压力），rush 伤害不享受减伤。
+    // 2) assassin 份额：assassin 每只独立攻击 HP 最低存活矿工（block 成功则该份归零，不顺延）
+    // 3) 其余（normal/ice/summoner/guard/mini）：走原有均摊逻辑
+    const perMonsterDmg = Math.max(1, Math.floor(this.monsterGateDamage * this._workerDamageMult));
+    const aliveWorkersInitial = Object.entries(this._workerHp).filter(([, w]) => !w.isDead);
+
+    // —— 子路 1：rush 直打城门（跳过减伤）——
+    const rushGateDmg = rushCountInWave * perMonsterDmg;
+    if (rushGateDmg > 0) {
+      this.gateHp = Math.max(0, this.gateHp - rushGateDmg);
+      console.log(`[SurvivalEngine] Wave ${waveIndex} rush×${rushCountInWave} → gate -${rushGateDmg} (no reduction)`);
+    }
+
+    // —— 子路 2：assassin 优先打最低 HP 矿工 ——
+    //   blockZeroes=true：格挡后该份归零（不顺延，策划案"优先打低 HP"战术意图）
+    //   所有矿工打光后，剩余刺客份顺延到 remainingDamage（最终计入城门）
+    let assassinLeftover = 0;
+    for (let a = 0; a < assassinCountInWave; a++) {
+      const aliveNow = Object.entries(this._workerHp).filter(([, w]) => !w.isDead);
+      if (aliveNow.length === 0) {
+        assassinLeftover = assassinCountInWave - a;
+        break;
+      }
+      const targetId = this._getAssassinTarget(aliveNow);
+      if (!targetId) {
+        assassinLeftover = assassinCountInWave - a;
+        break;
+      }
+      this._damageWorker(targetId, perMonsterDmg, { blockZeroes: true });
+    }
+
+    // —— 子路 3：其余怪 → 常规均摊 ——
+    const otherCount = Math.max(0, count - rushCountInWave - assassinCountInWave);
+    const totalOtherDamage = otherCount * perMonsterDmg;
+    let remainingDamage = totalOtherDamage + assassinLeftover * perMonsterDmg;
 
     const aliveWorkers = Object.entries(this._workerHp).filter(([, w]) => !w.isDead);
-    if (aliveWorkers.length > 0) {
-      // 每个存活矿工平均承担伤害（至少1点，避免小伤害完全跳过矿工直打城门）
-      const damagePerWorker = Math.max(1, Math.floor(totalDamage / aliveWorkers.length));
-      for (const [pid, w] of aliveWorkers) {
+    if (aliveWorkers.length > 0 && remainingDamage > 0) {
+      const damagePerWorker = Math.max(1, Math.floor(remainingDamage / aliveWorkers.length));
+      for (const [pid] of aliveWorkers) {
+        const w = this._workerHp[pid];
+        if (!w || w.isDead) continue;
         // §30.3 阶6 15% 格挡（本次伤害归零）
         if (this._calcWorkerBlock(pid)) {
-          // 格挡成功：不扣HP，不消耗 remainingDamage（视为防御完全抵挡）
           this._broadcast({
             type: 'worker_blocked',
             data: { playerId: pid, playerName: this._getPlayerName(pid) }
@@ -2924,8 +3252,7 @@ class SurvivalGameEngine {
         remainingDamage -= actualDmg;
 
         if (w.hp <= 0) {
-          // §30.3 阶10 每晚1次免死：回复至 25% maxHp（策划案 §30.3 "回复至25% HP + 10s 50%减伤护盾"）
-          // MVP：不实现减伤护盾（TODO）
+          // §30.3 阶10 每晚1次免死
           if (this._getWorkerTier(pid) >= 10 && !this._legendReviveUsed[pid]) {
             this._legendReviveUsed[pid] = true;
             const maxHp = this._getWorkerMaxHp(pid);
@@ -2934,24 +3261,18 @@ class SurvivalGameEngine {
             w.respawnAt = 0;
             this._broadcast({
               type: 'legend_revive_triggered',
-              data: {
-                playerId: pid,
-                playerName: this._getPlayerName(pid),
-              }
+              data: { playerId: pid, playerName: this._getPlayerName(pid) }
             });
             console.log(`[SurvivalEngine] Legend revive: ${this._getPlayerName(pid)} saved from death (${w.hp}/${maxHp} HP)`);
-            // TODO §30.3: 10s 50% 减伤护盾，MVP 暂不实现
-            continue; // 跳过正常死亡逻辑
+            continue;
           }
 
           w.hp = 0;
           w.isDead = true;
-          // §30 矿工复活秒数按阶段（阶4+ 20s，否则 30s）
           const respawnSec = this._getWorkerRespawnSec(pid);
           const respawnMs  = respawnSec * 1000;
           w.respawnAt = Date.now() + respawnMs;
 
-          // 广播矿工死亡
           this._broadcast({
             type: 'worker_died',
             timestamp: Date.now(),
@@ -2959,14 +3280,18 @@ class SurvivalGameEngine {
           });
           console.log(`[SurvivalEngine] Worker ${pid} died, respawn at +${respawnSec}s (tier=${this._getWorkerTier(pid)})`);
 
-          // 自动定时复活（若天亮先到则由 _reviveAllWorkers 处理）
+          // §31 冻结清理：死亡矿工立即解冻
+          if (this._frozenWorkers.has(pid)) {
+            this._frozenWorkers.delete(pid);
+            this._broadcast({ type: 'worker_unfrozen', data: { playerId: pid } });
+          }
+
           const respawnTimer = setTimeout(() => {
             if (this._workerHp[pid]?.isDead) this._reviveWorker(pid);
           }, respawnMs);
           this._waveTimers.push(respawnTimer);
         }
       }
-      // 如果所有矿工刚好被打死，剩余伤害继续打城门
     }
 
     // 剩余伤害（矿工全死后的溢出）打城门；clamp到0避免矿工分摊时负值"治疗"城门
@@ -2991,12 +3316,14 @@ class SurvivalGameEngine {
         for (const [mid, m] of this._activeMonsters) {
           m.currentHp -= perMonster;
           hitIds.push(mid);
-          if (m.currentHp <= 0) deaths.push({ id: mid, type: m.type });
+          if (m.currentHp <= 0) deaths.push({ id: mid, type: m.type, variant: m.variant });
         }
         // 反伤击杀不计玩家贡献（killerId 为城门标识，不触发 _trackContribution）
         for (const d of deaths) {
           this._activeMonsters.delete(d.id);
           this._broadcast({ type: 'monster_died', data: { monsterId: d.id, monsterType: d.type, killerId: 'gate_thorns' } });
+          // §31 guard/summoner 死亡后置钩子
+          this._postMonsterDeathHooks(d.id, d.type, d.variant);
         }
         this._broadcast({
           type: 'gate_effect_triggered',
@@ -3010,6 +3337,30 @@ class SurvivalGameEngine {
       }
     }
 
+    // ── §31.3 冰封怪 30% 概率冻结矿工（每只 ice 独立掷骰）──────────
+    // 冻结依赖于 ice 怪对矿工成功命中；本实现简化为：每只 ice 独立选一名存活矿工掷骰。
+    // 若目标已冻结则刷新冻结截止时间（不叠加持续时间）。
+    if (iceCountInWave > 0) {
+      const liveForFreeze = Object.entries(this._workerHp).filter(([, w]) => !w.isDead).map(([pid]) => pid);
+      if (liveForFreeze.length > 0) {
+        const now = Date.now();
+        for (let k = 0; k < iceCountInWave; k++) {
+          if (Math.random() >= ICE_FREEZE_CHANCE) continue;
+          const pid = liveForFreeze[Math.floor(Math.random() * liveForFreeze.length)];
+          if (!pid) continue;
+          const existing = this._frozenWorkers.get(pid);
+          const newUntil = now + ICE_FREEZE_MS;
+          // 刷新（只延长不缩短）
+          this._frozenWorkers.set(pid, Math.max(existing || 0, newUntil));
+          this._broadcast({
+            type: 'worker_frozen',
+            data: { playerId: pid, duration: ICE_FREEZE_MS }
+          });
+          console.log(`[SurvivalEngine] Worker ${pid} frozen ${ICE_FREEZE_MS}ms by ice monster`);
+        }
+      }
+    }
+
     // §16.1 all_dead 判定：本轮伤害结算后仍有矿工存活 → 刷新基准
     //   若全员死亡则 _lastAliveAt 保持上一次活着的时刻，_checkDefeat 据此判 5 分钟窗口
     if (Object.values(this._workerHp).some((w) => !w.isDead)) {
@@ -3019,13 +3370,140 @@ class SurvivalGameEngine {
     // 广播矿工HP更新
     this._broadcastWorkerHp();
 
-    console.log(`[SurvivalEngine] Wave ${waveIndex}: ${count} monsters (${spawnSide}), workers=${aliveWorkers.length}, gate raw=${remainingDamage} reduced=${reducedDamage} (Lv${this.gateLevel} red=${(dmgRed*100)|0}%) → HP ${this.gateHp}`);
+    const variantSummary = `rush=${rushCountInWave} assassin=${assassinCountInWave} ice=${iceCountInWave} other=${otherCount}`;
+    console.log(`[SurvivalEngine] Wave ${waveIndex}: ${count} monsters (${spawnSide}) [${variantSummary}], workers=${aliveWorkersInitial.length}, rush→gate=${rushGateDmg}, remain raw=${remainingDamage} reduced=${reducedDamage} (Lv${this.gateLevel} red=${(dmgRed*100)|0}%) → HP ${this.gateHp}`);
 
     // 立即推送资源更新（城门HP变化）
     this._broadcastResourceUpdate();
 
     // 检查失败（城门被攻破）
     this._checkDefeat();
+  }
+
+  /**
+   * §31.4 首领卫兵生成：Boss 出现时调用，固定生成 2 只 guard（_activeMonsters）。
+   * spawnSide 取 _lastBossSpawnSide 保持与 Boss 同侧；guard 计入 maxAliveMonsters=15。
+   */
+  _spawnBossGuards(day) {
+    const cfg = getWaveConfig(day);
+    if (!cfg || !cfg.boss) return;
+    const guardHpRaw = Math.floor(cfg.boss.hp * GUARD_HP_RATIO * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0));
+    const guardHp    = Math.max(1, guardHpRaw);
+    const guardAtk   = (cfg.normal ? cfg.normal.atk : 3) * GUARD_ATK_MULT;
+    const guardSpd   = +((cfg.normal ? cfg.normal.spd : 2.0) * (VARIANT_SPEED_MULT.guard || 1.0)).toFixed(2);
+    const guardList  = [];
+    this._guardsAlive = 0;
+    // guards 固定生成 2 只（§31.4）；不受 maxAliveMonsters=15 限制（Boss 体验组合关键）
+    for (let i = 0; i < GUARD_COUNT; i++) {
+      const id = `guard_${day}_${++this._monsterIdCounter}`;
+      this._activeMonsters.set(id, {
+        id,
+        type: 'normal',      // guard 沿用普通怪模型 type（客户端可按 variant 切暗金色调）
+        variant: 'guard',
+        maxHp: guardHp,
+        currentHp: guardHp,
+        atk: guardAtk,
+        spd: guardSpd,
+      });
+      guardList.push({ monsterId: id, type: 'normal', variant: 'guard', hp: guardHp, speed: guardSpd });
+      this._guardsAlive++;
+    }
+    if (guardList.length === 0) return;
+    this.broadcast({
+      type: 'monster_wave',
+      timestamp: Date.now(),
+      data: {
+        waveIndex: -1,            // 负值标识非常规 wave（guard/summon spawn）
+        day,
+        monsterId: cfg.monsterId,
+        count: guardList.length,
+        spawnSide: this._lastBossSpawnSide || 'all',
+        monsters: guardList,
+        isBossGuardSpawn: true,
+      }
+    });
+    console.log(`[SurvivalEngine] Boss guards spawned: ${guardList.length} (HP=${guardHp} ATK=${guardAtk}, side=${this._lastBossSpawnSide})`);
+  }
+
+  /**
+   * §31.4 卫兵死亡检测：两只卫兵全亡 → Boss ATK ×1.3 并广播 boss_enraged
+   * monsterId 以 'guard_' 前缀判定（或 variant === 'guard'）
+   */
+  _checkGuardDeath(monsterId, variant) {
+    const isGuard = (variant === 'guard') || (typeof monsterId === 'string' && monsterId.startsWith('guard_'));
+    if (!isGuard) return;
+    if (this._guardsAlive <= 0) return;
+    this._guardsAlive--;
+    if (this._guardsAlive <= 0) {
+      // 查找 boss（type='boss'）并 +1.3 倍攻击
+      for (const [, m] of this._activeMonsters) {
+        if (m.type === 'boss') {
+          m.atk = Math.floor(m.atk * BOSS_ENRAGED_ATK_MULT);
+          this._broadcast({
+            type: 'boss_enraged',
+            data: { newAtk: m.atk }
+          });
+          console.log(`[SurvivalEngine] Boss enraged: atk → ${m.atk} (guards all dead)`);
+          break;
+        }
+      }
+    }
+  }
+
+  /**
+   * §31.4 召唤怪死亡：在原位置生成 SUMMONER_MINI_COUNT 只 mini（HP=30 ATK=1），计入 15 上限。
+   * mini variant='mini' 走普通攻击路径；死亡不再触发任何特殊钩子。
+   */
+  _handleSummonerDeath(monsterId) {
+    const miniList = [];
+    const cfgDay   = getWaveConfig(this.currentDay);
+    const miniSpd  = +((cfgDay && cfgDay.normal ? cfgDay.normal.spd : 2.0) * (VARIANT_SPEED_MULT.mini || 1.0)).toFixed(2);
+    for (let i = 0; i < SUMMONER_MINI_COUNT; i++) {
+      if (this._activeMonsters.size >= MAX_ALIVE_MONSTERS) break;
+      const id = `mini_${++this._monsterIdCounter}`;
+      this._activeMonsters.set(id, {
+        id,
+        type: 'normal',
+        variant: 'mini',
+        maxHp: MINI_HP,
+        currentHp: MINI_HP,
+        atk: MINI_ATK,
+        spd: miniSpd,
+      });
+      miniList.push({ monsterId: id, type: 'normal', variant: 'mini', hp: MINI_HP, speed: miniSpd });
+    }
+    if (miniList.length === 0) {
+      console.log(`[SurvivalEngine] Summoner ${monsterId} died but no mini spawn (maxAliveMonsters cap)`);
+      return;
+    }
+    this.broadcast({
+      type: 'monster_wave',
+      timestamp: Date.now(),
+      data: {
+        waveIndex: -1,
+        day: this.currentDay,
+        monsterId: 'mini',
+        count: miniList.length,
+        spawnSide: 'spawn_at_death',
+        monsters: miniList,
+        isSummonSpawn: true,
+      }
+    });
+    console.log(`[SurvivalEngine] Summoner ${monsterId} spawned ${miniList.length} mini`);
+  }
+
+  /**
+   * §31 统一怪物死亡后置钩子：在 _activeMonsters.delete 与 monster_died broadcast 之后调用。
+   * 处理：guard 计数 → Boss 暴走；summoner → 生成 mini。
+   * 所有 monster_died 触发点统一调用此方法（_handleAttack / T5 love_explosion / gate_frost_pulse /
+   *   gate_thorns / meteor_shower / supporter love_explosion）。
+   */
+  _postMonsterDeathHooks(monsterId, monsterType, variant) {
+    if (variant === 'guard') {
+      this._checkGuardDeath(monsterId, variant);
+    } else if (variant === 'summoner') {
+      this._handleSummonerDeath(monsterId);
+    }
   }
 
   _clearNightWaves() {
@@ -3983,6 +4461,8 @@ class SurvivalGameEngine {
         type: 'monster_died',
         data: { monsterId: mid, monsterType: m.type, killerId: '', reason: 'meteor_shower' },
       });
+      // §31 guard/summoner 死亡后置钩子
+      this._postMonsterDeathHooks(mid, m.type, m.variant);
       // elite_raid 被流星雨击杀 → 清 pending 状态
       if (mid === this._eliteRaidMonsterId) {
         this._eliteRaidEndsAt    = 0;
