@@ -67,15 +67,11 @@ class TribeWarSession {
     this.energy += delta;
     this.lastEnergyAt = Date.now();
 
-    // 战报：能量增加（攻守双方同步看见）
+    // 战报：能量增加(前端 detail 为 string,服务端预格式化为中文展示)
     const payload = {
       sessionId: this.id,
-      event: 'energy_added',
-      detail: {
-        delta,
-        total: this.energy,
-        expeditionsSent: this.expeditionsSent,
-      },
+      eventName: 'energy_added',  // 前端 C# `event` 是关键字,用 `eventName` 对齐
+      detail: `能量 +${delta} (总计 ${this.energy},已派 ${this.expeditionsSent} 只远征怪)`,
     };
     this._broadcastCombatReport(payload);
   }
@@ -231,12 +227,8 @@ class TribeWarSession {
 
       const payload = {
         sessionId: this.id,
-        event: 'fallback_gate_damage',
-        detail: {
-          monsterId,
-          extraGateDamage: extraDmg,
-          defenderGateHp: defEngine.gateHp,
-        },
+        eventName: 'fallback_gate_damage',
+        detail: `防守方资源耗尽,远征怪额外攻城 ${extraDmg} HP (剩余 ${defEngine.gateHp})`,
       };
       this._broadcastCombatReport(payload);
       console.log(`[TribeWarSession:${this.id}] Fallback: defender resources all 0, gate -${extraDmg}HP → ${defEngine.gateHp}`);
@@ -288,17 +280,11 @@ class TribeWarSession {
       atkEngine._broadcastResourceUpdate && atkEngine._broadcastResourceUpdate();
     } catch (e) { /* ignore */ }
 
+    const pickedCn = picked === 'food' ? '食物' : picked === 'coal' ? '煤炭' : '矿石';
     const payload = {
       sessionId: this.id,
-      event: 'resource_stolen',
-      detail: {
-        monsterId,
-        resource: picked,
-        amount: stealAmount,
-        totalStolenFood: this.stolenFood,
-        totalStolenCoal: this.stolenCoal,
-        totalStolenOre:  this.stolenOre,
-      },
+      eventName: 'resource_stolen',
+      detail: `偷得 ${pickedCn} +${stealAmount} (累计 食${this.stolenFood}/煤${this.stolenCoal}/矿${this.stolenOre})`,
     };
     this._broadcastCombatReport(payload);
     console.log(`[TribeWarSession:${this.id}] Stolen: ${picked}+${stealAmount} (cumul F/C/O=${this.stolenFood}/${this.stolenCoal}/${this.stolenOre})`);
