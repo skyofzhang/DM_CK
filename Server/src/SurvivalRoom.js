@@ -430,6 +430,43 @@ class SurvivalRoom {
         break;
       }
 
+      // ==================== §39 商店系统 ====================
+      // PM 决策（MVP）：_roomCreatorId 鉴权放开，引擎内不校验 isRoomCreator；
+      //   未解锁/赛季末等守门一律跳过（策划案 v1.27 MVP 范围）
+      case 'shop_list': {
+        // { category: 'A' | 'B' }
+        const pid      = ws._playerId || (data && data.playerId) || '';
+        const category = (data && data.category) || '';
+        this.survivalEngine.handleShopList(pid, category);
+        break;
+      }
+      case 'shop_purchase_prepare': {
+        // { itemId } — 仅主播 HUD B 类 ≥1000 时客户端调用
+        const pid    = ws._playerId || (data && data.playerId) || '';
+        const itemId = (data && data.itemId) || '';
+        this.survivalEngine.handleShopPurchasePrepare(pid, itemId);
+        break;
+      }
+      case 'shop_purchase': {
+        // { itemId, pendingId? }
+        const pid       = ws._playerId || (data && data.playerId) || '';
+        const pname     = (data && data.playerName)
+                          || (this.survivalEngine.playerNames && this.survivalEngine.playerNames[pid])
+                          || pid;
+        const itemId    = (data && data.itemId)    || '';
+        const pendingId = (data && data.pendingId) || null;
+        this.survivalEngine.handleShopPurchase(pid, pname, itemId, pendingId);
+        break;
+      }
+      case 'shop_equip': {
+        // { slot, itemId? } — itemId 缺省/空 = 卸下该槽位
+        const pid    = ws._playerId || (data && data.playerId) || '';
+        const slot   = (data && data.slot)   || '';
+        const itemId = (data && data.itemId) || '';
+        this.survivalEngine.handleShopEquip(pid, slot, itemId);
+        break;
+      }
+
       // ==================== GM 测试指令 ====================
       case 'pause_game':
         // 暂停/恢复游戏（仅限调试）
