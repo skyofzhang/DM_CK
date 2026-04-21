@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using DrscfZ.Core;
+using DrscfZ.Survival;
 
 namespace DrscfZ.UI
 {
@@ -46,6 +47,37 @@ namespace DrscfZ.UI
 
         [Header("⚔️ 跨直播间攻防战按钮（§35 🆕 v1.27，委托给 TribeWarLobbyUI；Prefab 绑定由人工补）")]
         [SerializeField] private Button   _tribeWarButton;
+
+        [Header("🛡 升级城门按钮（🆕 v1.22 §10，可留空；场景中通过 Editor 工具绑定）")]
+        [SerializeField] private Button _btnUpgradeGate;
+
+        // ==================== 🆕 v1.22 §10 升级常量表（与服务端 SurvivalGameEngine.js 顶部常量对齐）====================
+
+        // 索引 i 对应 gateLevel=i+1 → gateLevel=i+2 的升级消耗
+        // Lv1→Lv2=100, Lv2→Lv3=250, Lv3→Lv4=500, Lv4→Lv5=1000, Lv5→Lv6=1500
+        private static readonly int[] _upgradeCostTable = new[] { 100, 250, 500, 1000, 1500 };
+
+        // 索引 i 对应 gateLevel=i+1 的层级名（与策划案 §10.2 / GATE_TIER_NAMES 对齐）
+        private static readonly string[] _tierNameTable = new[]
+        {
+            "木栅栏",    // Lv1
+            "加固木门",  // Lv2（自动修复 ×1.5）
+            "铁皮厚门",  // Lv3（减伤 10%）
+            "钢骨堡门",  // Lv4（反伤 20%）
+            "寒冰壁垒",  // Lv5（冰霜光环 6m）
+            "巨龙要塞",  // Lv6（寒冰冲击波 15s/8m/100伤）
+        };
+
+        // 下一级新解锁的特性说明（展示在升级确认弹窗；索引 i 对应升级到 gateLevel=i+1）
+        private static readonly string[] _nextFeatureDescTable = new[]
+        {
+            "",                                                           // 不会被使用（Lv1 初始）
+            "加固木门：MaxHP 1500 + 自动修复 ×1.5",                       // → Lv2
+            "铁皮厚门：MaxHP 2200 + 减伤 10%",                            // → Lv3
+            "钢骨堡门：MaxHP 3000 + 反伤 20%",                            // → Lv4
+            "寒冰壁垒：MaxHP 4000 + 冰霜光环（6m 减速 0.7×）",            // → Lv5
+            "巨龙要塞：MaxHP 5500 + 寒冰冲击波（15s/8m/100伤+2s冻结）",   // → Lv6
+        };
 
         // ==================== 颜色常量 ====================
 
@@ -98,6 +130,9 @@ namespace DrscfZ.UI
                 _shopTabButton.onClick.AddListener(OnShopClicked);
             if (_tribeWarButton != null)
                 _tribeWarButton.onClick.AddListener(OnTribeWarClicked);
+            // 🆕 v1.22 §10 升级城门按钮
+            if (_btnUpgradeGate != null)
+                _btnUpgradeGate.onClick.AddListener(OnUpgradeGateClick);
 
             // 初始化UI状态
             ResetBoostBtn();
@@ -235,6 +270,7 @@ namespace DrscfZ.UI
             Debug.Log("[BroadcasterPanel] 🌊 trigger_event 已发送");
         }
 
+<<<<<<< ours
         /// <summary>
         /// 🎰 主播事件轮盘（§24.4）— 委托给 RouletteUI。
         /// 充能状态/就绪/转轴动画全部在 RouletteUI 内部处理；本按钮仅是入口。
@@ -281,6 +317,82 @@ namespace DrscfZ.UI
             {
                 Debug.LogWarning("[BroadcasterPanel] OnTribeWarClicked：TribeWarLobbyUI.Instance 为 null，检查是否挂载 TribeWarLobbyUI 脚本");
             }
+        }
+
+        // ==================== 🆕 v1.22 §10 升级城门 ====================
+
+        private void OnUpgradeGateClick()
+        {
+            var gate = CityGateSystem.Instance;
+            if (gate == null)
+            {
+                Debug.LogWarning("[BroadcasterPanel] CityGateSystem.Instance 为空，无法升级");
+                return;
+            }
+            if (gate.GateLevel >= 6)
+            {
+                AnnouncementUI.Instance?.ShowAnnouncement(
+                    "城门已满级", "Lv.6 巨龙要塞已是最高等级！", new Color(1f, 0.7f, 0.2f), 2f);
+                return;
+            }
+
+            int currentLv = gate.GateLevel;
+            int nextLv    = currentLv + 1;
+            int cost      = GetUpgradeCost(currentLv);
+            string nextTier = GetTierName(nextLv);
+            string desc     = GetNextFeatureDesc(nextLv);
+
+            var confirmUI = GateUpgradeConfirmUI.Instance;
+            if (confirmUI == null)
+            {
+                Debug.LogWarning("[BroadcasterPanel] GateUpgradeConfirmUI.Instance 为空。" +
+                                 "请运行 Tools → DrscfZ → Create Gate Upgrade UI 生成 UI。");
+                // 回退：直接发送升级请求
+                SendUpgradeGateRequest();
+                return;
+            }
+
+            confirmUI.ShowConfirm(currentLv, nextLv, cost, nextTier, desc,
+                onConfirm: SendUpgradeGateRequest);
+        }
+
+        private void SendUpgradeGateRequest()
+        {
+            var net = NetworkManager.Instance;
+            if (net == null || !net.IsConnected)
+            {
+                Debug.LogWarning("[BroadcasterPanel] 网络未连接，无法发送 upgrade_gate");
+                return;
+            }
+
+            // 协议：{ type: 'upgrade_gate', data: { secOpenId, source } }
+            // secOpenId 主播身份由服务端自行识别（基于连接会话），此处留空
+            long ts = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            string json = $"{{\"type\":\"upgrade_gate\",\"data\":{{\"secOpenId\":\"\",\"source\":\"broadcaster\"}},\"timestamp\":{ts}}}";
+            net.SendJson(json);
+            Debug.Log("[BroadcasterPanel] 🛡 upgrade_gate 已发送");
+        }
+
+        /// <summary>获取当前等级升级至下一级的矿石消耗</summary>
+        private static int GetUpgradeCost(int currentLevel)
+        {
+            int idx = currentLevel - 1;
+            if (idx < 0 || idx >= _upgradeCostTable.Length) return 0;
+            return _upgradeCostTable[idx];
+        }
+
+        private static string GetTierName(int level)
+        {
+            int idx = level - 1;
+            if (idx < 0 || idx >= _tierNameTable.Length) return "";
+            return _tierNameTable[idx];
+        }
+
+        private static string GetNextFeatureDesc(int nextLevel)
+        {
+            int idx = nextLevel - 1;
+            if (idx < 0 || idx >= _nextFeatureDescTable.Length) return "";
+            return _nextFeatureDescTable[idx];
         }
 
         // ==================== broadcaster_effect 全屏反馈 ====================

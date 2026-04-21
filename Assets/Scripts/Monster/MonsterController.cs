@@ -348,6 +348,40 @@ namespace DrscfZ.Monster
             StartCoroutine(HitFlash());
         }
 
+        /// <summary>播放冻结闪烁（🆕 v1.22 §10 Lv6 寒冰冲击波命中时触发）</summary>
+        public void PlayFreezeFlash()
+        {
+            if (_state == MonsterState.Dead) return;
+            StartCoroutine(FreezeFlashCoroutine());
+        }
+
+        private IEnumerator FreezeFlashCoroutine()
+        {
+            // 冰蓝色闪烁 0.4s（共 2 次闪）+ 弱屏闪提示
+            var renderers = GetComponentsInChildren<Renderer>();
+            var block = new MaterialPropertyBlock();
+            Color frost = new Color(0.6f, 0.85f, 1f, 1f);
+
+            for (int flash = 0; flash < 2; flash++)
+            {
+                for (int i = 0; i < renderers.Length; i++)
+                {
+                    if (renderers[i] == null) continue;
+                    block.SetColor(PropBaseColor, frost);
+                    block.SetColor(PropColor,     frost);
+                    renderers[i].SetPropertyBlock(block);
+                }
+                yield return new WaitForSeconds(0.1f);
+
+                for (int i = 0; i < renderers.Length; i++)
+                {
+                    if (renderers[i] != null)
+                        renderers[i].SetPropertyBlock(null);
+                }
+                yield return new WaitForSeconds(0.1f);
+            }
+        }
+
         // #2 静态 PropertyID 避免每次字符串哈希
         private static readonly int PropBaseColor = Shader.PropertyToID("_BaseColor");
         private static readonly int PropColor     = Shader.PropertyToID("_Color");

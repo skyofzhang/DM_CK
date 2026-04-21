@@ -285,6 +285,12 @@ namespace DrscfZ.Survival
                     var ru = JsonUtility.FromJson<ResourceUpdateData>(dataJson);
                     resourceSystem?.ApplyServerUpdate(ru);
                     cityGateSystem?.SyncFromServer(ru.gateHp, ru.gateMaxHp);
+                    // 🆕 v1.22 §10 同步城门层级元数据（若服务端下发）
+                    if (cityGateSystem != null)
+                    {
+                        cityGateSystem.ApplyDailyUpgraded(ru.gateDailyUpgraded);
+                        cityGateSystem.ApplyTierMeta(ru.gateTierName, ru.gateFeatures);
+                    }
                     dayNightManager?.SyncRemainingTime(ru.remainingTime);
                     if (ru.scorePool > 0) OnScorePoolUpdated?.Invoke(ru.scorePool);
                     break;
@@ -393,6 +399,9 @@ namespace DrscfZ.Survival
                     break;
                 case "gate_upgrade_failed":
                     HandleGateUpgradeFailed(dataJson);
+                    break;
+                case "gate_effect_triggered":
+                    HandleGateEffectTriggered(dataJson);
                     break;
                 case "game_paused":
                     Debug.Log("[SGM] game_paused received (GM command)");
@@ -673,6 +682,12 @@ namespace DrscfZ.Survival
                     gateHp = data.gateHp, gateMaxHp = data.gateMaxHp,
                     remainingTime = data.remainingTime
                 });
+            }
+            // 🆕 v1.22 §10 同步城门层级元数据（断线重连时确保状态一致）
+            if (cityGateSystem != null)
+            {
+                cityGateSystem.ApplyDailyUpgraded(data.gateDailyUpgraded);
+                cityGateSystem.ApplyTierMeta(data.gateTierName, data.gateFeatures);
             }
             // 同步积分池（连接/断线重连时立即刷新显示）
             if (data.scorePool > 0) OnScorePoolUpdated?.Invoke(data.scorePool);
@@ -1286,22 +1301,46 @@ namespace DrscfZ.Survival
             var data = JsonUtility.FromJson<GateUpgradedData>(dataJson);
             if (data == null) return;
 
-            // 更新城门最大HP
-            cityGateSystem?.HandleUpgrade(data.newLevel, data.newMaxHp);
+            // 🆕 v1.22 §10 主路径：新签名含 tierName/features/hpBonus
+            int hpBonus = data.hpBonus > 0 ? data.hpBonus : 20; // 缺省兜底
+            cityGateSystem?.HandleUpgrade(data.newLevel, data.newMaxHp, hpBonus, data.tierName, data.newFeatures);
+
+            string tierLabel = string.IsNullOrEmpty(data.tierName) ? "" : $"「{data.tierName}」";
             UI.AnnouncementUI.Instance?.ShowAnnouncement(
-                $"城门升级至 Lv.{data.newLevel}!",
+                $"城门升级至 Lv.{data.newLevel}{tierLabel}!",
                 $"最大HP提升至 {data.newMaxHp}",
                 new Color(0.2f, 0.8f, 1f), 2f);
-            OnPlayerActivityMessage?.Invoke($"城门已升级至 Lv.{data.newLevel}（最大HP:{data.newMaxHp}）");
+            OnPlayerActivityMessage?.Invoke($"城门已升级至 Lv.{data.newLevel}{tierLabel}（最大HP:{data.newMaxHp}）");
         }
 
         private void HandleGateUpgradeFailed(string dataJson)
         {
             var data = JsonUtility.FromJson<GateUpgradeFailedData>(dataJson);
             if (data == null) return;
-            string msg = data.reason == "max_level"
-                ? "城门已达最高等级！"
-                : $"矿石不足！需要 {data.required}，当前 {data.available}";
+            string msg;
+            switch (data.reason)
+            {
+                case "max_level":
+                    msg = "城门已达最高等级！";
+                    break;
+                case "insufficient_ore":
+                    msg = $"矿石不足！需要 {data.required}，当前 {data.available}";
+                    break;
+                case "feature_locked":
+                    msg = data.unlockDay > 0
+                        ? $"Lv.{data.blockedLevel} 需第 {data.unlockDay} 天后解锁"
+                        : "尚未解锁此等级";
+                    break;
+                case "already_upgraded_today":
+                    msg = "本日已升级过，请等待明天";
+                    break;
+                case "phase_disallowed":
+                    msg = "仅白天可升级城门";
+                    break;
+                default:
+                    msg = "城门升级失败";
+                    break;
+            }
             UI.AnnouncementUI.Instance?.ShowAnnouncement("城门升级失败", msg, new Color(1f, 0.4f, 0.2f), 2f);
             Debug.Log($"[SGM] gate_upgrade_failed: {data.reason}");
         }
@@ -1407,6 +1446,54 @@ namespace DrscfZ.Survival
                 case 9:  return new Color(0.30f, 0.05f, 0.45f); // 深紫
                 case 10: return new Color(1.00f, 0.30f, 0.10f); // 金红
                 default: return Color.white;
+            }
+        }
+
+        // ==================== §10 v1.22 城门升级系统 v2 ====================
+
+        /// <summary>🆕 v1.22 §10 城门等级特性触发（Lv4反伤 / Lv5光环 / Lv6冲击波）</summary>
+        private void HandleGateEffectTriggered(string dataJson)
+        {
+            var d = JsonUtility.FromJson<GateEffectTriggeredData>(dataJson);
+            if (d == null || string.IsNullOrEmpty(d.effect)) return;
+
+            switch (d.effect)
+            {
+                case "thorns":
+                {
+                    // Lv4 反伤：向受伤怪物显示黄色反伤飘字
+                    var mc = monsterWaveSpawner != null ? monsterWaveSpawner.FindById(d.monsterId) : null;
+                    if (mc != null)
+                        DamageNumber.Show(mc.transform.position + Vector3.up * 2f, d.damage, Color.yellow);
+                    Debug.Log($"[GateFX] thorns 反伤 {d.damage} → {d.monsterId}");
+                    break;
+                }
+                case "frost_aura":
+                {
+                    // Lv5 冰霜光环：激活地面冰纹 Decal（美术资源待落地）
+                    // TODO §10.7：FX_FrostGround Decal 资源到位后在 CityGateSystem.transform 下激活
+                    Debug.Log("[GateFX] Frost aura activated");
+                    break;
+                }
+                case "frost_pulse":
+                {
+                    // Lv6 寒冰冲击波：屏幕震动 + 对命中怪物播放冻结闪烁
+                    SurvivalCameraController.Shake(0.2f, 0.3f);
+                    if (d.hitMonsters != null && monsterWaveSpawner != null)
+                    {
+                        foreach (var id in d.hitMonsters)
+                        {
+                            var target = monsterWaveSpawner.FindById(id);
+                            target?.PlayFreezeFlash();
+                        }
+                    }
+                    // TODO §10.7：FX_FrostPulse 环形冲击波 VFX + sfx_frost_pulse（美术资源待落地）
+                    Debug.Log($"[GateFX] Frost pulse ({(d.hitMonsters?.Length ?? 0)} monsters hit)");
+                    break;
+                }
+                default:
+                    Debug.LogWarning($"[SGM] 未知 gate_effect_triggered.effect: {d.effect}");
+                    break;
             }
         }
 
