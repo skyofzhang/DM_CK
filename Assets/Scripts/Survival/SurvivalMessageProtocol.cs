@@ -59,5 +59,19 @@ namespace DrscfZ.Survival
         public const string ExpeditionEventVote = "expedition_event_vote"; // C→S：主播对 trader_caravan 的接受/取消
         public const string ExpeditionReturned  = "expedition_returned";  // S→C：结算返回
         public const string ExpeditionFailed    = "expedition_failed";    // S→C：send/recall 被拒
+
+        // ----- §37 建造系统 -----
+        public const string BuildVoteStarted        = "build_vote_started";         // S→C：投票窗口打开
+        public const string BuildVote               = "build_vote";                  // C→S：玩家投票
+        public const string BuildVoteUpdate         = "build_vote_update";           // S→C：投票数实时更新（并行数组）
+        public const string BuildVoteEnded          = "build_vote_ended";            // S→C：45s 窗口结束或全员投完
+        public const string BuildStarted            = "build_started";               // S→C：选中建筑开始建造
+        public const string BuildCompleted          = "build_completed";             // S→C：建造完成
+        public const string BuildDemolished         = "build_demolished";            // S→C：单个建筑拆除
+        public const string BuildProposeFailed      = "build_propose_failed";        // S→C：发起投票被拒
+        public const string BuildCancelled          = "build_cancelled";             // S→C：投票通过但扣费时资源不足
+        public const string BuildingDemolishedBatch = "building_demolished_batch";   // S→C：失败降级批量拆除
+        public const string MonsterWaveIncoming     = "monster_wave_incoming";       // S→C：瞭望塔 10s 预告
+        public const string BuildPropose            = "build_propose";               // C→S：主播或前 12 位守护者发起投票
     }
 }

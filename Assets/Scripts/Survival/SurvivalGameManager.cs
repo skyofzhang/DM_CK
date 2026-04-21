@@ -89,6 +89,18 @@ namespace DrscfZ.Survival
         public event Action<ExpeditionReturnedData> OnExpeditionReturned;
         public event Action<ExpeditionFailedData>   OnExpeditionFailed;
 
+        // §37 建造系统
+        public event Action<BuildVoteStartedData>         OnBuildVoteStarted;
+        public event Action<BuildVoteUpdateData>          OnBuildVoteUpdate;
+        public event Action<BuildVoteEndedData>           OnBuildVoteEnded;
+        public event Action<BuildStartedData>             OnBuildStarted;
+        public event Action<BuildCompletedData>           OnBuildCompleted;
+        public event Action<BuildDemolishedData>          OnBuildDemolished;
+        public event Action<BuildProposeFailedData>       OnBuildProposeFailed;
+        public event Action<BuildCancelledData>           OnBuildCancelled;
+        public event Action<BuildingDemolishedBatchData>  OnBuildingDemolishedBatch;
+        public event Action<MonsterWaveIncomingData>      OnMonsterWaveIncoming;
+
         // 贡献追踪
         private System.Collections.Generic.Dictionary<string, float> _contributions
             = new System.Collections.Generic.Dictionary<string, float>();
@@ -393,6 +405,48 @@ namespace DrscfZ.Survival
                 case "expedition_failed":
                     var expF = JsonUtility.FromJson<ExpeditionFailedData>(dataJson);
                     if (expF != null) HandleExpeditionFailed(expF);
+                    break;
+
+                // ----- §37 建造系统 -----
+                case "build_vote_started":
+                    var bvs = JsonUtility.FromJson<BuildVoteStartedData>(dataJson);
+                    if (bvs != null) HandleBuildVoteStarted(bvs);
+                    break;
+                case "build_vote_update":
+                    var bvu = JsonUtility.FromJson<BuildVoteUpdateData>(dataJson);
+                    if (bvu != null) HandleBuildVoteUpdate(bvu);
+                    break;
+                case "build_vote_ended":
+                    var bve = JsonUtility.FromJson<BuildVoteEndedData>(dataJson);
+                    if (bve != null) HandleBuildVoteEnded(bve);
+                    break;
+                case "build_started":
+                    var bst = JsonUtility.FromJson<BuildStartedData>(dataJson);
+                    if (bst != null) HandleBuildStarted(bst);
+                    break;
+                case "build_completed":
+                    var bcp = JsonUtility.FromJson<BuildCompletedData>(dataJson);
+                    if (bcp != null) HandleBuildCompleted(bcp);
+                    break;
+                case "build_demolished":
+                    var bdm = JsonUtility.FromJson<BuildDemolishedData>(dataJson);
+                    if (bdm != null) HandleBuildDemolished(bdm);
+                    break;
+                case "build_propose_failed":
+                    var bpf = JsonUtility.FromJson<BuildProposeFailedData>(dataJson);
+                    if (bpf != null) HandleBuildProposeFailed(bpf);
+                    break;
+                case "build_cancelled":
+                    var bcl = JsonUtility.FromJson<BuildCancelledData>(dataJson);
+                    if (bcl != null) HandleBuildCancelled(bcl);
+                    break;
+                case "building_demolished_batch":
+                    var bdb = JsonUtility.FromJson<BuildingDemolishedBatchData>(dataJson);
+                    if (bdb != null) HandleBuildingDemolishedBatch(bdb);
+                    break;
+                case "monster_wave_incoming":
+                    var mwi = JsonUtility.FromJson<MonsterWaveIncomingData>(dataJson);
+                    if (mwi != null) HandleMonsterWaveIncoming(mwi);
                     break;
             }
         }
@@ -1400,6 +1454,126 @@ namespace DrscfZ.Survival
                 }
             }
             return playerId;
+        }
+
+        // ==================== §37 建造系统 ====================
+
+        private void HandleBuildVoteStarted(BuildVoteStartedData data)
+        {
+            OnBuildVoteStarted?.Invoke(data);
+            UI.BuildVoteUI.Instance?.ShowVote(data);
+            UI.HorizontalMarqueeUI.Instance?.AddMessage(data.proposerName, null, "发起建造投票");
+            OnPlayerActivityMessage?.Invoke($"{data.proposerName} 发起建造投票");
+        }
+
+        private void HandleBuildVoteUpdate(BuildVoteUpdateData data)
+        {
+            OnBuildVoteUpdate?.Invoke(data);
+            UI.BuildVoteUI.Instance?.UpdateVoteCounts(data);
+        }
+
+        private void HandleBuildVoteEnded(BuildVoteEndedData data)
+        {
+            OnBuildVoteEnded?.Invoke(data);
+            UI.BuildVoteUI.Instance?.CloseVote(data);
+            string winText = string.IsNullOrEmpty(data.winnerId)
+                ? $"投票流产（{data.totalVoters} 票）"
+                : $"投票通过 → {GetBuildingChineseName(data.winnerId)}（{data.totalVoters} 票）";
+            OnPlayerActivityMessage?.Invoke(winText);
+        }
+
+        private void HandleBuildStarted(BuildStartedData data)
+        {
+            OnBuildStarted?.Invoke(data);
+            string name = GetBuildingChineseName(data.buildId);
+            UI.HorizontalMarqueeUI.Instance?.AddMessage("建造", null, $"{name} 开工");
+            OnPlayerActivityMessage?.Invoke($"{name} 开工");
+            Debug.Log($"[SGM] build_started: {data.buildId} completesAt={data.completesAt}");
+        }
+
+        private void HandleBuildCompleted(BuildCompletedData data)
+        {
+            OnBuildCompleted?.Invoke(data);
+            string name = GetBuildingChineseName(data.buildId);
+            UI.AnnouncementUI.Instance?.ShowAnnouncement($"{name} 建成！", null,
+                new Color(0.4f, 1f, 0.6f), 3f);
+            UI.HorizontalMarqueeUI.Instance?.AddMessage("建造", null, $"{name} 建成");
+            OnPlayerActivityMessage?.Invoke($"{name} 建成");
+        }
+
+        private void HandleBuildDemolished(BuildDemolishedData data)
+        {
+            OnBuildDemolished?.Invoke(data);
+            string name = GetBuildingChineseName(data.buildId);
+            Debug.Log($"[SGM] build_demolished: {data.buildId} reason={data.reason}");
+            OnPlayerActivityMessage?.Invoke($"{name} 已拆除（{data.reason}）");
+        }
+
+        private void HandleBuildProposeFailed(BuildProposeFailedData data)
+        {
+            OnBuildProposeFailed?.Invoke(data);
+            string reasonText = FormatBuildFailReason(data.reason, data.unlockDay);
+            Debug.Log($"[SGM] build_propose_failed: {data.reason} unlockDay={data.unlockDay}");
+            OnPlayerActivityMessage?.Invoke($"发起建造失败：{reasonText}");
+        }
+
+        private void HandleBuildCancelled(BuildCancelledData data)
+        {
+            OnBuildCancelled?.Invoke(data);
+            string name = GetBuildingChineseName(data.buildId);
+            OnPlayerActivityMessage?.Invoke($"{name} 建造取消（{data.reason}）");
+        }
+
+        private void HandleBuildingDemolishedBatch(BuildingDemolishedBatchData data)
+        {
+            OnBuildingDemolishedBatch?.Invoke(data);
+            if (data.buildingIds == null || data.buildingIds.Length == 0) return;
+            var names = new System.Text.StringBuilder();
+            for (int i = 0; i < data.buildingIds.Length; i++)
+            {
+                if (i > 0) names.Append("、");
+                names.Append(GetBuildingChineseName(data.buildingIds[i]));
+            }
+            OnPlayerActivityMessage?.Invoke($"降级失守，建筑拆除：{names}");
+        }
+
+        private void HandleMonsterWaveIncoming(MonsterWaveIncomingData data)
+        {
+            OnMonsterWaveIncoming?.Invoke(data);
+            UI.AnnouncementUI.Instance?.ShowAnnouncement("即将来袭",
+                "瞭望塔预警：10 秒后怪物出现",
+                new Color(1f, 0.85f, 0.1f), 3f);
+        }
+
+        /// <summary>建筑 ID → 中文名（§37.2 表）</summary>
+        private static string GetBuildingChineseName(string buildId)
+        {
+            switch (buildId)
+            {
+                case "watchtower": return "瞭望塔";
+                case "market":     return "市场";
+                case "hospital":   return "医院";
+                case "altar":      return "祭坛";
+                case "beacon":     return "烽火台";
+                default:           return buildId;
+            }
+        }
+
+        /// <summary>建造失败原因 → 中文（§37.3 + §19.2）</summary>
+        private static string FormatBuildFailReason(string reason, int unlockDay)
+        {
+            switch (reason)
+            {
+                case "insufficient_resources": return "资源不足";
+                case "daily_limit":            return "今日已投过票";
+                case "wrong_phase":            return "仅白天可投票";
+                case "already_built":          return "该建筑已建造";
+                case "already_voting":         return "已有投票进行中";
+                case "supporter_not_allowed":  return "助威者无法发起";
+                case "season_ending":          return "赛季即将结束";
+                case "feature_locked":         return unlockDay > 0 ? $"功能未解锁（需第{unlockDay}天后）" : "功能未解锁";
+                default:                       return reason;
+            }
         }
     }
 
