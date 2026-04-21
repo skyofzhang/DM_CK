@@ -54,10 +54,37 @@ function getWaveConfig(day) {
   return cfg;
 }
 
-// 城门等级配置（策划案 §10.2：lv1→2=100矿, lv2→3=250矿, lv3→4=500矿）
-// 2026-04-15 修复：数组首位原为 0（导致 Lv1→Lv2 免费升级的 Bug），已对齐策划案设计意图
-const GATE_UPGRADE_COSTS   = [100, 250, 500]; // index: lv1→idx0=100, lv2→idx1=250, lv3→idx2=500
-const GATE_MAX_HP_BY_LEVEL = [1000, 1500, 2200, 3000]; // 城门HP：1级/2级/3级/4级
+// 城门等级配置（策划案 §10 v2：Lv1→Lv6，每级新增战术属性）
+// 升级消耗：index=lv-1 即当前等级升级所需矿石（Lv1→Lv2 需 100 矿）
+const GATE_UPGRADE_COSTS    = [100, 250, 500, 1000, 1500];
+const GATE_MAX_HP_BY_LEVEL  = [1000, 1500, 2200, 3000, 4000, 5500];
+// 升级后 HP 奖励（立即补血，不超 gateMaxHp）；Lv6 特判：直接回满（代码中用 Infinity 占位，实际按 gateMaxHp 计算）
+const GATE_HP_BONUS_ON_UP   = [0, 100, 200, 300, 500, Infinity];
+const GATE_TIER_NAMES       = ['木栅栏', '加固木门', '铁皮厚门', '钢骨堡门', '寒冰壁垒', '巨龙要塞'];
+// Lv1=1.0 基准，Lv2/3/4=1.5，Lv5/6=2.0（矿石自动修门速度倍率）
+const GATE_AUTO_REPAIR_MULT = [1.0, 1.5, 1.5, 1.5, 2.0, 2.0];
+// 减伤比例：Lv3 起 10%
+const GATE_DMG_REDUCTION    = [0, 0, 0.10, 0.10, 0.10, 0.10];
+// 反伤比例：Lv4 起 20%
+const GATE_THORNS_RATIO     = [0, 0, 0, 0.20, 0.20, 0.20];
+// 冰霜光环半径：Lv5 起 6 格（服务器不追踪怪物位置，由客户端本地按距离减速表现）
+const GATE_FROST_RADIUS     = [0, 0, 0, 0, 6, 6];
+// 每级城门对应的战术属性列表（Lv1 无特性）
+const GATE_FEATURES_BY_LV   = [
+  [],
+  ['auto_repair_1.5'],
+  ['auto_repair_1.5', 'dmg_reduction_10'],
+  ['auto_repair_1.5', 'dmg_reduction_10', 'thorns_20'],
+  ['auto_repair_2.0', 'dmg_reduction_10', 'thorns_20', 'frost_aura_6'],
+  ['auto_repair_2.0', 'dmg_reduction_10', 'thorns_20', 'frost_aura_6', 'frost_pulse'],
+];
+// 城门位置（仅用于 Lv5/Lv6 半径计算的参考；服务器不追踪怪物位置，冲击波按 _activeMonsters 全量 AOE 处理）
+const GATE_POS = { x: 0, z: -4 };
+// Lv6 寒冰冲击波参数
+const FROST_PULSE_INTERVAL_MS = 15000;
+const FROST_PULSE_RADIUS      = 8;
+const FROST_PULSE_DAMAGE      = 100;
+const FROST_PULSE_FREEZE_MS   = 2000;
 
 // ==================== §38 探险系统（Expedition） ====================
 // 总时长 90s = 40s 外出 + 15s 外域事件 + 35s 返回（白天 120s 内完成）
@@ -342,6 +369,10 @@ class SurvivalGameEngine {
 
     // 城门等级
     this.gateLevel    = 1;
+    // 城门每日升级标志（策划案 §10 v2：broadcaster/expedition_trader 每天仅能主动升级一次；T6 礼物联动不受限）
+    this._gateUpgradedToday = false;
+    // Lv6 寒冰冲击波定时器（setInterval 句柄，_startFrostPulseTimer 启动，_stopFrostPulseTimer 清理）
+    this._frostPulseTimer = null;
 
     // 资源衰减配置（每秒）
     // 目标：Normal难度下不采食约 3min 耗尽（200/1.0≈200s≈3.3min），持续紧迫
@@ -695,6 +726,8 @@ class SurvivalGameEngine {
     this.gateHp      = this.config.initGateHp       ?? 1000;
     this.gateMaxHp   = this.config.initGateHp       ?? 1000;
     this.gateLevel   = 1;
+    this._gateUpgradedToday = false;
+    this._stopFrostPulseTimer();
     this.contributions = {};
     this.playerNames   = {};   // 重置玩家名缓存
     this.totalPlayers  = 0;
@@ -820,6 +853,9 @@ class SurvivalGameEngine {
       gateHp:       Math.round(this.gateHp),
       gateMaxHp:    this.gateMaxHp,
       gateLevel:    this.gateLevel,
+      gateTierName:      GATE_TIER_NAMES[this.gateLevel - 1] || '',
+      gateFeatures:      GATE_FEATURES_BY_LV[this.gateLevel - 1] || [],
+      gateDailyUpgraded: !!this._gateUpgradedToday,
       scorePool:    Math.round(this.scorePool),
       workerHp:     Object.fromEntries(
         Object.entries(this._workerHp).map(([pid, w]) => [pid, {
@@ -1224,6 +1260,11 @@ class SurvivalGameEngine {
         effects.addGateHp = 300;
         effects.giftPause = 3000;
         this.broadcast({ type: 'gift_pause', timestamp: Date.now(), data: { duration: 3000 } });
+        // T6 礼物联动：城门自动升级（不扣矿石，不计每日额度），并补送者 +100 贡献
+        if (this.gateLevel < GATE_MAX_HP_BY_LEVEL.length) {
+          this._upgradeGate(playerId, 'gift_t6');
+          this.contributions[playerId] = (this.contributions[playerId] || 0) + 100;
+        }
         needsResourceSync = true;
         break;
       }
@@ -1649,6 +1690,8 @@ class SurvivalGameEngine {
 
     // 每天开始时重置随机事件计时器（90-120s后触发首次事件）
     this._nextEventTimer = 90 + Math.random() * 30;
+    // 城门每日升级标志：新一天重置（broadcaster/expedition_trader 路径可再次升级）
+    this._gateUpgradedToday = false;
 
     // §37 建造系统：每日重置投票限额（每日 1 次跨日重置）
     this._buildVoteUsedToday = false;
@@ -2370,12 +2413,18 @@ class SurvivalGameEngine {
       this.furnaceTemp = Math.max(this.minTemp, this.furnaceTemp - tempDecay);
     }
 
-    // 矿石 → 自动修复城门（每2秒消耗1矿石，补5HP；仅在城门受损时生效）
+    // 矿石 → 自动修复城门（每2秒消耗1矿石；基础 5HP，随城门等级缩放）
     // 设计意图：矿石让玩家挖矿有动力——矿越多，城门越能抵御怪物攻击
+    // §10 v2：Lv2-4 ×1.5（修 7HP），Lv5-6 ×2.0（修 10HP）
     if (this._tickCounter % 10 === 0 && this.ore > 0 && this.gateHp < this.gateMaxHp) {
-      const repair = Math.min(5, this.gateMaxHp - this.gateHp);
-      this.gateHp = Math.min(this.gateMaxHp, this.gateHp + repair);
-      this.ore    = Math.max(0, this.ore - 1);
+      const mult = GATE_AUTO_REPAIR_MULT[Math.max(0, this.gateLevel - 1)] || 1.0;
+      const repairUnit = Math.floor(5 * mult);
+      const need       = Math.max(0, this.gateMaxHp - this.gateHp);
+      const actual     = Math.min(repairUnit, need);
+      if (actual > 0) {
+        this.gateHp = Math.min(this.gateMaxHp, this.gateHp + actual);
+        this.ore    = Math.max(0, this.ore - 1);
+      }
     }
 
     // 取整便于显示
@@ -2622,42 +2671,109 @@ class SurvivalGameEngine {
     }
   }
 
-  // ==================== 内部：城门升级 ====================
+  // ==================== 内部：城门升级（策划案 §10 v2）====================
 
   /**
-   * 升级城门
-   * 等级 1→2→3→4，矿石消耗：100 / 250 / 500（策划案 §3.3）
+   * 升级失败统一出口
+   * @param {string} reason - max_level | insufficient_ore | wrong_phase | boss_fight | daily_limit
+   * @param {object} [extra] - 附加字段（如 currentLevel/required/available）
    */
-  _upgradeGate(secOpenId) {
+  _failGateUpgrade(reason, extra = {}) {
+    this._broadcast({
+      type: 'gate_upgrade_failed',
+      data: Object.assign({ reason }, extra),
+    });
+  }
+
+  /**
+   * 计算 _upgradeGate 成功后新增的特性列表（相对上一等级的差集）
+   * 仅用于 gate_upgraded.newFeatures 广播
+   */
+  _computeNewFeatures(lv) {
+    const curr = GATE_FEATURES_BY_LV[lv - 1] || [];
+    const prev = GATE_FEATURES_BY_LV[lv - 2] || [];
+    return curr.filter(f => !prev.includes(f));
+  }
+
+  /**
+   * 升级城门（策划案 §10 v2：Lv1→Lv6，带战术属性 + 时机限制 + 每日上限 + T6 联动）
+   * @param {string} secOpenId - 操作者（主播或 T6 送礼玩家）
+   * @param {string} [source='broadcaster'] - broadcaster | expedition_trader | gift_t6
+   *
+   * 升级顺序：
+   *   1. 阶段校验（必须 day/night）
+   *   2. 夜晚特殊限制（Boss 出现时 / HP 非濒危 禁止主动升级，T6 不受限）
+   *   3. 每日上限（非 T6 每天仅一次）
+   *   4. 最高等级校验（Lv6 到顶）
+   *   5. 矿石消耗校验（T6 跳过）
+   *   6. 执行升级 + HP 奖励 + 标记每日 + 广播 + Lv6 启动冲击波
+   */
+  _upgradeGate(secOpenId, source = 'broadcaster') {
+    // 1. 阶段校验
+    if (this.state !== 'day' && this.state !== 'night') {
+      this._failGateUpgrade('wrong_phase');
+      return;
+    }
+
+    // 2. 夜晚特殊限制（T6 礼物可在任意合法阶段升级）
+    if (this.state === 'night' && source !== 'gift_t6') {
+      // Boss 已出现：主动升级被锁定（用 _activeMonsters 中是否存在 boss 类型判断）
+      let bossActive = false;
+      for (const m of this._activeMonsters.values()) {
+        if (m.type === 'boss') { bossActive = true; break; }
+      }
+      if (bossActive) {
+        this._failGateUpgrade('boss_fight');
+        return;
+      }
+      // 非濒危不允许紧急加固（gateHp/gateMaxHp >= 30% 拒绝）
+      if (this.gateMaxHp > 0 && (this.gateHp / this.gateMaxHp) >= 0.3) {
+        this._failGateUpgrade('wrong_phase');
+        return;
+      }
+    }
+
+    // 3. 每日上限（T6 不受限；broadcaster 与 expedition_trader 共享额度）
+    if (this._gateUpgradedToday && source !== 'gift_t6') {
+      this._failGateUpgrade('daily_limit');
+      return;
+    }
+
+    // 4. 最高等级
     const currentLevel = this.gateLevel;
-    if (currentLevel >= 4) {
-      this._broadcast({
-        type: 'gate_upgrade_failed',
-        data: { reason: 'max_level', currentLevel }
-      });
+    if (currentLevel >= GATE_MAX_HP_BY_LEVEL.length) {
+      this._failGateUpgrade('max_level', { currentLevel });
       return;
     }
 
-    const cost = GATE_UPGRADE_COSTS[currentLevel - 1]; // index: lv1→idx0=100, lv2→idx1=250, lv3→idx2=500
-    if (this.ore < cost) {
-      this._broadcast({
-        type: 'gate_upgrade_failed',
-        data: {
-          reason:    'insufficient_ore',
-          required:  cost,
-          available: Math.round(this.ore),
-        }
+    // 5. 矿石消耗（T6 跳过）
+    const cost = GATE_UPGRADE_COSTS[currentLevel - 1];
+    if (source !== 'gift_t6' && this.ore < cost) {
+      this._failGateUpgrade('insufficient_ore', {
+        required:  cost,
+        available: Math.round(this.ore),
       });
       return;
     }
+    if (source !== 'gift_t6') this.ore -= cost;
 
-    this.ore -= cost;
+    // 6. 执行升级
     this.gateLevel = currentLevel + 1;
-
-    // 更新城门最大血量
     this.gateMaxHp = GATE_MAX_HP_BY_LEVEL[this.gateLevel - 1];
-    // 当前血量不超过新的最大值（不主动缩减已有血量）
 
+    // HP 奖励：Lv6 直接回满（hpBonus = 缺失值），其他按表加血
+    let hpBonus;
+    if (this.gateLevel === GATE_MAX_HP_BY_LEVEL.length) {
+      hpBonus = Math.max(0, this.gateMaxHp - this.gateHp);
+    } else {
+      hpBonus = GATE_HP_BONUS_ON_UP[this.gateLevel - 1] || 0;
+    }
+    this.gateHp = Math.min(this.gateMaxHp, this.gateHp + hpBonus);
+
+    // 每日上限（T6 不计）
+    if (source !== 'gift_t6') this._gateUpgradedToday = true;
+
+    // 广播
     this._broadcast({
       type: 'gate_upgraded',
       data: {
@@ -2665,13 +2781,66 @@ class SurvivalGameEngine {
         newMaxHp:     this.gateMaxHp,
         oreRemaining: Math.round(this.ore),
         upgradedBy:   secOpenId || '',
+        tierName:     GATE_TIER_NAMES[this.gateLevel - 1],
+        newFeatures:  this._computeNewFeatures(this.gateLevel),
+        hpBonus,
+        source,
       }
     });
 
-    console.log(`[SurvivalEngine] Gate upgraded to level ${this.gateLevel} (maxHp=${this.gateMaxHp}), ore left=${Math.round(this.ore)}`);
+    console.log(`[SurvivalEngine] Gate upgraded Lv${currentLevel}→Lv${this.gateLevel} [${GATE_TIER_NAMES[this.gateLevel-1]}] (maxHp=${this.gateMaxHp}, +${hpBonus}HP, source=${source}, ore=${Math.round(this.ore)})`);
 
-    // 同步资源（矿石变动 + 城门信息）
+    // Lv6 启动寒冰冲击波定时器
+    if (this.gateLevel === GATE_MAX_HP_BY_LEVEL.length && !this._frostPulseTimer) {
+      this._startFrostPulseTimer();
+    }
+
     this._broadcastResourceUpdate();
+  }
+
+  /**
+   * Lv6 寒冰冲击波定时器（每 15s 对活跃怪物造成 100 伤害 + 2s 冻结）
+   *
+   * 注：服务器不追踪怪物位置，FROST_PULSE_RADIUS 语义由客户端呈现（视觉半径），
+   *    服务器层对 _activeMonsters 全量应用伤害与 frozenUntil 标记；
+   *    冻结标记由客户端读取并表现为怪物停滞动画。
+   */
+  _startFrostPulseTimer() {
+    if (this._frostPulseTimer) return;
+    this._frostPulseTimer = setInterval(() => {
+      if (this.state !== 'day' && this.state !== 'night') return;
+      const hits = [];
+      const now = Date.now();
+      // 冲击波：伤害+冻结（先收集，再遍历应用死亡广播，避免在迭代中修改 Map）
+      const deaths = [];
+      for (const [id, m] of this._activeMonsters) {
+        m.currentHp -= FROST_PULSE_DAMAGE;
+        m.frozenUntil = now + FROST_PULSE_FREEZE_MS;
+        hits.push(id);
+        if (m.currentHp <= 0) deaths.push({ id, type: m.type });
+      }
+      for (const d of deaths) {
+        this._activeMonsters.delete(d.id);
+        this._broadcast({ type: 'monster_died', data: { monsterId: d.id, monsterType: d.type, killerId: 'gate_frost_pulse' } });
+      }
+      this._broadcast({
+        type: 'gate_effect_triggered',
+        data: {
+          effect: 'frost_pulse',
+          hitMonsters: hits,
+          radius: FROST_PULSE_RADIUS,
+          damage: FROST_PULSE_DAMAGE,
+          freezeMs: FROST_PULSE_FREEZE_MS,
+        }
+      });
+    }, FROST_PULSE_INTERVAL_MS);
+  }
+
+  _stopFrostPulseTimer() {
+    if (this._frostPulseTimer) {
+      clearInterval(this._frostPulseTimer);
+      this._frostPulseTimer = null;
+    }
   }
 
   // ==================== 内部：怪物波次（旧调度，兼容保留）====================
@@ -2802,8 +2971,43 @@ class SurvivalGameEngine {
 
     // 剩余伤害（矿工全死后的溢出）打城门；clamp到0避免矿工分摊时负值"治疗"城门
     remainingDamage = Math.max(0, remainingDamage);
-    if (remainingDamage > 0) {
-      this.gateHp = Math.max(0, this.gateHp - remainingDamage);
+
+    // ── 城门减伤（Lv3+）+ 反伤（Lv4+）──────────────────────
+    const gateIdx = Math.max(0, this.gateLevel - 1);
+    const dmgRed  = GATE_DMG_REDUCTION[gateIdx] || 0;
+    const reducedDamage = remainingDamage > 0 ? Math.floor(remainingDamage * (1 - dmgRed)) : 0;
+    if (reducedDamage > 0) {
+      this.gateHp = Math.max(0, this.gateHp - reducedDamage);
+    }
+
+    // 反伤（Lv4+）：按 reducedDamage × thornsRatio 对整波怪物平均分摊（无怪位置，均分到 _activeMonsters）
+    const thornsRatio = GATE_THORNS_RATIO[gateIdx] || 0;
+    if (thornsRatio > 0 && reducedDamage > 0 && this._activeMonsters.size > 0) {
+      const thornsTotal = Math.floor(reducedDamage * thornsRatio);
+      if (thornsTotal > 0) {
+        const perMonster = Math.max(1, Math.floor(thornsTotal / this._activeMonsters.size));
+        const deaths = [];
+        const hitIds = [];
+        for (const [mid, m] of this._activeMonsters) {
+          m.currentHp -= perMonster;
+          hitIds.push(mid);
+          if (m.currentHp <= 0) deaths.push({ id: mid, type: m.type });
+        }
+        // 反伤击杀不计玩家贡献（killerId 为城门标识，不触发 _trackContribution）
+        for (const d of deaths) {
+          this._activeMonsters.delete(d.id);
+          this._broadcast({ type: 'monster_died', data: { monsterId: d.id, monsterType: d.type, killerId: 'gate_thorns' } });
+        }
+        this._broadcast({
+          type: 'gate_effect_triggered',
+          data: {
+            effect: 'thorns',
+            hitMonsters: hitIds,
+            damagePerMonster: perMonster,
+            totalDamage: thornsTotal,
+          }
+        });
+      }
     }
 
     // §16.1 all_dead 判定：本轮伤害结算后仍有矿工存活 → 刷新基准
@@ -2815,7 +3019,7 @@ class SurvivalGameEngine {
     // 广播矿工HP更新
     this._broadcastWorkerHp();
 
-    console.log(`[SurvivalEngine] Wave ${waveIndex}: ${count} monsters (${spawnSide}), workers=${aliveWorkers.length}, gate -${remainingDamage}hp → ${this.gateHp}`);
+    console.log(`[SurvivalEngine] Wave ${waveIndex}: ${count} monsters (${spawnSide}), workers=${aliveWorkers.length}, gate raw=${remainingDamage} reduced=${reducedDamage} (Lv${this.gateLevel} red=${(dmgRed*100)|0}%) → HP ${this.gateHp}`);
 
     // 立即推送资源更新（城门HP变化）
     this._broadcastResourceUpdate();
@@ -3227,6 +3431,9 @@ class SurvivalGameEngine {
         gateHp:       Math.round(this.gateHp),
         gateMaxHp:    this.gateMaxHp,
         gateLevel:    this.gateLevel,
+        gateTierName:      GATE_TIER_NAMES[this.gateLevel - 1] || '',
+        gateFeatures:      GATE_FEATURES_BY_LV[this.gateLevel - 1] || [],
+        gateDailyUpgraded: !!this._gateUpgradedToday,
         remainingTime: Math.round(this.remainingTime),
         scorePool:    Math.round(this.scorePool),
         workerHp:     Object.fromEntries(
@@ -4845,6 +5052,9 @@ class SurvivalGameEngine {
     // §39 商店系统：清 spotlight 过期定时器（不清 _shopSpotlightActive，交给 reset() 决定）
     for (const t of Object.values(this._shopSpotlightTimers || {})) clearTimeout(t);
     this._shopSpotlightTimers = {};
+
+    // §10 Lv6 寒冰冲击波定时器
+    this._stopFrostPulseTimer();
   }
 }
 

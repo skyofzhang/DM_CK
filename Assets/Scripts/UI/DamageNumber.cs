@@ -19,7 +19,37 @@ public class DamageNumber : MonoBehaviour
         dn.Init(damage, color);
     }
 
+    /// <summary>🆕 v1.22 §10 显示任意字符串飘字（供反伤/冲击波等特殊伤害渠道使用）</summary>
+    public static void Show(Vector3 worldPos, string text, Color color)
+    {
+        var go = new GameObject("DmgNum_" + text);
+        go.transform.position = worldPos + Vector3.up * 1.5f;
+        var dn = go.AddComponent<DamageNumber>();
+        dn.InitText(text, color);
+    }
+
+    /// <summary>
+    /// 🆕 v1.22 §10 显示带减伤的伤害飘字（格式 "-{actual}(-{raw})"）。
+    ///   - actual == raw 时等同普通 Show
+    ///   - actual != raw 时显示括号内原始伤害，便于玩家感知城门减伤效果
+    /// </summary>
+    public static void Show(Vector3 worldPos, int actualDamage, int rawDamage, Color actualColor)
+    {
+        if (rawDamage == actualDamage)
+        {
+            Show(worldPos, actualDamage, actualColor);
+            return;
+        }
+        Show(worldPos, $"-{actualDamage}(-{rawDamage})", actualColor);
+    }
+
     public void Init(int damage, Color color)
+    {
+        InitText("-" + damage.ToString(), color);
+    }
+
+    /// <summary>用自定义文本初始化（🆕 v1.22 §10）</summary>
+    public void InitText(string text, Color color)
     {
         _tmp = gameObject.AddComponent<TextMeshPro>();
 
@@ -27,7 +57,7 @@ public class DamageNumber : MonoBehaviour
         var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
         if (font != null) _tmp.font = font;
 
-        _tmp.text      = "-" + damage.ToString();
+        _tmp.text      = text;
         _tmp.color     = color;
         _tmp.fontSize  = 5f;
         _tmp.fontStyle = FontStyles.Bold;

@@ -20,9 +20,28 @@ namespace DrscfZ.Survival
         [Header("WorldSpace UI（场景中预创建，Rule #2）")]
         [SerializeField] private WorldSpaceLabel _hpLabel;  // 拖入城门 WorldSpaceLabel（GateHP 类型）
 
+        [Header("城门等级可视化（Editor 工具 SetupGatePrefabs 绑定，允许为空）")]
+        [SerializeField] private GameObject[] _gateModels = new GameObject[6]; // Lv1..Lv6
+
         public int MaxHp { get; private set; }
         public int CurrentHp { get; private set; }
         public float HpRatio => MaxHp > 0 ? (float)CurrentHp / MaxHp : 0f;
+
+        // ── 🆕 v1.22 §10 城门升级系统 v2 ──────────────────────────────────────────
+        /// <summary>城门当前等级（1-6）</summary>
+        public int      GateLevel    { get; private set; } = 1;
+        /// <summary>城门层级名（"木栅栏"/.../"巨龙要塞"）</summary>
+        public string   TierName     { get; private set; } = "木栅栏";
+        /// <summary>受到伤害的减伤率（0~1，来自服务端）</summary>
+        public float    DmgReduction { get; private set; }
+        /// <summary>反伤反弹比例（0~1，Lv4+）</summary>
+        public float    ThornsRatio  { get; private set; }
+        /// <summary>冰霜光环半径（米，Lv5+）</summary>
+        public float    FrostRadius  { get; private set; }
+        /// <summary>已激活的特性 ID 列表（如 ["thorns", "frost_aura"]）</summary>
+        public string[] Features     { get; private set; } = new string[0];
+        /// <summary>当前天是否已升级（时机限制，只在白天可升，每天一次）</summary>
+        public bool     DailyUpgraded { get; private set; }
 
         // 事件
         public event Action<int, int> OnHpChanged;    // current, max
@@ -114,15 +133,69 @@ namespace DrscfZ.Survival
             return Color.Lerp(Color.red, Color.yellow, r * 2f);
         }
 
-        /// <summary>城门升级：更新最大HP</summary>
+        /// <summary>
+        /// 城门升级（旧签名，兼容过渡）：
+        ///   - tierName 空、features 空、hpBonus=20（与 v1.22 之前的旧逻辑一致）
+        ///   - 新代码应直接调用 HandleUpgrade(level, newMaxHp, hpBonus, tierName, features)
+        /// </summary>
         public void HandleUpgrade(int level, int newMaxHp)
         {
-            MaxHp = newMaxHp;
-            // 升级时小幅恢复HP（不超过新的最大值）
-            CurrentHp = Mathf.Min(CurrentHp + 20, MaxHp);
+            HandleUpgrade(level, newMaxHp, 20, "", null);
+        }
+
+        /// <summary>城门升级（🆕 v1.22 §10 主入口，由 SurvivalGameManager 解析 gate_upgraded 后调用）</summary>
+        public void HandleUpgrade(int level, int newMaxHp, int hpBonus, string tierName, string[] features)
+        {
+            GateLevel = level;
+            TierName  = string.IsNullOrEmpty(tierName) ? TierName : tierName;
+            Features  = features ?? new string[0];
+            MaxHp     = newMaxHp;
+
+            // hpBonus 由服务端下发：
+            //   - Lv2/3/4 常规：+20
+            //   - Lv5：+50
+            //   - Lv6：回满（hpBonus == gateMaxHp - gateHp）
+            CurrentHp = Mathf.Clamp(CurrentHp + hpBonus, 0, MaxHp);
             OnHpChanged?.Invoke(CurrentHp, MaxHp);
             SyncHpLabel();
-            Debug.Log($"[CityGate] 城门升级到 Lv.{level}，最大HP: {MaxHp}，当前HP: {CurrentHp}");
+
+            SetGateLevel(level);
+            Debug.Log($"[CityGate] 升级 Lv.{level}「{TierName}」，MaxHp={MaxHp}，HP={CurrentHp}（+{hpBonus}）");
+        }
+
+        /// <summary>切换城门等级外观（启用 _gateModels[level-1]，其余隐藏）🆕 v1.22</summary>
+        public void SetGateLevel(int level)
+        {
+            if (_gateModels == null) return;
+            for (int i = 0; i < _gateModels.Length; i++)
+            {
+                if (_gateModels[i] != null)
+                    _gateModels[i].SetActive(i == level - 1);
+            }
+            StartCoroutine(PlayUpgradeFX());
+        }
+
+        private IEnumerator PlayUpgradeFX()
+        {
+            // TODO §10.7：屏幕震动 / 光柱 / 环形冲击波 / sfx_gate_upgrade（美术资源到位后实现）
+            // 保底：触发一次相机轻微震屏（若 SurvivalCameraController 存在）
+            SurvivalCameraController.Shake(0.15f, 0.3f);
+            yield break;
+        }
+
+        /// <summary>状态同步：服务端 survival_game_state / resource_update 把 gateDailyUpgraded 推给客户端</summary>
+        public void ApplyDailyUpgraded(bool v) => DailyUpgraded = v;
+
+        /// <summary>
+        /// 状态同步（🆕 v1.22 §10）：断线重连 / 定时 resource_update 时补齐城门层级元数据。
+        /// 仅在非空时覆盖，避免初始化后的空字段覆盖 HandleUpgrade 设置的值。
+        /// </summary>
+        public void ApplyTierMeta(string tierName, string[] features)
+        {
+            if (!string.IsNullOrEmpty(tierName))
+                TierName = tierName;
+            if (features != null)
+                Features = features;
         }
 
         // ── 子任务5：受击变色 ────────────────────────────────────────────────────

@@ -393,6 +393,9 @@ namespace DrscfZ.Monster
             return null;
         }
 
+        /// <summary>短别名（🆕 v1.22 §10 gate_effect_triggered 回调使用）</summary>
+        public MonsterController FindById(string monsterId) => FindMonsterById(monsterId);
+
         public void StopAllWaves()
         {
             StopAllCoroutines();

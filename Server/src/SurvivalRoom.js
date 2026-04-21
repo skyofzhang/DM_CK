@@ -356,11 +356,15 @@ class SurvivalRoom {
           ws.send(JSON.stringify({ type: 'heartbeat_ack', timestamp: Date.now(), roomId: this.roomId }));
         } catch (e) { }
         break;
-      case 'upgrade_gate':
+      case 'upgrade_gate': {
         // 城门升级（需要矿石资源）
         // data.secOpenId 可选，用于记录操作者；也接受连接时注册的操作者 ID
-        this.survivalEngine._upgradeGate(data && data.secOpenId || '');
+        // 防御：客户端不可通过 source='gift_t6' 免费升级——只允许 broadcaster / expedition_trader
+        const rawSource  = data && typeof data.source === 'string' ? data.source : 'broadcaster';
+        const safeSource = rawSource === 'expedition_trader' ? 'expedition_trader' : 'broadcaster';
+        this.survivalEngine._upgradeGate(data && data.secOpenId || '', safeSource);
         break;
+      }
       case 'toggle_sim':
         // 生存游戏模拟器（直接触发测试事件）
         if (data && data.enabled) {

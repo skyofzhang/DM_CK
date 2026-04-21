@@ -18,11 +18,15 @@ namespace DrscfZ.Survival
         public float  furnaceTemp;   // -100 ~ 100
         public int    gateHp;
         public int    gateMaxHp;
-        public int    gateLevel;     // 城门当前等级（1-4）
+        public int    gateLevel;     // 城门当前等级（1-6，v1.22 扩展 Lv5/Lv6）
         public int    scorePool;     // 当前积分池总量
         // §16 v1.27 永续模式：recovery 期间服务端推送 'recovery'，常规为 'normal'
         // （旧消息缺失时反序列化回落默认 "normal"，向下兼容）
         public string variant = "normal";
+        // 🆕 v1.22 §10 城门升级系统 v2
+        public string   gateTierName;       // 城门层级名（"木栅栏"/"加固木门"/.../"巨龙要塞"）
+        public string[] gateFeatures;       // 已激活的特性（如 ["thorns_20", "frost_aura_6"]）
+        public bool     gateDailyUpgraded;  // 当前天是否已升级（时机限制）
         // 注：服务端还发送 workerHp（dict），因 JsonUtility 不支持 Dictionary，
         //     由独立的 worker_hp_update 消息负责同步，此处忽略
     }
@@ -37,9 +41,13 @@ namespace DrscfZ.Survival
         public float furnaceTemp;
         public int   gateHp;
         public int   gateMaxHp;
-        public int   gateLevel;      // 城门当前等级（1-4）
+        public int   gateLevel;      // 城门当前等级（1-6，v1.22 扩展 Lv5/Lv6）
         public float remainingTime;
         public int   scorePool;      // 当前积分池总量
+        // 🆕 v1.22 §10 城门升级系统 v2
+        public string   gateTierName;
+        public string[] gateFeatures;
+        public bool     gateDailyUpgraded;
     }
 
     /// <summary>昼夜阶段切换</summary>
@@ -181,20 +189,45 @@ namespace DrscfZ.Survival
     [Serializable]
     public class GateUpgradedData
     {
-        public int    newLevel;      // 升级后等级 (2-4)（原 level，已对齐服务端字段名）
+        public int    newLevel;      // 升级后等级 (2-6，v1.22 扩展 Lv5/Lv6)
         public int    newMaxHp;      // 新的最大HP
-        public int    oreRemaining;  // 升级后剩余矿石（原 cost，已对齐服务端字段名）
+        public int    oreRemaining;  // 升级后剩余矿石
         public string upgradedBy;    // 触发升级的玩家ID
+        // 🆕 v1.22 §10 城门升级系统 v2
+        public string   tierName;    // 层级名（"木栅栏"/"铁栅"/.../"巨龙要塞"）
+        public string[] newFeatures; // 新解锁的特性 ["thorns", "frost_aura", "frost_pulse"]
+        public int      hpBonus;     // 本次升级回血量（Lv6 = gateMaxHp - gateHp，即回满）
+        public string   source;      // 'broadcaster' | 'gift_t6' | 'expedition_trader'
     }
 
-    /// <summary>城门升级失败（矿石不足或已满级）</summary>
+    /// <summary>城门升级失败（矿石不足 / 已满级 / 未解锁 / 已升过）</summary>
     [Serializable]
     public class GateUpgradeFailedData
     {
-        public string reason;        // "max_level" | "insufficient_ore"
+        public string reason;        // "max_level" | "insufficient_ore" | "feature_locked" | "already_upgraded_today" | "phase_disallowed"
         public int    currentLevel;  // 当前等级（max_level时）
         public int    required;      // 需要矿石数（insufficient_ore时）
         public int    available;     // 当前矿石数（insufficient_ore时）
+        // 🆕 v1.27 §10 仅 feature_locked 时有效
+        public int    unlockDay;     // 解锁所需天数
+        public int    blockedLevel;  // 阻止升级的等级边界（Lv1-4 vs Lv5-6 解锁分类）
+    }
+
+    /// <summary>城门等级特性触发（Lv4反伤 / Lv5光环激活 / Lv6冲击波）🆕 v1.22</summary>
+    [Serializable]
+    public class GateEffectTriggeredData
+    {
+        public string   effect;            // 'thorns' | 'frost_aura' | 'frost_pulse'
+        // thorns：服务端 _spawnWave 批量结算反伤，均分到 _activeMonsters 全体怪物
+        //   hitMonsters = 受反伤的所有怪物 ID；damagePerMonster = 每只怪物承担的反伤；totalDamage = 总反伤
+        // frost_pulse：Lv6 寒冰冲击波 15s 周期
+        //   hitMonsters = 被冲击波命中的怪物 ID 列表；radius/damage/freezeMs = 视觉参数
+        public string[] hitMonsters;       // thorns / frost_pulse 共用
+        public int      damagePerMonster;  // thorns 时的每只怪物反伤
+        public int      totalDamage;       // thorns 时的总反伤
+        public int      radius;            // frost_pulse 时的视觉半径
+        public int      damage;            // frost_pulse 时的冲击波单次伤害
+        public int      freezeMs;          // frost_pulse 时的冻结时长
     }
 
     // ==================== 矿工HP系统 ====================
