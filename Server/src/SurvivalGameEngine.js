@@ -592,10 +592,19 @@ class SurvivalGameEngine {
     // ── §36 全服同步 + 赛季制（MVP）─────────────────────────────────────
     // globalClock / seasonMgr 由 setRoomContext 注入；未注入时 phase 流转走原内部路径
     // roomPersistence 由 setRoomContext 注入；存 JSON 到 ./data/rooms/{roomId}.json
+    // veteranTracker 由 setRoomContext 注入；§36.12 老用户豁免追踪
     this.globalClock     = null;
     this.seasonMgr       = null;
     this.roomPersistence = null;
+    this.veteranTracker  = null;
     this._clockDriven    = false;  // true → 内部 _tick 跳过 phase 到期切换
+
+    // §36.5 和平夜控制（由 _enterNight 设置，tick / _spawnWave 读取）
+    this._peaceNightSkipSpawn = false;   // 整夜和平（Day1/Day2）→ 跳过所有刷怪
+    this._peaceNightDelayUntil = 0;      // Day3 前 30s 和平（Unix ms）→ tick 检查该字段
+
+    // §36.4 BossRush：仅 D7 夜晚累计 monster_died 伤害到全服池（由 _handleAttack / 其他 monster_died 路径调用）
+    // 判定键：seasonMgr.seasonDay===7 && this.state==='night'
 
     // ── §36 堡垒日（per-room）─────────────────────────────────────────
     // fortressDay 表示当前推进到的堡垒日；maxFortressDay 为历史最高
@@ -628,25 +637,37 @@ class SurvivalGameEngine {
    * @param {GlobalClock}      [extras.globalClock]     §36 全服时钟
    * @param {SeasonManager}    [extras.seasonMgr]       §36 赛季管理
    * @param {RoomPersistence}  [extras.roomPersistence] §36 持久化
+   * @param {VeteranTracker}   [extras.veteranTracker]  §36.12 老用户豁免追踪（全局单例）
    */
   setRoomContext(room, tribeWarMgr, extras = {}) {
     this.room        = room || null;
     this.tribeWarMgr = tribeWarMgr || null;
 
-    // §36 注入：GlobalClock / SeasonManager / RoomPersistence
+    // §36 注入：GlobalClock / SeasonManager / RoomPersistence / VeteranTracker
     if (extras.globalClock)     this.globalClock     = extras.globalClock;
     if (extras.seasonMgr)       this.seasonMgr       = extras.seasonMgr;
     if (extras.roomPersistence) this.roomPersistence = extras.roomPersistence;
+    if (extras.veteranTracker)  this.veteranTracker  = extras.veteranTracker;
 
     this._clockDriven = !!this.globalClock;
 
-    // 持久化 load：恢复 fortressDay / _lifetimeContrib / _contribBalance / §36.5.1 daily cap
+    // 持久化 load：恢复 fortressDay / _lifetimeContrib / _contribBalance / §36.5.1 daily cap / §36.12 veteran
     if (this.roomPersistence && room && room.roomId) {
       const snap = this.roomPersistence.load(room.roomId);
       if (snap) {
         this._applyPersistedSnapshot(snap);
       }
     }
+  }
+
+  /** §36.12：老用户豁免查询。未注入 tracker 时返 false（默认非老用户）*/
+  _isRoomCreatorVeteran() {
+    if (!this.veteranTracker) return false;
+    // 用"房间创建者 openId"作为查询键；MVP 以 roomId 的第一位客户端 secOpenId 作为创建者
+    //   PM 决策：roomCreatorOpenId 未全流程注入时兜底返 false，由上游 FEATURE_UNLOCK_DAY 拦截
+    const creatorId = (this.room && this.room.roomCreatorOpenId) || null;
+    if (!creatorId) return false;
+    return this.veteranTracker.isVeteran(creatorId);
   }
 
   /**
@@ -672,6 +693,15 @@ class SurvivalGameEngine {
     if (typeof snap._dailyFortressDayGained === 'number') this._dailyFortressDayGained = snap._dailyFortressDayGained | 0;
     if (typeof snap._dailyResetKey          === 'number') this._dailyResetKey          = snap._dailyResetKey          | 0;
     if (typeof snap._dailyCapBlocked        === 'boolean') this._dailyCapBlocked       = snap._dailyCapBlocked;
+
+    // §36.12 老用户豁免：合并到全局 VeteranTracker（即使 tracker 是空单例，也可从 per-room 快照恢复）
+    if (this.veteranTracker && typeof this.veteranTracker.loadSnapshot === 'function') {
+      const payload = {
+        _veteranStreamers:     Array.isArray(snap._veteranStreamers)      ? snap._veteranStreamers : [],
+        _maxSeasonDayAttended: (snap._maxSeasonDayAttended && typeof snap._maxSeasonDayAttended === 'object') ? snap._maxSeasonDayAttended : {},
+      };
+      try { this.veteranTracker.loadSnapshot(payload); } catch (e) { /* ignore */ }
+    }
 
     console.log(`[Engine:${(this.room && this.room.roomId) || '?'}] Loaded snapshot: fortressDay=${this.fortressDay} maxFortressDay=${this.maxFortressDay} dailyGained=${this._dailyFortressDayGained} dailyCapBlocked=${this._dailyCapBlocked}`);
   }
@@ -935,7 +965,22 @@ class SurvivalGameEngine {
       dailyCapMax:            DAILY_FORTRESS_CAP_MAX,
       dailyResetAt:           this._getNextDailyResetMs(),
       dailyCapBlocked:        this._dailyCapBlocked || false,
+      // §36.12 分时段功能解锁：已解锁功能全集（断线重连/初始化用；与 season_state.unlockedFeatures 对齐）
+      unlockedFeatures:       this._getUnlockedFeaturesForClient(),
     };
+  }
+
+  /** §36.12 查询当前已解锁功能列表（含老用户豁免 → 返回全集）*/
+  _getUnlockedFeaturesForClient() {
+    try {
+      const { getUnlockedFeatures, FEATURE_IDS_IN_DAY_ORDER } = require('./config/FeatureUnlockConfig');
+      // 老用户 → 返回全集（豁免）
+      if (this._isRoomCreatorVeteran()) return [...FEATURE_IDS_IN_DAY_ORDER];
+      const seasonDay = this.seasonMgr ? this.seasonMgr.seasonDay : 1;
+      return getUnlockedFeatures(seasonDay);
+    } catch (e) {
+      return [];
+    }
   }
 
   /** 停止游戏引擎（房间被销毁时调用） */
@@ -978,6 +1023,11 @@ class SurvivalGameEngine {
     const shopMatch = content_trim.match(/^买([AB])(\d{1,2})$/);
     if (shopMatch) {
       if (!playerId) return;
+      // §36.12 shop 功能锁：未解锁时静默忽略弹幕（不推失败，避免骚扰观众 —— 同"未识别弹幕"处理）
+      {
+        const { isFeatureUnlocked: _shopLock } = require('./config/FeatureUnlockConfig');
+        if (!_shopLock(this.room, 'shop')) return;
+      }
       const cat = shopMatch[1];
       const idx = parseInt(shopMatch[2]);
       let itemId = null;
@@ -1003,6 +1053,11 @@ class SurvivalGameEngine {
     const equipMatch = content_trim.match(/^装([TFEB])(\d{1,2})$/);
     if (equipMatch) {
       if (!playerId) return;
+      // §36.12 shop 功能锁：装备切换同样走 shop 解锁门（D<2 时观众无库存，静默忽略避免主动错误骚扰）
+      {
+        const { isFeatureUnlocked: _equipLock } = require('./config/FeatureUnlockConfig');
+        if (!_equipLock(this.room, 'shop')) return;
+      }
       const slotLetter = equipMatch[1];
       const slot = SHOP_EQUIP_SLOT_MAP[slotLetter];
       if (!slot) return;
@@ -1426,6 +1481,11 @@ class SurvivalGameEngine {
       // 守护者活跃时间初始化（供 §33.5 AFK 替补检测使用）
       this._guardianLastActive[playerId] = Date.now();
       this._allocatePlayerSlot(playerId); // §33: 稳定槽位分配（供 supporter_promoted 使用）
+
+      // §36.12 老用户豁免：玩家首次加入时评估一次（可能满足条件 1/3）
+      //   注：此处 playerId 是加入者，不一定是创建者；只有与 roomCreatorOpenId 匹配时才会触发豁免
+      //   evaluateVeteran 内部会过滤 non-creator（通过 _evaluateVeteranForCreator 统一入口）
+      this._evaluateVeteranForCreator('player_joined');
     }
 
     const data = {
@@ -1470,8 +1530,17 @@ class SurvivalGameEngine {
     // 幂等：已是助威者直接返回 true
     if (this._supporters.has(playerId)) return true;
 
-    // TODO §36.12: add seasonDay < supporter_mode.minDay gate when §36 implemented
-    // if (!this.room.isVeteran && this.room.seasonDay < FEATURE_UNLOCK_DAY.supporter_mode.minDay) return false;
+    // §36.12 supporter_mode 门槛：seasonDay < 6 且非老用户 → 静默保留旁观者身份
+    //   不推送任何 shop_purchase_failed / supporter_joined（策划案"不骚扰未主动请求的观众"）
+    if (this.room && typeof this.room === 'object') {
+      try {
+        const { isFeatureUnlocked } = require('./config/FeatureUnlockConfig');
+        if (!isFeatureUnlocked(this.room, 'supporter_mode')) {
+          // 静默：既不晋升也不提示；D6 后若该观众再次发言，正常走路径
+          return false;
+        }
+      } catch (e) { /* ignore require error on fallback */ }
+    }
 
     this._supporters.set(playerId, {
       name: playerName || playerId,
@@ -1807,12 +1876,39 @@ class SurvivalGameEngine {
     this._startTick();
   }
 
+  /**
+   * §36.5 和平夜变种查询（seasonDay 驱动，非 fortressDay）
+   *   D1 → 'peace_night'（整夜和平 + UI 柔光罩）
+   *   D2 → 'peace_night_silent'（整夜无怪但不显示 UI，保持紧张感）
+   *   D3 → 'peace_night_prelude'（前 30s 和平 + UI）
+   *   D4+ → null（正常夜晚）
+   *
+   * @param {number} seasonDay
+   * @returns {'peace_night' | 'peace_night_silent' | 'peace_night_prelude' | null}
+   */
+  _getPeaceNightVariant(seasonDay) {
+    if (!Number.isFinite(seasonDay)) return null;
+    if (seasonDay === 1) return 'peace_night';
+    if (seasonDay === 2) return 'peace_night_silent';
+    if (seasonDay === 3) return 'peace_night_prelude';
+    return null;
+  }
+
   _enterNight(day) {
     this.state         = 'night';
     this.currentDay    = day;
     this.remainingTime = this.nightDuration;
 
     console.log(`[SurvivalEngine] ===== Night ${day} Start =====`);
+
+    // §36.5 和平夜变种（基于 seasonDay，不是 currentDay）
+    const seasonDay = this.seasonMgr ? this.seasonMgr.seasonDay : 1;
+    const peaceVariant = this._getPeaceNightVariant(seasonDay);
+    this._peaceNightSkipSpawn = (peaceVariant === 'peace_night' || peaceVariant === 'peace_night_silent');
+    this._peaceNightDelayUntil = (peaceVariant === 'peace_night_prelude') ? (Date.now() + 30000) : 0;
+    if (peaceVariant) {
+      console.log(`[SurvivalEngine] Peace night variant: ${peaceVariant} (seasonDay=${seasonDay}, skipSpawn=${this._peaceNightSkipSpawn}, delayUntil=${this._peaceNightDelayUntil})`);
+    }
 
     // §30.6 动态难度：每夜进入前刷新（避免每 tick 都算）
     // §30.3 阶10 传奇免死每晚 1 次 → 重置标记
@@ -1835,16 +1931,33 @@ class SurvivalGameEngine {
     this._sweepExpeditionsOnNightStart(Date.now());
 
     // 初始化当天怪物追踪
-    this._initActiveMonsters(day);
+    //   §36.5 整夜和平夜（peace_night / peace_night_silent）→ 跳过 _initActiveMonsters
+    //   （避免波次调度器读空 map 异常；且任何 monster_wave / boss_appeared 都不广播）
+    if (!this._peaceNightSkipSpawn) {
+      this._initActiveMonsters(day);
+    } else {
+      // 保证 _activeMonsters 至少是空 Map（避免后续逻辑读 undefined）
+      if (this._activeMonsters && typeof this._activeMonsters.clear === 'function') {
+        this._activeMonsters.clear();
+      }
+    }
 
+    // §36.5 phase_changed 扩展：variant 字段 + peacePreludeEndsAt（仅 prelude）
+    const phaseChangedData = {
+      phase: 'night',
+      day,
+      phaseDuration: this.nightDuration,
+    };
+    if (peaceVariant) {
+      phaseChangedData.variant = peaceVariant;
+      if (peaceVariant === 'peace_night_prelude') {
+        phaseChangedData.peacePreludeEndsAt = this._peaceNightDelayUntil;
+      }
+    }
     this.broadcast({
       type: 'phase_changed',
       timestamp: Date.now(),
-      data: {
-        phase: 'night',
-        day,
-        phaseDuration: this.nightDuration,
-      }
+      data: phaseChangedData,
     });
 
     this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
@@ -1856,8 +1969,9 @@ class SurvivalGameEngine {
     this._startTick();
 
     // 播报 Boss 出现
+    //   §36.5 整夜和平夜 → 跳过 boss_appeared 与 guard 生成（该夜无战斗）
     const cfg = getWaveConfig(day);
-    if (cfg.boss) {
+    if (cfg.boss && !this._peaceNightSkipSpawn) {
       // §31 Boss 刷新侧随机选（供首领卫兵同侧刷新参考；'all' 亦允许）
       const sides = ['left', 'right', 'top', 'all'];
       this._lastBossSpawnSide = sides[Math.floor(Math.random() * sides.length)];
@@ -1878,17 +1992,27 @@ class SurvivalGameEngine {
       }
     }
 
-    // 3秒延迟后再启动夜晚怪物波次（给客户端过渡动画播放时间）
-    const nightStartDelay = setTimeout(() => {
-      if (this.state === 'night') {
-        this._scheduleNightWaves(day);
-      }
-    }, 3000);
-    this._waveTimers.push(nightStartDelay);
+    // §36.5 整夜和平夜 → 不启动波次调度器（_spawnWave 守卫也会兜底，但跳过 setTimeout 更干净）
+    if (!this._peaceNightSkipSpawn) {
+      // 3秒延迟后再启动夜晚怪物波次（给客户端过渡动画播放时间）
+      // §36.5 prelude：首波延迟到 30s 后（30s 和平窗口），其他夜晚仍是 3s
+      const baseDelayMs = (this._peaceNightDelayUntil > 0)
+        ? Math.max(3000, this._peaceNightDelayUntil - Date.now() + 50)  // +50ms 安全边界
+        : 3000;
+      const nightStartDelay = setTimeout(() => {
+        if (this.state === 'night') {
+          this._scheduleNightWaves(day);
+        }
+      }, baseDelayMs);
+      this._waveTimers.push(nightStartDelay);
+    } else {
+      console.log(`[SurvivalEngine] Night ${day} peace mode (seasonDay=${seasonDay}) — skipping wave scheduler`);
+    }
 
     // §35 Tribe War：本房间若正在被其他房间攻击 → 通知 TribeWarManager 释放远征怪
     // （延迟 4s 跟随 nightStartDelay，保证夜晚 wave 调度先起；manager 内部 no-op 若未被攻击）
-    if (this.tribeWarMgr) {
+    //   §36.5 整夜和平夜 → 也跳过远征怪释放（设计即：D1/D2 对新手友好，无任何怪物）
+    if (this.tribeWarMgr && !this._peaceNightSkipSpawn) {
       const rid = this._getRoomId();
       if (rid) {
         const tribeWarRelease = setTimeout(() => {
@@ -2270,6 +2394,31 @@ class SurvivalGameEngine {
     });
 
     console.log(`[Engine:${(this.room && this.room.roomId) || '?'}] _onRoomSuccess: ${oldFortressDay}→${this.fortressDay} reason=${reason} dailyGained=${this._dailyFortressDayGained}/${DAILY_FORTRESS_CAP_MAX}`);
+
+    // §36.12 老用户豁免评估：挺过一夜 → maxFortressDay 可能达到 50 → 触发豁免条件 2
+    //   markSeasonAttendance 与 evaluateVeteran 都需要 creatorOpenId；若未注入则 skip
+    this._evaluateVeteranForCreator('fortress_day');
+  }
+
+  /**
+   * §36.12 对房间创建者（或合适范围内的玩家）进行老用户豁免评估
+   * 条件：
+   *   1. _lifetimeContrib[openId] ≥ 50000
+   *   2. room.maxFortressDay ≥ 50
+   *   3. 任一赛季 _maxSeasonDayAttended[openId] ≥ 5（由 markSeasonAttendance 填充）
+   * 若首次达标 → VeteranTracker 内部自动广播 veteran_unlocked
+   */
+  _evaluateVeteranForCreator(hint) {
+    if (!this.veteranTracker) return;
+    const creatorId = (this.room && this.room.roomCreatorOpenId) || null;
+    if (!creatorId) return;
+    const lifetime = this._lifetimeContrib[creatorId] || 0;
+    const maxFD = this.maxFortressDay || 0;
+    // markSeasonAttendance：挺过 seasonDay >= N，标记创建者本赛季 attended N
+    if (this.seasonMgr) {
+      this.veteranTracker.markSeasonAttendance(creatorId, this.seasonMgr.seasonId, this.seasonMgr.seasonDay);
+    }
+    this.veteranTracker.evaluateVeteran(creatorId, lifetime, maxFD, this.broadcast);
   }
 
   /**
@@ -3118,6 +3267,16 @@ class SurvivalGameEngine {
 
   _spawnWave(cfg, day, waveIndex) {
     if (this.state !== 'night') return;
+    // §36.5 整夜和平夜（peace_night / peace_night_silent）→ 不刷怪
+    if (this._peaceNightSkipSpawn) {
+      console.log(`[SurvivalEngine] _spawnWave skipped (peace night full): wave=${waveIndex}`);
+      return;
+    }
+    // §36.5 prelude（Day3 前 30s）→ 仍在和平窗口内 → 不刷怪
+    if (this._peaceNightDelayUntil > 0 && Date.now() < this._peaceNightDelayUntil) {
+      console.log(`[SurvivalEngine] _spawnWave skipped (peace prelude): wave=${waveIndex} delayUntil=${this._peaceNightDelayUntil}`);
+      return;
+    }
 
     // 生成数量随天数递增，应用基础难度倍率 + §30.6 动态难度数量加成
     const baseCnt = cfg.baseCount + Math.floor((day - 1) * 0.5);
@@ -3494,7 +3653,7 @@ class SurvivalGameEngine {
 
   /**
    * §31 统一怪物死亡后置钩子：在 _activeMonsters.delete 与 monster_died broadcast 之后调用。
-   * 处理：guard 计数 → Boss 暴走；summoner → 生成 mini。
+   * 处理：guard 计数 → Boss 暴走；summoner → 生成 mini；§36.4 D7 BossRush 池累加。
    * 所有 monster_died 触发点统一调用此方法（_handleAttack / T5 love_explosion / gate_frost_pulse /
    *   gate_thorns / meteor_shower / supporter love_explosion）。
    */
@@ -3504,6 +3663,23 @@ class SurvivalGameEngine {
     } else if (variant === 'summoner') {
       this._handleSummonerDeath(monsterId);
     }
+    // §36.4 D7 夜晚：每只怪死亡 → 全服 BossRush 池累加伤害
+    this._accumulateBossRushDamage(monsterType);
+  }
+
+  /**
+   * §36.4 BossRush 累加：仅 seasonDay===7 && state==='night' 时向全服池扣伤害
+   *   扣减值：普通怪 +100 / elite +500 / boss +2000（与击杀得分成比例）
+   *   GlobalClock 内部判定池是否已归零（dedup），引擎只负责累加
+   */
+  _accumulateBossRushDamage(monsterType) {
+    if (!this.globalClock || !this.seasonMgr) return;
+    if (this.state !== 'night' || this.seasonMgr.seasonDay !== 7) return;
+    let dmg = 100;
+    if (monsterType === 'elite')      dmg = 500;
+    else if (monsterType === 'boss')  dmg = 2000;
+    else if (monsterType === 'elite_raid') dmg = 500;
+    try { this.globalClock.damageBossRushPool(dmg); } catch (e) { /* ignore */ }
   }
 
   _clearNightWaves() {
@@ -4080,6 +4256,13 @@ class SurvivalGameEngine {
     const currentLc   = this._lifetimeContrib[playerId] || 0;
     const catchUpMult = (currentLc < 100 && finalAmount > 0) ? 3 : 1;
     this._lifetimeContrib[playerId] = currentLc + finalAmount * catchUpMult;
+
+    // §36.12 老用户豁免条件 1（_lifetimeContrib ≥ 50000）：只对房间创建者评估，避免遍历 200 人
+    //   仅在 contrib 刚跨过 50000 阈值时评估一次；失败时 evaluateVeteran 内部会 dedup（集合去重）
+    if (playerId && this.room && playerId === this.room.roomCreatorOpenId
+        && currentLc < 50000 && this._lifetimeContrib[playerId] >= 50000) {
+      this._evaluateVeteranForCreator('lifetime_contrib');
+    }
 
     // ── §39 商店：_contribBalance 与 _lifetimeContrib 同步增长（同 catchUpMult）────
     // 策划案 §39.3 不变式：_addContribution 前后 _lifetimeContrib 的差值 = _contribBalance 的差值

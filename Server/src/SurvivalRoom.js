@@ -9,6 +9,10 @@
 const SurvivalGameEngine    = require('./SurvivalGameEngine');
 const WeeklyRankingStore    = require('./WeeklyRankingStore');
 const StreamerRankingStore  = require('./StreamerRankingStore');
+const {
+  FEATURE_UNLOCK_DAY,
+  isFeatureUnlocked,
+} = require('./config/FeatureUnlockConfig');
 
 // 全局单例：主播排行榜（所有房间共享一个存储）
 let _streamerRankingInstance = null;
@@ -57,12 +61,19 @@ class SurvivalRoom {
     this.globalClock     = extras.globalClock     || null;
     this.seasonMgr       = extras.seasonMgr       || null;
     this.roomPersistence = extras.roomPersistence || null;
+    this.veteranTracker  = extras.veteranTracker  || null;   // §36.12 老用户豁免追踪
+
+    // §36.12 房间创建者的 openId（用于查豁免字段；第一个 addPlayer 或 handleComment 的 secOpenId 写入）
+    //   MVP：未注入时 _isRoomCreatorVeteran 直接返 false
+    this.roomCreatorOpenId = null;
+    this.creator = null;   // { isVeteran: boolean }，由 _refreshVeteranStatus() 维护
 
     if (typeof this.survivalEngine.setRoomContext === 'function') {
       this.survivalEngine.setRoomContext(this, tribeWarMgr, {
         globalClock:     this.globalClock,
         seasonMgr:       this.seasonMgr,
         roomPersistence: this.roomPersistence,
+        veteranTracker:  this.veteranTracker,
       });
     }
 
@@ -91,7 +102,13 @@ class SurvivalRoom {
     const isFirstClient = this.clients.size === 0 && this.roomCreatorWs === null;
     if (isFirstClient) {
       this.roomCreatorWs = ws;
-      console.log(`[SurvivalRoom:${this.roomId}] Room creator assigned (first client)`);
+      // §36.12 从 ws._playerId 缓存 roomCreatorOpenId；若 WS 尚未带 openId（抖音 SDK 连接晚绑定），
+      //   则稍后由 handleDouyinComment 兜底（见 handleDouyinComment 起首）
+      if (ws && ws._playerId) {
+        this.roomCreatorOpenId = ws._playerId;
+        this._refreshVeteranStatus();
+      }
+      console.log(`[SurvivalRoom:${this.roomId}] Room creator assigned (first client, openId=${this.roomCreatorOpenId || 'pending'})`);
     }
 
     this.clients.add(ws);
@@ -331,6 +348,39 @@ class SurvivalRoom {
   /**
    * 处理来自Unity客户端的WS消息
    */
+  /**
+   * §36.12 刷新 this.creator.isVeteran 标记（供 isFeatureUnlocked 查询）
+   * 由 addClient / handleComment 等入口在识别到创建者时调用
+   */
+  _refreshVeteranStatus() {
+    if (!this.veteranTracker) { this.creator = null; return; }
+    if (!this.roomCreatorOpenId) { this.creator = null; return; }
+    const isVet = this.veteranTracker.isVeteran(this.roomCreatorOpenId);
+    this.creator = { isVeteran: isVet, openId: this.roomCreatorOpenId };
+  }
+
+  /**
+   * §36.12 功能解锁守卫：返回 true 表示已解锁；false 表示已返回拒绝（调用方直接 return）
+   * @param {string} featureId
+   * @param {string} failType broadcast 消息 type（如 'build_propose_failed'）
+   * @param {object} [extraFields] 附加到 failed data 的字段（如 action / itemId）
+   * @returns {boolean}
+   */
+  _checkFeatureOrFail(featureId, failType, extraFields) {
+    this._refreshVeteranStatus();   // 保证 isVeteran 最新
+    if (isFeatureUnlocked(this, featureId)) return true;
+    const cfg = FEATURE_UNLOCK_DAY[featureId];
+    const unlockDay = cfg ? cfg.minDay : 0;
+    if (failType) {
+      const data = Object.assign({ reason: 'feature_locked', unlockDay }, extraFields || {});
+      try {
+        this.broadcast({ type: failType, timestamp: Date.now(), data });
+      } catch (e) { /* ignore */ }
+    }
+    console.log(`[SurvivalRoom:${this.roomId}] feature_locked: featureId=${featureId} unlockDay=${unlockDay} failType=${failType}`);
+    return false;
+  }
+
   handleClientMessage(ws, msgType, data) {
     switch (msgType) {
       case 'start_game':
@@ -362,6 +412,13 @@ class SurvivalRoom {
         // 防御：客户端不可通过 source='gift_t6' 免费升级——只允许 broadcaster / expedition_trader
         const rawSource  = data && typeof data.source === 'string' ? data.source : 'broadcaster';
         const safeSource = rawSource === 'expedition_trader' ? 'expedition_trader' : 'broadcaster';
+        // §36.12 按目标等级分流：Lv1→4 用 gate_upgrade_basic（D1）；Lv5→6 用 gate_upgrade_high（D4）
+        //   客户端升级按钮按当前 gateLevel 决定 targetLv（currentLevel+1）；若无则按 basic 保守走
+        const currentLv = this.survivalEngine.gateLevel || 1;
+        const targetLv  = (data && Number.isFinite(data.targetLv)) ? data.targetLv : (currentLv + 1);
+        const featureId = targetLv >= 5 ? 'gate_upgrade_high' : 'gate_upgrade_basic';
+        // 客户端 GateUpgradeFailedData 权威字段名为 blockedLevel（§10/§19.2）
+        if (!this._checkFeatureOrFail(featureId, 'gate_upgrade_failed', { blockedLevel: targetLv })) break;
         this.survivalEngine._upgradeGate(data && data.secOpenId || '', safeSource);
         break;
       }
@@ -432,19 +489,26 @@ class SurvivalRoom {
       case 'leave_room':
         // 客户端主动离开，忽略（连接断开由 WebSocket close 事件处理）
         break;
-      case 'broadcaster_action':
+      case 'broadcaster_action': {
+        // §36.12 broadcaster_boost 门槛（seasonDay ≥ 2）；失败带 action 子动作名
+        const action = (data && data.action) || '';
+        if (!this._checkFeatureOrFail('broadcaster_boost', 'broadcaster_action_failed', { action })) break;
         this._handleBroadcasterAction(ws, data);
         break;
+      }
 
       // ==================== §24.4 主播事件轮盘 ====================
       // PM 决策（MVP）：_roomCreatorId 未注入 → 放开给任何玩家；
       //   TODO: 等 _roomCreatorId 实现后，这里应先校验 `_isRoomCreator(ws)` 再路由
       case 'broadcaster_roulette_spin': {
+        // §36.12 roulette 门槛（seasonDay ≥ 1 — 默认解锁；仅为保险起见放置）
+        if (!this._checkFeatureOrFail('roulette', 'roulette_spin_failed', {})) break;
         const pid = ws._playerId || '';
         this.survivalEngine.handleBroadcasterRouletteSpin(pid);
         break;
       }
       case 'broadcaster_roulette_apply': {
+        if (!this._checkFeatureOrFail('roulette', 'roulette_spin_failed', {})) break;
         const pid = ws._playerId || '';
         this.survivalEngine.handleBroadcasterRouletteApply(pid);
         break;
@@ -458,6 +522,8 @@ class SurvivalRoom {
 
       // ==================== §38 探险系统 ====================
       case 'expedition_command': {
+        // §36.12 expedition 门槛（seasonDay ≥ 5）
+        if (!this._checkFeatureOrFail('expedition', 'expedition_failed', {})) break;
         // { playerId, action: 'send' | 'recall' }
         const pid    = (data && data.playerId) || ws._playerId || '';
         const action = (data && data.action)   || '';
@@ -475,6 +541,8 @@ class SurvivalRoom {
 
       // ==================== §37 建造系统 ====================
       case 'build_propose': {
+        // §36.12 building 门槛（seasonDay ≥ 3）
+        if (!this._checkFeatureOrFail('building', 'build_propose_failed', {})) break;
         // { buildId, playerName? }
         const pid   = ws._playerId || (data && data.playerId) || '';
         // playerName 从 data.playerName 读；fallback 到引擎内 playerNames[pid] 或 pid
@@ -486,6 +554,12 @@ class SurvivalRoom {
         break;
       }
       case 'build_vote': {
+        // §36.12 building 门槛（锁定期静默丢弃；不推失败，避免"观众投票看到红字"的骚扰）
+        this._refreshVeteranStatus();
+        if (!isFeatureUnlocked(this, 'building')) {
+          console.log(`[SurvivalRoom:${this.roomId}] build_vote silently dropped (feature locked, seasonDay=${this.survivalEngine.seasonMgr && this.survivalEngine.seasonMgr.seasonDay})`);
+          break;
+        }
         // { proposalId, buildId }
         const pid        = ws._playerId || (data && data.playerId) || '';
         const proposalId = (data && data.proposalId) || '';
@@ -498,36 +572,51 @@ class SurvivalRoom {
       // PM 决策（MVP）：_roomCreatorId 鉴权放开，引擎内不校验 isRoomCreator；
       //   未解锁/赛季末等守门一律跳过（策划案 v1.27 MVP 范围）
       case 'shop_list': {
-        // { category: 'A' | 'B' }
-        const pid      = ws._playerId || (data && data.playerId) || '';
-        const category = (data && data.category) || '';
-        this.survivalEngine.handleShopList(pid, category);
+        // §36.12 shop 门槛（seasonDay ≥ 2）；锁定期返回空目录（不推失败，避免客户端商店 Tab 刷红）
+        const pidL = ws._playerId || (data && data.playerId) || '';
+        const catL = (data && data.category) || '';
+        this._refreshVeteranStatus();
+        if (!isFeatureUnlocked(this, 'shop')) {
+          this.broadcast({
+            type: 'shop_list_data',
+            timestamp: Date.now(),
+            data: { playerId: pidL, category: catL, items: [] },
+          });
+          break;
+        }
+        this.survivalEngine.handleShopList(pidL, catL);
         break;
       }
       case 'shop_purchase_prepare': {
+        // §36.12 shop 门槛
+        const itemIdP = (data && data.itemId) || '';
+        if (!this._checkFeatureOrFail('shop', 'shop_purchase_failed', { itemId: itemIdP })) break;
         // { itemId } — 仅主播 HUD B 类 ≥1000 时客户端调用
         const pid    = ws._playerId || (data && data.playerId) || '';
-        const itemId = (data && data.itemId) || '';
-        this.survivalEngine.handleShopPurchasePrepare(pid, itemId);
+        this.survivalEngine.handleShopPurchasePrepare(pid, itemIdP);
         break;
       }
       case 'shop_purchase': {
+        // §36.12 shop 门槛
+        const itemIdPr = (data && data.itemId) || '';
+        if (!this._checkFeatureOrFail('shop', 'shop_purchase_failed', { itemId: itemIdPr })) break;
         // { itemId, pendingId? }
         const pid       = ws._playerId || (data && data.playerId) || '';
         const pname     = (data && data.playerName)
                           || (this.survivalEngine.playerNames && this.survivalEngine.playerNames[pid])
                           || pid;
-        const itemId    = (data && data.itemId)    || '';
         const pendingId = (data && data.pendingId) || null;
-        this.survivalEngine.handleShopPurchase(pid, pname, itemId, pendingId);
+        this.survivalEngine.handleShopPurchase(pid, pname, itemIdPr, pendingId);
         break;
       }
       case 'shop_equip': {
+        // §36.12 shop 门槛
+        const itemIdE = (data && data.itemId) || '';
+        if (!this._checkFeatureOrFail('shop', 'shop_purchase_failed', { itemId: itemIdE })) break;
         // { slot, itemId? } — itemId 缺省/空 = 卸下该槽位
         const pid    = ws._playerId || (data && data.playerId) || '';
         const slot   = (data && data.slot)   || '';
-        const itemId = (data && data.itemId) || '';
-        this.survivalEngine.handleShopEquip(pid, slot, itemId);
+        this.survivalEngine.handleShopEquip(pid, slot, itemIdE);
         break;
       }
 
@@ -576,6 +665,8 @@ class SurvivalRoom {
         break;
       }
       case 'tribe_war_attack': {
+        // §36.12 tribe_war 门槛（seasonDay ≥ 7）
+        if (!this._checkFeatureOrFail('tribe_war', 'tribe_war_attack_failed', {})) break;
         if (!this.tribeWarMgr) break;
         const targetRoomId = data && data.targetRoomId;
         if (!targetRoomId) {
@@ -598,6 +689,8 @@ class SurvivalRoom {
         break;
       }
       case 'tribe_war_retaliate': {
+        // §36.12 tribe_war 门槛（反击也走同一锁）
+        if (!this._checkFeatureOrFail('tribe_war', 'tribe_war_attack_failed', {})) break;
         // 仅防守方(被攻击中)可反击;damageMultiplier 由服务端生成(MVP 默认 1.0,TODO §37 beacon)
         if (!this.tribeWarMgr) break;
         const underAttackSid = this.tribeWarMgr._defenderToSession.get(this.roomId);
@@ -634,6 +727,23 @@ class SurvivalRoom {
    */
   handleDouyinComment(secOpenId, nickname, avatarUrl, content) {
     this.lastActiveAt = Date.now();
+
+    // §36.12 roomCreatorOpenId 兜底绑定：若 addClient 时 ws 未带 _playerId，此处第一次见到 secOpenId 时绑定
+    //   MVP 简化：任一评论者（含主播本人）只要 roomCreatorOpenId 还空就补写；不严格区分"主播/观众"
+    //   当 WS 连接有 _playerId 时 addClient 已写入，此处仅兜底
+    if (!this.roomCreatorOpenId && secOpenId) {
+      this.roomCreatorOpenId = secOpenId;
+      this._refreshVeteranStatus();
+      console.log(`[SurvivalRoom:${this.roomId}] roomCreatorOpenId fallback-bound to ${secOpenId}`);
+    }
+
+    // §36.12 markSeasonAttendance：每次观众评论都记录当前赛季日（适用于老用户判定）
+    //   简化：只对 roomCreatorOpenId 匹配者标记；范围控制到创建者，避免存 200 人的记录爆炸
+    if (this.veteranTracker && this.seasonMgr && secOpenId && secOpenId === this.roomCreatorOpenId) {
+      try {
+        this.veteranTracker.markSeasonAttendance(secOpenId, this.seasonMgr.seasonId, this.seasonMgr.seasonDay);
+      } catch (e) { /* ignore */ }
+    }
 
     const trimmed = (content || '').trim();
     const cmd = parseInt(trimmed);

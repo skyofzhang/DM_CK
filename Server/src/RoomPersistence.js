@@ -34,6 +34,14 @@ class RoomPersistence {
     const engine = room.survivalEngine;
     if (!engine) return;
 
+    // §36.12 v1.27：VeteranTracker 是全局单例；每个房间快照镜像一份局部视图，
+    //   即使跨进程重启，任一房间快照恢复时都能还原"当前玩家曾是老用户"的判定
+    //   （即使 tracker 丢失，per-room 快照仍保留；VeteranTracker.loadSnapshot 合并）
+    let veteranSnapshot = null;
+    if (engine.veteranTracker && typeof engine.veteranTracker.snapshot === 'function') {
+      try { veteranSnapshot = engine.veteranTracker.snapshot(); } catch (e) { /* ignore */ }
+    }
+
     const snapshot = {
       schemaVersion: 3,
       roomId: room.roomId,
@@ -57,6 +65,10 @@ class RoomPersistence {
       _dailyFortressDayGained: engine._dailyFortressDayGained || 0,
       _dailyResetKey: engine._dailyResetKey || 0,
       _dailyCapBlocked: engine._dailyCapBlocked || false,
+
+      // §36.12 老用户豁免（仅增字段；schemaVersion 保持 3）
+      _veteranStreamers:     veteranSnapshot ? veteranSnapshot._veteranStreamers     : [],
+      _maxSeasonDayAttended: veteranSnapshot ? veteranSnapshot._maxSeasonDayAttended : {},
     };
 
     try {

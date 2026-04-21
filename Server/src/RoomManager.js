@@ -27,6 +27,7 @@ class RoomManager {
     this.globalClock     = null;
     this.seasonMgr       = null;
     this.roomPersistence = null;
+    this.veteranTracker  = null;   // §36.12 老用户豁免追踪（全局单例）
 
     // roomId → Room
     this.rooms = new Map();
@@ -67,6 +68,7 @@ class RoomManager {
         globalClock:     this.globalClock,
         seasonMgr:       this.seasonMgr,
         roomPersistence: this.roomPersistence,
+        veteranTracker:  this.veteranTracker,
       });
       room.pauseTimeout = this.pauseTimeout;
       this.rooms.set(roomId, room);
