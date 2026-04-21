@@ -539,6 +539,39 @@ namespace DrscfZ.Survival
             Debug.Log($"[WorkerManager] Worker '{playerId}' 已复活");
         }
 
+        // ==================== §31 怪物多样性 — 个人冻结路由 ====================
+
+        /// <summary>
+        /// 🆕 §31 冰封怪命中 → 服务端推送 worker_frozen，客户端调矿工 Freeze()。
+        /// 不触发 FrozenStatusUI 全局横幅（策划案 §31.3：个人冻结与全局 frozen_all 互不干扰）。
+        /// </summary>
+        public void HandleWorkerFrozen(string playerId, int durationMs)
+        {
+            var worker = FindWorkerByPlayerId(playerId);
+            if (worker == null)
+            {
+                Debug.LogWarning($"[WorkerManager] HandleWorkerFrozen: playerId={playerId} 未找到对应Worker");
+                return;
+            }
+            worker.Freeze(durationMs / 1000f);
+            Debug.Log($"[WorkerManager] Worker '{playerId}' 被冰封怪冻结 {durationMs}ms");
+        }
+
+        /// <summary>
+        /// 🆕 §31 服务端推送 worker_unfrozen（时间到期或 T4 礼物强制解冻）→ 客户端调 Unfreeze()。
+        /// </summary>
+        public void HandleWorkerUnfrozen(string playerId)
+        {
+            var worker = FindWorkerByPlayerId(playerId);
+            if (worker == null)
+            {
+                Debug.LogWarning($"[WorkerManager] HandleWorkerUnfrozen: playerId={playerId} 未找到对应Worker");
+                return;
+            }
+            worker.Unfreeze();
+            Debug.Log($"[WorkerManager] Worker '{playerId}' 冰封已解除");
+        }
+
         // ==================== §30 矿工成长系统 ====================
 
         /// <summary>服务器通知矿工升级（worker_level_up）→ 路由到对应 WorkerController</summary>

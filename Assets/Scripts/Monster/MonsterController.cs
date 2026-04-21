@@ -11,6 +11,18 @@ namespace DrscfZ.Monster
     /// </summary>
     public enum MonsterType { Normal, Elite, Boss }
 
+    /// <summary>🆕 §31 怪物多样性变种枚举（与服务端 variant 字符串一一对应）</summary>
+    public enum MonsterVariant
+    {
+        Normal,    // 标准怪（原行为）
+        Rush,      // 冲锋怪：红色，无视矿工直奔城门
+        Assassin,  // 刺客怪：深紫色，优先最低 HP 矿工
+        Ice,       // 冰封怪：蓝白色，命中有概率冻结（服务端判定，客户端仅染色）
+        Summoner,  // 召唤怪：绿色，死亡时播粒子（迷你怪由服务端重推送 monster_wave）
+        Guard,     // 首领卫兵：暗金色，行为同普通怪
+        Mini       // 迷你怪：尺寸缩小（召唤怪死亡产物，isSummonSpawn=true）
+    }
+
     public class MonsterController : MonoBehaviour
     {
         public enum MonsterState { Spawning, Moving, Attacking, Dead }
@@ -26,6 +38,10 @@ namespace DrscfZ.Monster
         [SerializeField] private MonsterType _monsterType = MonsterType.Normal;
         public MonsterType Type => _monsterType;
         public string MonsterId { get; private set; }
+
+        // 🆕 §31 多样性变种（初始化时写入，运行期只读）
+        [SerializeField] private MonsterVariant _variant = MonsterVariant.Normal;
+        public MonsterVariant Variant => _variant;
 
         [Header("HP 条（World Space Canvas）")]
         [SerializeField] private UnityEngine.UI.Image _hpFillImage;
@@ -53,14 +69,21 @@ namespace DrscfZ.Monster
 
         // ==================== 初始化 ====================
 
-        /// <summary>由 WaveSpawner 调用，注入参数</summary>
+        /// <summary>由 WaveSpawner 调用，注入参数（旧签名委派到 variant 重载，默认 Normal）</summary>
         public void Initialize(int hp, int attack, float speed, Transform gateTarget)
+        {
+            Initialize(hp, attack, speed, gateTarget, MonsterVariant.Normal);
+        }
+
+        /// <summary>🆕 §31 变种重载：额外传入 variant，末尾应用颜色染色 + Rush 锁城门目标</summary>
+        public void Initialize(int hp, int attack, float speed, Transform gateTarget, MonsterVariant variant)
         {
             _maxHp     = hp;
             _currentHp = hp;
             _attack    = attack;
             _moveSpeed = speed;
             _gateTarget = gateTarget;
+            _variant    = variant;
             _animator   = GetComponentInChildren<Animator>();
             _state      = MonsterState.Moving;
 
@@ -106,6 +129,13 @@ namespace DrscfZ.Monster
             if (_hpFillImage != null)
                 _hpFillImage.fillAmount = 1f;
 
+            // 🆕 §31 应用 variant 颜色染色 / 尺寸缩放（在 SMR 查好后再调用）
+            ApplyVariantTint();
+
+            // 🆕 §31 Rush：初始化时直接清掉任何可能的矿工目标，锁定城门
+            if (_variant == MonsterVariant.Rush)
+                _currentWorkerTarget = null;
+
             PlayAnim("Run");
         }
 
@@ -148,9 +178,17 @@ namespace DrscfZ.Monster
 
         private void UpdateMoving()
         {
-            // §30.5 威胁值加权寻目标：阶段越高的矿工越容易被锁定
-            // Boss 目标选择更均衡（threat 权重减半），防止一直盯传奇矿工
-            var workerTarget = FindTargetWorker(Type == MonsterType.Boss);
+            // 🆕 §31 Rush：完全跳过矿工寻路，直接锁城门（符合"冲锋怪无视矿工直奔城门"）
+            Survival.WorkerController workerTarget = null;
+            if (_variant != MonsterVariant.Rush)
+            {
+                // §30.5 威胁值加权寻目标：阶段越高的矿工越容易被锁定
+                // 🆕 §31 Assassin：在威胁值公式之外，优先选 HP 最低的存活矿工
+                if (_variant == MonsterVariant.Assassin)
+                    workerTarget = FindLowestHpWorker();
+                else
+                    workerTarget = FindTargetWorker(Type == MonsterType.Boss);
+            }
 
             Vector3 targetPos;
             if (workerTarget != null)
@@ -161,7 +199,7 @@ namespace DrscfZ.Monster
             else
             {
                 _currentWorkerTarget = null;
-                // 无存活矿工时攻击城门
+                // 无存活矿工（或 Rush 强制走城门）时攻击城门
                 if (_gateTarget != null)
                     targetPos = _gateTarget.position;
                 else
@@ -217,6 +255,30 @@ namespace DrscfZ.Monster
         private Survival.WorkerController FindNearestAliveWorker()
         {
             return FindTargetWorker(Type == MonsterType.Boss);
+        }
+
+        /// <summary>
+        /// 🆕 §31 Assassin 怪物目标选择：存活矿工按 HP 升序取第一个。
+        /// 使用 WorkerController.CurrentHpRatio（0~1）作为 HP 排序键——服务端
+        /// worker_hp_update 推送后由 WorkerController.SetHp() 写入。
+        /// 若 _activeWorkers 为空 → 返回 null（UpdateMoving 会 fallback 到城门）。
+        /// </summary>
+        private Survival.WorkerController FindLowestHpWorker()
+        {
+            var mgr     = Survival.WorkerManager.Instance;
+            var workers = mgr != null
+                ? (System.Collections.Generic.IReadOnlyList<Survival.WorkerController>)mgr.ActiveWorkers
+                : System.Array.Empty<Survival.WorkerController>();
+
+            Survival.WorkerController best = null;
+            float bestRatio = float.MaxValue;
+            foreach (var w in workers)
+            {
+                if (w == null || !w.gameObject.activeInHierarchy || w.IsDead) continue;
+                float r = w.CurrentHpRatio;
+                if (r < bestRatio) { bestRatio = r; best = w; }
+            }
+            return best;
         }
 
         private void UpdateAttacking()
@@ -386,6 +448,52 @@ namespace DrscfZ.Monster
         private static readonly int PropBaseColor = Shader.PropertyToID("_BaseColor");
         private static readonly int PropColor     = Shader.PropertyToID("_Color");
 
+        // 🆕 §31 变种染色表（与 MonsterVariant 枚举同顺序；Normal 不染色）
+        // Mini 不染色仅缩放 scale；因此颜色数组长度 = 枚举数 - 2（排除 Normal 和 Mini）
+        // 表中存储 Rush/Assassin/Ice/Summoner/Guard 的 _BaseColor 值
+        private static readonly System.Collections.Generic.Dictionary<MonsterVariant, Color> VariantTints
+            = new System.Collections.Generic.Dictionary<MonsterVariant, Color>
+        {
+            { MonsterVariant.Rush,     new Color(1.30f, 0.50f, 0.50f, 1f) },  // 红色色调
+            { MonsterVariant.Assassin, new Color(0.60f, 0.40f, 0.80f, 1f) },  // 深紫色调
+            { MonsterVariant.Ice,      new Color(0.70f, 0.90f, 1.20f, 1f) },  // 蓝白色调
+            { MonsterVariant.Summoner, new Color(0.50f, 1.20f, 0.70f, 1f) },  // 绿色发光
+            { MonsterVariant.Guard,    new Color(1.10f, 0.95f, 0.55f, 1f) },  // 暗金色调
+        };
+
+        /// <summary>
+        /// 🆕 §31 应用 variant 颜色/尺寸。在 Initialize 末尾调用，使用 MaterialPropertyBlock
+        /// 覆盖所有 SkinnedMeshRenderer 的 _BaseColor/_Color（不新建材质实例，与 HitFlash 同机制）。
+        /// Mini 变种：保持原色 + localScale × 0.6（服务端已标 isSummonSpawn=true）。
+        /// Normal 变种：不做任何处理。
+        /// </summary>
+        private void ApplyVariantTint()
+        {
+            // Mini：仅缩放（不改颜色）——由 spawner 创建时或此处统一处理均可；此处兜底防 spawner 遗漏
+            if (_variant == MonsterVariant.Mini)
+            {
+                transform.localScale *= 0.6f;
+                return;
+            }
+
+            // Normal：无需染色
+            if (!VariantTints.TryGetValue(_variant, out var tint)) return;
+
+            // 遍历所有 SMR（含 LOD Group 下的多个 SMR，GetComponentsInChildren 会一并取到）
+            var renderers = GetComponentsInChildren<SkinnedMeshRenderer>(true);
+            if (renderers == null || renderers.Length == 0) return;
+
+            var mpb = new MaterialPropertyBlock();
+            foreach (var r in renderers)
+            {
+                if (r == null) continue;
+                r.GetPropertyBlock(mpb);
+                mpb.SetColor(PropBaseColor, tint);  // URP Lit
+                mpb.SetColor(PropColor,     tint);  // Built-in Standard 兜底
+                r.SetPropertyBlock(mpb);
+            }
+        }
+
         private IEnumerator HitFlash()
         {
             var renderers = GetComponentsInChildren<Renderer>();
@@ -426,8 +534,58 @@ namespace DrscfZ.Monster
         {
             _state = MonsterState.Dead;
             PlayAnim("Sit");   // 所有kuanggong controller的死亡状态名是"Sit"（Sitting Dazed动画）
+
+            // 🆕 §31 Summoner 死亡：绿色爆炸占位（粒子 Prefab 未就绪 → 用 Light 点亮 0.3s）
+            if (_variant == MonsterVariant.Summoner)
+                SpawnSummonerDeathFx(transform.position + Vector3.up * 0.5f);
+
             OnDead?.Invoke(this);
             Destroy(gameObject, 2f);
+        }
+
+        /// <summary>🆕 §31 Summoner 死亡视觉占位：在死亡位置生成 Light + 简单粒子，0.3s 后销毁。
+        /// 迷你怪由服务端 monster_wave { isSummonSpawn: true } 重推送，客户端不在此处生成。</summary>
+        private static void SpawnSummonerDeathFx(Vector3 worldPos)
+        {
+            var go = new GameObject("SummonerDeathFx");
+            go.transform.position = worldPos;
+
+            // 绿光 Light（点光源，0.3s 淡出）
+            var light = go.AddComponent<Light>();
+            light.type       = LightType.Point;
+            light.color      = new Color(0.3f, 1.0f, 0.4f);
+            light.intensity  = 3f;
+            light.range      = 4f;
+
+            // 简单粒子（绿色向上迸发）
+            var ps   = go.AddComponent<ParticleSystem>();
+            var main = ps.main;
+            main.startLifetime = 0.6f;
+            main.startSpeed    = new ParticleSystem.MinMaxCurve(2f, 5f);
+            main.startSize     = new ParticleSystem.MinMaxCurve(0.2f, 0.5f);
+            main.startColor    = new Color(0.3f, 1.0f, 0.4f);
+            main.maxParticles  = 30;
+            main.loop          = false;
+
+            var shape      = ps.shape;
+            shape.shapeType = ParticleSystemShapeType.Sphere;
+            shape.radius    = 0.3f;
+
+            var emission = ps.emission;
+            emission.SetBursts(new ParticleSystem.Burst[]
+            {
+                new ParticleSystem.Burst(0f, 25)
+            });
+            emission.enabled = true;
+
+            // 材质兜底：URP Particles/Unlit，防止紫色
+            var psr = go.GetComponent<ParticleSystemRenderer>();
+            if (psr != null)
+                psr.material = new Material(Shader.Find("Universal Render Pipeline/Particles/Unlit")
+                                         ?? Shader.Find("Sprites/Default"));
+
+            ps.Play();
+            Object.Destroy(go, 1.0f);
         }
 
         // ==================== 动画 ====================

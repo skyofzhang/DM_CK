@@ -63,15 +63,31 @@ namespace DrscfZ.Survival
         public string variant = "normal";
     }
 
-    /// <summary>怪物波次信息</summary>
+    /// <summary>单只怪物元数据（🆕 §31 多样性系统：monster_wave.monsters[] 数组元素）。
+    /// 字段顺序严格对齐服务端广播（monsterId/type/variant/hp/speed）。</summary>
+    [Serializable]
+    public class MonsterSpawnInfo
+    {
+        public string monsterId;  // 唯一 ID（服务端生成）
+        public string type;       // "normal" | "elite" | "boss"
+        public string variant;    // "normal" | "rush" | "assassin" | "ice" | "summoner" | "guard" | "mini"
+        public int    hp;         // 初始 HP（由服务端按 variant 乘系数算好）
+        public float  speed;      // 🆕 §31 变种速度（服务端 cfg.normal.spd × VARIANT_SPEED_MULT；0 → 客户端 fallback）
+    }
+
+    /// <summary>怪物波次信息（🆕 §31 扩展 monsters[] / isSummonSpawn；旧字段保留向下兼容）</summary>
     [Serializable]
     public class MonsterWaveData
     {
         public int    waveIndex;  // 第几批（0-based）
         public int    day;
-        public string monsterId;  // e.g. "X_guai01"
-        public int    count;
-        public string spawnSide;  // "left" | "right" | "top" | "all"
+        public string monsterId;  // e.g. "X_guai01"（旧协议字段，兼容保留）
+        public int    count;      // 旧协议字段，兼容保留；新客户端优先走 monsters[]
+        public string spawnSide;  // "left" | "right" | "top" | "all" | "spawn_at_death"
+
+        // 🆕 §31 多样性系统扩展
+        public MonsterSpawnInfo[] monsters;   // 新字段：每只怪物独立携带 variant；为 null/空 → 走旧 count 路径
+        public bool               isSummonSpawn;  // 召唤怪死亡触发的迷你怪生成（spawn 位置从屏幕中心偏移）
     }
 
     /// <summary>玩家工作指令（服务器转发评论）</summary>
@@ -228,6 +244,33 @@ namespace DrscfZ.Survival
         public int      radius;            // frost_pulse 时的视觉半径
         public int      damage;            // frost_pulse 时的冲击波单次伤害
         public int      freezeMs;          // frost_pulse 时的冻结时长
+    }
+
+    // ==================== §31 怪物多样性系统（🆕 v1.27）====================
+
+    /// <summary>矿工被冰封怪冻结（type=worker_frozen）
+    /// 与现有 TriggerFrozen()（固定 30s 全局）不同：个人动态时长，不触发 FrozenStatusUI 全局横幅。</summary>
+    [Serializable]
+    public class WorkerFrozenData
+    {
+        public string playerId;
+        public int    duration;   // 冻结时长，毫秒（通常 5000）
+    }
+
+    /// <summary>矿工冰封解除（type=worker_unfrozen）
+    /// 两种触发：冻结时间到期自动解冻 / T4 能量电池礼物强制解冻。</summary>
+    [Serializable]
+    public class WorkerUnfrozenData
+    {
+        public string playerId;
+    }
+
+    /// <summary>Boss 暴走通知（type=boss_enraged）
+    /// 首领卫兵全部死亡 → Boss ATK × 1.3，服务端重算后广播新 atk 值。</summary>
+    [Serializable]
+    public class BossEnragedData
+    {
+        public int newAtk;
     }
 
     // ==================== 矿工HP系统 ====================

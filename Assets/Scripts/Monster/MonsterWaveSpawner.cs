@@ -85,10 +85,21 @@ namespace DrscfZ.Monster
 
         // ==================== 服务器消息驱动 ====================
 
-        /// <summary>服务器推送 monster_wave → 生成怪物</summary>
+        /// <summary>服务器推送 monster_wave → 生成怪物。
+        /// 🆕 §31 多样性系统：优先走 monsters[] 数组（含 variant），否则回落到旧 count 路径。</summary>
         public void SpawnWave(Survival.MonsterWaveData data)
         {
+            if (data == null) return;
             _currentDay = data.day;
+
+            // 🆕 §31 新路径：data.monsters[] 非空 → 逐只按 variant 生成
+            if (data.monsters != null && data.monsters.Length > 0)
+            {
+                StartCoroutine(SpawnWithVariants(data));
+                return;
+            }
+
+            // 旧路径：仅按 count 生成 normal 怪（向后兼容）
             var config = new WaveConfig
             {
                 monsterId  = data.monsterId ?? "X_guai01",
@@ -99,6 +110,121 @@ namespace DrscfZ.Monster
                 maxCount   = data.count
             };
             StartCoroutine(SpawnBatch(config, data.waveIndex));
+        }
+
+        /// <summary>🆕 §31 变种怪生成协程：逐只解析 MonsterSpawnInfo，传入 variant。
+        /// isSummonSpawn=true 时：spawn 位置从屏幕中心随机偏移（迷你怪从死亡怪位置冒出的视觉占位）。</summary>
+        private IEnumerator SpawnWithVariants(Survival.MonsterWaveData data)
+        {
+            OnWaveStarted?.Invoke(data.waveIndex);
+
+            bool isSummon  = data.isSummonSpawn;
+            string side    = data.spawnSide ?? "all";
+
+            foreach (var info in data.monsters)
+            {
+                // 同屏上限控制（与 SpawnBatch 一致）
+                while (_activeMonsters.Count >= _maxAliveMonsters)
+                    yield return new WaitForSeconds(0.5f);
+
+                // 变种解析：字符串 → 枚举（失败退回 Normal）
+                MonsterVariant variant = ParseVariant(info != null ? info.variant : null);
+
+                // spawn 位置：isSummonSpawn 时走地图中心附近随机；否则按 spawnSide
+                Vector3 spawnPos = isSummon ? GetSummonSpawnPos() : GetSpawnPos(side);
+
+                SpawnOneVariantMonster(info, variant, spawnPos);
+                yield return new WaitForSeconds(0.05f + UnityEngine.Random.Range(0f, 0.05f));
+            }
+        }
+
+        /// <summary>variant 字符串 → 枚举（大小写不敏感，未知值 → Normal）</summary>
+        private static MonsterVariant ParseVariant(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return MonsterVariant.Normal;
+            switch (s.ToLowerInvariant())
+            {
+                case "rush":     return MonsterVariant.Rush;
+                case "assassin": return MonsterVariant.Assassin;
+                case "ice":      return MonsterVariant.Ice;
+                case "summoner": return MonsterVariant.Summoner;
+                case "guard":    return MonsterVariant.Guard;
+                case "mini":     return MonsterVariant.Mini;
+                default:         return MonsterVariant.Normal;
+            }
+        }
+
+        /// <summary>🆕 §31 isSummonSpawn spawn 位置：地图中心区域（X=±3, Z=10±3）随机偏移。
+        /// TODO: 理想做法是服务端提供召唤怪死亡位置（monsterId→pos 映射）；MVP 按中心硬编码，
+        /// 如与实际场景偏差较大，PM 合并后在 main repo 内手测调整（Scene/Camera 视角校正）。</summary>
+        private static Vector3 GetSummonSpawnPos()
+        {
+            return new Vector3(
+                UnityEngine.Random.Range(-3f, 3f),
+                0f,
+                UnityEngine.Random.Range(7f, 13f));
+        }
+
+        /// <summary>🆕 §31 按 variant 生成单只怪物（与 SpawnOneMonster 同基础流程，差异在 Initialize 传入 variant/hp）。</summary>
+        private void SpawnOneVariantMonster(Survival.MonsterSpawnInfo info, MonsterVariant variant, Vector3 spawnPos)
+        {
+            GameObject go;
+            // 随机选择两套怪物外观（Guard 可复用 monsterPrefab/monsterPrefab2，美术后续可替换）
+            var prefabToUse = (_monsterPrefab2 != null && UnityEngine.Random.value > 0.5f)
+                              ? _monsterPrefab2 : _monsterPrefab;
+            if (prefabToUse != null)
+            {
+                go = Instantiate(prefabToUse, spawnPos, Quaternion.identity);
+                float s = Mathf.Max(0.001f, _monsterScale);
+                go.transform.localScale = Vector3.one * s;
+            }
+            else
+            {
+                go = new GameObject("VariantMonster_Placeholder");
+                go.transform.position = spawnPos;
+                Debug.LogWarning("[WaveSpawner] Monster prefab missing! Variant monster uses invisible placeholder.");
+            }
+
+            // ID：优先用 info.monsterId，否则 fallback
+            string monsterId = (info != null && !string.IsNullOrEmpty(info.monsterId))
+                ? info.monsterId
+                : $"variant_{variant}_{_activeMonsters.Count}_{UnityEngine.Random.Range(1000, 9999)}";
+            go.name = $"Monster_{variant}_{monsterId}";
+
+            var ctrl = go.GetComponent<MonsterController>() ?? go.AddComponent<MonsterController>();
+
+            // HP：优先用服务端下发；否则按当前天数公式（与普通怪一致）
+            int hp = (info != null && info.hp > 0)
+                ? info.hp
+                : Mathf.RoundToInt(20f + _currentDay * 8f);
+            int   atk = Mathf.RoundToInt(3f + _currentDay * 1.5f);
+            // 🆕 §31 速度：优先用服务端下发（已按 variant 乘倍率 Rush×1.6 / Ice×0.85 / Summoner×0.9）；
+            //     info.speed<=0 时回退到旧公式（旧协议兼容）
+            float spd = (info != null && info.speed > 0f)
+                ? info.speed
+                : 1.8f + _currentDay * 0.1f;
+
+            // 🆕 §31 走 variant 重载（内部会 ApplyVariantTint + Rush 锁城门）
+            ctrl.Initialize(hp, atk, spd, _cityGateTarget, variant);
+
+            // MonsterType：服务端下发的 type 字符串 → 枚举
+            MonsterType monsterType = ParseMonsterType(info != null ? info.type : null);
+            ctrl.SetMonsterIdAndType(monsterId, monsterType);
+
+            ctrl.OnDead += HandleMonsterDead;
+            _activeMonsters.Add(ctrl);
+        }
+
+        /// <summary>type 字符串 → MonsterType 枚举（未知 → Normal）</summary>
+        private static MonsterType ParseMonsterType(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return MonsterType.Normal;
+            switch (s.ToLowerInvariant())
+            {
+                case "elite": return MonsterType.Elite;
+                case "boss":  return MonsterType.Boss;
+                default:      return MonsterType.Normal;
+            }
         }
 
         // ==================== 本地驱动（测试/演示用）====================

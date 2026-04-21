@@ -320,6 +320,24 @@ namespace DrscfZ.Survival
                         WorkerManager.Instance?.HandleWorkerHpUpdate(hpu.workers);
                     break;
 
+                // ----- §31 怪物多样性 个人冻结 / Boss 暴走 -----
+                case "worker_frozen":
+                    var wf = JsonUtility.FromJson<WorkerFrozenData>(dataJson);
+                    if (wf != null)
+                        WorkerManager.Instance?.HandleWorkerFrozen(wf.playerId, wf.duration);
+                    break;
+
+                case "worker_unfrozen":
+                    var wuf = JsonUtility.FromJson<WorkerUnfrozenData>(dataJson);
+                    if (wuf != null)
+                        WorkerManager.Instance?.HandleWorkerUnfrozen(wuf.playerId);
+                    break;
+
+                case "boss_enraged":
+                    var be = JsonUtility.FromJson<BossEnragedData>(dataJson);
+                    if (be != null) HandleBossEnraged(be);
+                    break;
+
                 // ----- 玩家工作指令（评论触发）-----
                 case "work_command":
                     var wc = JsonUtility.FromJson<WorkCommandData>(dataJson);
@@ -1522,6 +1540,27 @@ namespace DrscfZ.Survival
             SurvivalCameraController.Shake(0.3f, 0.8f);
             Systems.AudioManager.Instance?.PlaySFX("sfx_gate_alarm");
             Debug.Log("[SurvivalGM] BOSS出现！全员备战！");
+        }
+
+        // ==================== §31 怪物多样性 — Boss 暴走 ====================
+
+        /// <summary>
+        /// 🆕 §31 首领卫兵全部死亡 → Boss ATK × 1.3，服务端广播 boss_enraged。
+        /// 客户端表现：跑马灯公告 + 摄像机震动 + 弹幕提示。
+        /// </summary>
+        private void HandleBossEnraged(BossEnragedData data)
+        {
+            string msg = $"首领卫兵阵亡！Boss 进入暴走状态！(ATK={data.newAtk})";
+
+            // 跑马灯公告（服务器驱动的公共消息）
+            UI.HorizontalMarqueeUI.Instance?.AddMessage("Boss 暴走", null, msg);
+            // 弹幕面板提示（通过 OnPlayerActivityMessage 广播，BarrageMessageUI 自动渲染）
+            OnPlayerActivityMessage?.Invoke(msg);
+
+            // 摄像机震动（中等强度）
+            SurvivalCameraController.Shake(0.3f, 0.5f);
+
+            Debug.Log($"[SurvivalGM] Boss enraged! newAtk={data.newAtk}");
         }
 
         // ==================== 助威模式 §33（🆕 v1.27）====================
