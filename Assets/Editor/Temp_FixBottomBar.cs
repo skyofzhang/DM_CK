@@ -178,7 +178,7 @@ public class Temp_FixBottomBar
         }
         if (FindRT("Canvas/BottomBar/BtnFreeze") == null)
         {
-            CreateBtn("BtnFreeze", "❄ 冻结", 298f, -30f, 200f, 60f,
+            CreateBtn("BtnFreeze", "冻结", 298f, -30f, 200f, 60f,
                 new Color(0.12f, 0.23f, 0.37f, 1f), new Color(0.49f, 0.78f, 0.89f));
             sb.AppendLine("  BtnFreeze 新建: pos(298,-30) 200×60");
         }
@@ -187,7 +187,7 @@ public class Temp_FixBottomBar
         // Row2b y = -106; x=-410(200)
         if (FindRT("Canvas/BottomBar/BtnMonster") == null)
         {
-            CreateBtn("BtnMonster", "💥 怪物", -410f, -106f, 200f, 60f,
+            CreateBtn("BtnMonster", "怪物", -410f, -106f, 200f, 60f,
                 new Color(0.27f, 0.04f, 0.04f, 1f), new Color(0.99f, 0.64f, 0.64f));
             sb.AppendLine("  BtnMonster 新建: pos(-410,-106) 200×60");
         }

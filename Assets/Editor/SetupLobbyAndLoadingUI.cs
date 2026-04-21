@@ -40,13 +40,13 @@ namespace DrscfZ.Editor
             var statusTxt   = CreateTMPText(lobbyPanel.transform, "StatusText",    "等待主播开始游戏...",
                                             new Vector2(0, 70),   new Vector2(500, 40),  20, new Color(0.8f, 0.8f, 0.8f));
 
-            var startBtn    = CreateButton(lobbyPanel.transform, "StartBtn",    "▶ 开始玩法",
+            var startBtn    = CreateButton(lobbyPanel.transform, "StartBtn",    "开始玩法",
                                            new Vector2(0, 0),     new Vector2(260, 64),  28, Color.white,
                                            new Color(0.2f, 0.6f, 1f));
-            var rankingBtn  = CreateButton(lobbyPanel.transform, "RankingBtn",  "🏆 排行榜",
+            var rankingBtn  = CreateButton(lobbyPanel.transform, "RankingBtn",  "排行榜",
                                            new Vector2(-140, -80), new Vector2(220, 50), 22, Color.white,
                                            new Color(0.15f, 0.4f, 0.7f));
-            var settingsBtn = CreateButton(lobbyPanel.transform, "SettingsBtn", "⚙ 设置",
+            var settingsBtn = CreateButton(lobbyPanel.transform, "SettingsBtn", "设置",
                                            new Vector2(140, -80),  new Vector2(220, 50), 22, Color.white,
                                            new Color(0.25f, 0.25f, 0.35f));
 

@@ -140,7 +140,7 @@ namespace DrscfZ.Editor
             var ftRect = frozenTextGo.GetComponent<RectTransform>();
             ftRect.sizeDelta = new Vector2(480f, 0f);
             var ftTmp = frozenTextGo.AddComponent<TextMeshProUGUI>();
-            ftTmp.text      = "❄  全体守护者已冻结";
+            ftTmp.text      = "全体守护者已冻结";
             ftTmp.fontSize  = 22f;
             ftTmp.color     = new Color(0.7f, 0.9f, 1f, 1f); // 冰蓝
             ftTmp.alignment = TextAlignmentOptions.Center;

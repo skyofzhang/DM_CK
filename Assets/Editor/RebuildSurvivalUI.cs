@@ -90,11 +90,11 @@ public class RebuildSurvivalUI
             new Vector2(0, 2), new Vector2(-10, 0));
 
         // 食物/煤炭/矿石/炉温/城门HP 5个图标
-        CreateResourceIcon(resRow.transform, "FoodIcon",  "🍖", "100", new Color(0.2f, 0.9f, 0.3f));
-        CreateResourceIcon(resRow.transform, "CoalIcon",  "🪨", "50",  new Color(0.7f, 0.7f, 0.7f));
-        CreateResourceIcon(resRow.transform, "OreIcon",   "💎", "30",  new Color(0.6f, 0.85f, 1f));
-        CreateResourceIcon(resRow.transform, "HeatIcon",  "🔥", "20°", new Color(1f, 0.5f, 0.1f));
-        CreateResourceIcon(resRow.transform, "GateIcon",  "🏰", "HP",  new Color(0.9f, 0.3f, 0.3f));
+        CreateResourceIcon(resRow.transform, "FoodIcon",  "粮", "100", new Color(0.2f, 0.9f, 0.3f));
+        CreateResourceIcon(resRow.transform, "CoalIcon",  "煤", "50",  new Color(0.7f, 0.7f, 0.7f));
+        CreateResourceIcon(resRow.transform, "OreIcon",   "矿", "30",  new Color(0.6f, 0.85f, 1f));
+        CreateResourceIcon(resRow.transform, "HeatIcon",  "热", "20°", new Color(1f, 0.5f, 0.1f));
+        CreateResourceIcon(resRow.transform, "GateIcon",  "堡", "HP",  new Color(0.9f, 0.3f, 0.3f));
 
         // 水平布局
         var hlg = resRow.GetComponent<HorizontalLayoutGroup>() ?? resRow.AddComponent<HorizontalLayoutGroup>();

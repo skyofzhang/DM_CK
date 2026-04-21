@@ -235,7 +235,7 @@ namespace DrscfZ.Editor
             rt.sizeDelta        = new Vector2(0f, 50f);
 
             var tmp = go.AddComponent<TextMeshProUGUI>();
-            tmp.text      = "⚙  设置";
+            tmp.text      = "设置";
             tmp.fontSize  = 28f;
             tmp.color     = Color.white;
             tmp.alignment = TextAlignmentOptions.Center;

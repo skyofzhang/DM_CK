@@ -335,7 +335,7 @@ public class RebuildPortraitPanels
             SetRT(btnLeader, 0.5f,1f, 0.5f,1f, 0.5f,0.5f, -175f,-175f, 310f,76f);
             var img = EnsureImage(btnLeader);
             img.color = new Color(0.043f,0.137f,0.298f,0.90f);
-            StyleBtnLabel(btnLeader, "🏆 排行榜", 26f, new Color(0.72f,0.90f,1.0f));
+            StyleBtnLabel(btnLeader, "排行榜", 26f, new Color(0.72f,0.90f,1.0f));
             EditorUtility.SetDirty(btnLeader);
         }
 
@@ -346,7 +346,7 @@ public class RebuildPortraitPanels
             SetRT(btnGift, 0.5f,1f, 0.5f,1f, 0.5f,0.5f, 175f,-175f, 310f,76f);
             var img = EnsureImage(btnGift);
             img.color = new Color(0.043f,0.137f,0.298f,0.90f);
-            StyleBtnLabel(btnGift, "🎁 礼物说明", 26f, new Color(0.72f,0.90f,1.0f));
+            StyleBtnLabel(btnGift, "礼物说明", 26f, new Color(0.72f,0.90f,1.0f));
             EditorUtility.SetDirty(btnGift);
         }
 
@@ -357,7 +357,7 @@ public class RebuildPortraitPanels
             SetRT(btnRule, 0.5f,1f, 0.5f,1f, 0.5f,0.5f, -175f,-275f, 310f,76f);
             var img = EnsureImage(btnRule);
             img.color = new Color(0.043f,0.137f,0.298f,0.90f);
-            StyleBtnLabel(btnRule, "📋 游戏规则", 26f, new Color(0.72f,0.90f,1.0f));
+            StyleBtnLabel(btnRule, "游戏规则", 26f, new Color(0.72f,0.90f,1.0f));
             EditorUtility.SetDirty(btnRule);
         }
 
@@ -368,7 +368,7 @@ public class RebuildPortraitPanels
             SetRT(btnSticker, 0.5f,1f, 0.5f,1f, 0.5f,0.5f, 175f,-275f, 310f,76f);
             var img = EnsureImage(btnSticker);
             img.color = new Color(0.043f,0.137f,0.298f,0.90f);
-            StyleBtnLabel(btnSticker, "⚙️ 贴纸设置", 26f, new Color(0.72f,0.90f,1.0f));
+            StyleBtnLabel(btnSticker, "贴纸设置", 26f, new Color(0.72f,0.90f,1.0f));
             EditorUtility.SetDirty(btnSticker);
         }
 

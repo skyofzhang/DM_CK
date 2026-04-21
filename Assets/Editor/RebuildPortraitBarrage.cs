@@ -266,12 +266,12 @@ public class RebuildPortraitBarrage
     {
         var msgs = new (string text, Color color)[]
         {
-            ("❄️ <color=#FCD34D>极地生存法则</color> 等待开始...",             new Color(0.99f, 0.84f, 0.30f)),
-            ("📢 发送 <color=#60A5FA>1</color> 加入冰蓝队 | 发送 <color=#F87171>2</color> 加入冰红队",
+            ("<color=#FCD34D>极地生存法则</color> 等待开始...",                new Color(0.99f, 0.84f, 0.30f)),
+            ("发送 <color=#60A5FA>1</color> 加入冰蓝队 | 发送 <color=#F87171>2</color> 加入冰红队",
                                                                                new Color(0.72f, 0.90f, 1.00f)),
-            ("🎁 送礼物推动雪球，帮阵营赢得胜利！",                             new Color(0.72f, 0.90f, 1.00f)),
-            ("⚔️ 雪球碰到边界即判定获胜，加油！",                               new Color(0.85f, 0.93f, 1.00f)),
-            ("🏆 最高贡献者将显示在两侧排行榜中",                               new Color(0.85f, 0.93f, 1.00f)),
+            ("送礼物推动雪球，帮阵营赢得胜利！",                                new Color(0.72f, 0.90f, 1.00f)),
+            ("雪球碰到边界即判定获胜，加油！",                                  new Color(0.85f, 0.93f, 1.00f)),
+            ("最高贡献者将显示在两侧排行榜中",                                  new Color(0.85f, 0.93f, 1.00f)),
         };
 
         foreach (var (text, color) in msgs)

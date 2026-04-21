@@ -316,11 +316,11 @@ public class SetupPhase2Scene
         panelBg.color = new Color(0f, 0f, 0f, 0.6f);
         panelRoot.SetActive(false); // hidden by default
 
-        // BoostButton (⚡紧急加速)
-        var boostBtn = CreateCircleButton(panelRoot.transform, "BoostButton", "⚡", new Vector2(0f, 60f));
+        // BoostButton (紧急加速)
+        var boostBtn = CreateCircleButton(panelRoot.transform, "BoostButton", "加", new Vector2(0f, 60f));
 
-        // EventButton (🌊触发事件)
-        var eventBtn = CreateCircleButton(panelRoot.transform, "EventButton", "🌊", new Vector2(0f, -60f));
+        // EventButton (触发事件)
+        var eventBtn = CreateCircleButton(panelRoot.transform, "EventButton", "浪", new Vector2(0f, -60f));
 
         // Wire BroadcasterPanel SerializedFields
         var bp = controllerGO.GetComponent<BroadcasterPanel>();

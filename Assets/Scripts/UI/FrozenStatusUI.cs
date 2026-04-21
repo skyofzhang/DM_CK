@@ -93,7 +93,7 @@ namespace DrscfZ.UI
 
             // 设置主文字
             if (_frozenText != null)
-                _frozenText.text = "❄  全体守护者已冻结";
+                _frozenText.text = "全体守护者已冻结";
 
             _countdownCoroutine = StartCoroutine(CountdownCoroutine(duration));
         }
@@ -116,9 +116,9 @@ namespace DrscfZ.UI
                 yield return null;
             }
 
-            // 冻结结束：文字变为"❄ 解冻完成！"，0.5s 后淡出
+            // 冻结结束：文字变为"解冻完成！"，0.5s 后淡出
             if (_frozenText != null)
-                _frozenText.text = "❄  解冻完成！";
+                _frozenText.text = "解冻完成！";
             if (_countdownText != null)
                 _countdownText.text = "";
 
