@@ -648,6 +648,14 @@ namespace DrscfZ.Survival
             w.ShowBubbleText(text, durationSec);
         }
 
+        /// <summary>🆕 §34A B8 仙女棒视觉系统：按 playerId 查找并返回 WorkerController（可能为 null）。
+        /// 供 FairyWandFloatingText / FairyWandStardustTrail / FairyWandAccumUI 定位发送者 Worker 使用。</summary>
+        public WorkerController GetWorkerByPlayerId(string playerId)
+        {
+            if (string.IsNullOrEmpty(playerId)) return null;
+            return FindWorkerByPlayerId(playerId);
+        }
+
         /// <summary>触发全体Worker金色光晕（666弹幕/主播加速）</summary>
         public void ActivateAllWorkersGlow(float duration = 3f)
         {

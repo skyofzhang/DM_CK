@@ -828,6 +828,13 @@ class SurvivalGameEngine {
     //   missed: 双路都未命中，忽略
     //   _giftMatchStatsLogAt: 上次日志输出 tickCounter
     this._giftMatchStats = { exactHit: 0, fallbackHit: 0, missed: 0 };
+
+    // B8 仙女棒满级广播去重（策划案 §34.3 B8，第 5147–5156 行）
+    //   _fairyWandMaxedBroadcasted: 本局已广播过 fairy_wand_maxed 的 playerId 集合
+    //   规则：_playerEfficiencyBonus[pid] 从 <1.0 跨到 1.0（+100%）时广播一次 fairy_wand_maxed
+    //         每位玩家每局仅广播一次（避免多次 set 到 1.0 的重复广播；reset 清空）
+    //   注：bonus 字段复用现有 _playerEfficiencyBonus（0~1.0），语义等价于"fairyWandBonus 0~100%"
+    this._fairyWandMaxedBroadcasted = new Set();
     this._giftMatchStatsLogAt = 0;
 
     // B10 day_preview + efficiency_race
@@ -1199,6 +1206,8 @@ class SurvivalGameEngine {
     // B6 礼物 douyin_id 双路匹配统计
     this._giftMatchStats      = { exactHit: 0, fallbackHit: 0, missed: 0 };
     this._giftMatchStatsLogAt = 0;
+    // B8 仙女棒满级广播去重（每局重置，新局允许重新达成满级广播）
+    this._fairyWandMaxedBroadcasted = new Set();
     // B10 day_preview + efficiency_race
     this._dayStats                    = null;
     this._lastEfficiencyRaceAt        = 0;
@@ -1482,12 +1491,20 @@ class SurvivalGameEngine {
       const cmdNames  = ['', 'food', 'coal', 'ore', 'heat'];
       const cmdLabels = ['', '采集食物', '挖掘煤炭', '开采矿石', '添柴升温'];
 
+      // 工作效果：小幅增加对应资源（服务器计算，不依赖客户端确认）
+      // ⚠️ 先执行 work effect 再广播，确保 playerStats.contribution 反映本次 +1 后的最新值
+      this._applyWorkEffect(cmd, playerId);
+
+      // §34.3 B9 playerStats（策划案 5158-5170）：work_command 广播附带触发者贡献快照
+      //   客户端 PersonalContribUI.cs 按 playerId 过滤自身 → 实时刷新贡献/排名/仙女棒加成
+      //   匿名/助威者场景下 playerId 为空或未注册：返回 {0,0,0}，客户端自行判断是否渲染
       const data = {
         playerId,
         playerName,
         avatarUrl: avatarUrl || '',
         commandId: cmd,
         commandName: cmdNames[cmd],
+        playerStats: this._calcPlayerStats(playerId),
       };
 
       // 工作指令 → 转发给客户端，客户端驱动奶牛动画
@@ -1497,8 +1514,6 @@ class SurvivalGameEngine {
         data
       });
 
-      // 工作效果：小幅增加对应资源（服务器计算，不依赖客户端确认）
-      this._applyWorkEffect(cmd, playerId);
       console.log(`[SurvivalEngine] work_command: ${playerName} → ${cmdLabels[cmd]}`);
     } else if (cmd === 6) {
       // 攻击指令（夜晚有效）
@@ -1654,6 +1669,8 @@ class SurvivalGameEngine {
         const prev = this._playerEfficiencyBonus[playerId] || 0;
         this._playerEfficiencyBonus[playerId] = Math.min(1.0, prev + 0.05);
         effects.efficiencyBonus = this._playerEfficiencyBonus[playerId];
+        // §34.3 B8 满级广播（策划案 5156）：prev<1.0 且本次升至 1.0 且未广播过 → 广播一次
+        this._maybeBroadcastFairyWandMaxed(playerId, playerName, prev, this._playerEfficiencyBonus[playerId]);
         break;
       }
 
@@ -1984,6 +2001,9 @@ class SurvivalGameEngine {
       effects.efficiencyBonus = this._playerEfficiencyBonus[targetId];
       effects.redirectTargetId   = targetId;
       effects.redirectTargetName = this.playerNames[targetId] || targetId;
+      // §34.3 B8 满级广播：助威者重路由路径下，满级归属于被加成的守护者 targetId
+      const targetName = this.playerNames[targetId] || targetId;
+      this._maybeBroadcastFairyWandMaxed(targetId, targetName, prev, this._playerEfficiencyBonus[targetId]);
     }
 
     // 贡献与积分池（不走 handleGift 的默认累加路径，避免重复计入）
@@ -5218,6 +5238,56 @@ class SurvivalGameEngine {
   }
 
   // ==================== §34.4 Layer 3 组 C（沉浸体验：E1 / E3 / E4）====================
+
+  /**
+   * §34.3 B9 个人贡献条：计算触发者的 playerStats 快照
+   *   contribution:    本局累计贡献（this.contributions[playerId]）
+   *   rank:            1-based 排名（contributions 降序；同分按键序稳定）；无贡献者 rank=0
+   *   fairyWandBonus:  仙女棒累计加成百分比整数（0–100）—— 复用 _playerEfficiencyBonus*100
+   *
+   * 用于 work_command 广播附带 playerStats（策划案 5168）。客户端按 playerId 过滤自身。
+   * 调用轻量（纯算术 + 一次 O(n log n) 排序），频次等同 work_command（评论驱动，不是 hot loop）。
+   */
+  _calcPlayerStats(playerId) {
+    if (!playerId) return { contribution: 0, rank: 0, fairyWandBonus: 0 };
+    const contribution = Math.max(0, Math.round(this.contributions[playerId] || 0));
+    // rank: 若玩家未注册守护者（如助威者/匿名），rank=0
+    let rank = 0;
+    if (this.contributions[playerId] !== undefined) {
+      const sorted = Object.entries(this.contributions).sort(([, a], [, b]) => b - a);
+      const idx = sorted.findIndex(([pid]) => pid === playerId);
+      rank = idx >= 0 ? idx + 1 : 0;
+    }
+    // fairyWandBonus: 0~100 整数百分比（_playerEfficiencyBonus 0~1.0）
+    const bonus = this._playerEfficiencyBonus?.[playerId] ?? 0;
+    const fairyWandBonus = Math.max(0, Math.min(100, Math.round(bonus * 100)));
+    return { contribution, rank, fairyWandBonus };
+  }
+
+  /**
+   * §34.3 B8 仙女棒满级（策划案 5147-5156）：效率跨过 1.0（+100%）时广播一次
+   *   规则：
+   *     - prev<1.0 且 next>=1.0 视为"本次升级命中满级"（浮点冗余：用 next>=0.999 判断）
+   *     - 每位玩家每局仅广播一次（_fairyWandMaxedBroadcasted Set 去重，reset 清空）
+   *     - 助威者重路由路径下，满级归属被加成的守护者 targetId（由调用方传入）
+   *   广播字段：{ playerId, playerName } —— 客户端根据 playerId 找到 WorkerController 全屏金色闪光 + 跑马灯
+   */
+  _maybeBroadcastFairyWandMaxed(playerId, playerName, prevBonus, nextBonus) {
+    if (!playerId) return;
+    // 浮点冗余：1.0 用 0.999 判；prev 若已 >=1.0 不再广播（此处触发条件是 prev<0.999 && next>=0.999）
+    if (prevBonus >= 0.999) return;
+    if (nextBonus < 0.999) return;
+    if (this._fairyWandMaxedBroadcasted.has(playerId)) return;
+    this._fairyWandMaxedBroadcasted.add(playerId);
+    this._broadcast({
+      type: 'fairy_wand_maxed',
+      data: {
+        playerId,
+        playerName: playerName || this.playerNames[playerId] || playerId,
+      },
+    });
+    console.log(`[SurvivalEngine] fairy_wand_maxed: ${playerName || playerId} (bonus 100%)`);
+  }
 
   /**
    * §34.4 E1 危机感知：计算当前全局张力值（0-100 整数）

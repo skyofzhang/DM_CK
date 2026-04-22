@@ -201,6 +201,11 @@ namespace DrscfZ.Survival
         public string avatarUrl;
         public int    commandId;   // 1=食物 2=煤炭 3=矿石 4=添柴 5=修城门
         public string commandName; // "food"|"coal"|"ore"|"heat"|"repair"
+        // 🆕 §34 Layer 2 组 A B9：服务端在 work_command 广播附带触发者的 playerStats 快照
+        //   服务端 _calcPlayerStats(playerId) 返回 { contribution, rank, fairyWandBonus }；
+        //   未注册守护者（匿名/助威者）时为 {0,0,0}。
+        //   JsonUtility 反序列化缺失字段为 null（整块），客户端据此判断是否触发 PersonalContribUI。
+        public PlayerStatsData playerStats;
     }
 
     /// <summary>礼物效果</summary>
@@ -1257,5 +1262,44 @@ namespace DrscfZ.Survival
         public int                monsterCount;
         public int                bossHp;
         public NightModifierData  nightModifier;   // null → 普通夜晚
+    }
+
+    // ==================== §34 Layer 2 组 A 新手友好（B1/B5/B8/B9，🆕 v1.27） ====================
+    // 协议：work_command_response 扩展 playerStats（B9）；fairy_wand_maxed 独立消息（B8）。
+    // B1 StatusLineBanner / B5 OreRepairFloatingText 不依赖新协议，仅监听既有 resource_update / gift_impact。
+
+    /// <summary>§34 B9 个人贡献条 —— 每次 work_command 响应附带的玩家统计。
+    /// 服务端将 playerStats 嵌入 work_command_response.data；客户端在 case "work_command_response" 中反序列化。
+    /// 无响应消息时（老服务端）前端保持隐藏不展示。
+    /// fairyWandBonus 对应 §34 B8 累计加成（0-100 百分比整数；≥100 时满级）。</summary>
+    [Serializable]
+    public class PlayerStatsData
+    {
+        public int contribution;     // 本局累计贡献
+        public int rank;             // 当前排名（从 1 起）；未上榜服务端按末位发送
+        public int fairyWandBonus;   // 仙女棒累计效率加成（0-100 百分比整数）
+    }
+
+    /// <summary>§34 B9 work_command_response 完整响应体（S→C）。
+    /// 服务端 work_command 后单播给发送者；字段顺序对齐策划案 §34.3。
+    /// 老服务端若未下发本消息，前端不触发 PersonalContribUI，保持隐藏。</summary>
+    [Serializable]
+    public class WorkCommandResponseData
+    {
+        public string          playerId;
+        public string          playerName;
+        public int             commandId;     // 1-6，与 WorkCommandData.commandId 对齐
+        public string          commandName;   // "food"/"coal"/"ore"/"heat"/"repair"/"attack"
+        public PlayerStatsData playerStats;   // 可为 null（兼容老服务端），前端 null 判空跳过
+    }
+
+    /// <summary>§34 B8 仙女棒满级（≥100% fairyWandBonus）的玩家。
+    /// 服务端 fairy_wand 累计跨过 100% 阈值时 unicast 给该玩家，客户端全屏金闪 + 跑马灯。
+    /// 由 SurvivalGameManager 路由到 OnFairyWandMaxed 事件。</summary>
+    [Serializable]
+    public class FairyWandMaxedData
+    {
+        public string playerId;
+        public string playerName;
     }
 }
