@@ -53,10 +53,20 @@ namespace DrscfZ.Editor
             BuildOnboardingBubble(gameUIPanel.transform);
 
             // ---- 4. 找 BroadcasterPanel（§24.5 DecisionHUD 父节点） ----
-            var broadcasterPanel = FindInLoadedScene("BroadcasterPanel");
+            //   优先按挂载的 BroadcasterPanel 脚本定位（主 repo GO 可能叫 BroadcasterPanelController / PanelRoot 等）；
+            //   其次回退到按名字 Find；都没找到才占位建
+            GameObject broadcasterPanel = null;
+            var existingBp = UnityEngine.Object.FindObjectOfType<DrscfZ.UI.BroadcasterPanel>(true);
+            if (existingBp != null)
+            {
+                broadcasterPanel = existingBp.gameObject;
+                Debug.Log($"[Setup17.15+24.5] 已按脚本定位 BroadcasterPanel GO：{broadcasterPanel.name}");
+            }
+            if (broadcasterPanel == null)
+                broadcasterPanel = FindInLoadedScene("BroadcasterPanel");
             if (broadcasterPanel == null)
             {
-                // 占位建出（但实际 BroadcasterPanel 应该已存在）
+                // 占位建出（实际 BroadcasterPanel 应该已存在；走到这里说明主 repo 场景缺失该面板）
                 Debug.LogWarning("[Setup17.15+24.5] BroadcasterPanel 未找到，占位建出父节点。");
                 broadcasterPanel = new GameObject("BroadcasterPanel");
                 broadcasterPanel.transform.SetParent(canvas.transform, false);
