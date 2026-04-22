@@ -156,6 +156,13 @@ namespace DrscfZ.Survival
         public event Action<CoopMilestoneData> OnCoopMilestone;
         public event Action<GiftImpactData>    OnGiftImpact;
 
+        // §34 Layer 3 组 D 叙事引擎（🆕 v1.27）：ChapterChanged / StreamerPrompt / NightReport / EngagementReminder
+        // phase_changed 扩展字段（act_tag / nightModifier）通过既有 OnPhaseChanged 事件传递，无需新增事件。
+        public event Action<ChapterChangedData>     OnChapterChanged;
+        public event Action<StreamerPromptData>     OnStreamerPrompt;
+        public event Action<NightReportData>        OnNightReport;
+        public event Action<EngagementReminderData> OnEngagementReminder;
+
         /// <summary>§36.12 seasonDay 从 N→N+1 递增的那一秒新解锁的功能 id 列表（由 world_clock_tick 触发）。
         /// 参数是该 tick 携带的 newlyUnlockedFeatures 字段内容，UI 层据此逐条播放解锁横幅。</summary>
         public event Action<string[]> OnNewlyUnlockedFeatures;
@@ -735,6 +742,26 @@ namespace DrscfZ.Survival
                     var impact = JsonUtility.FromJson<GiftImpactData>(dataJson);
                     if (impact != null) OnGiftImpact?.Invoke(impact);
                     break;
+
+                // ----- §34 Layer 3 组 D 叙事引擎（🆕 v1.27） -----
+                // phase_changed 扩展 act_tag / nightModifier 字段走既有 case "phase_changed"；
+                // 订阅方通过 OnPhaseChanged 拿到 PhaseChangedData 读取扩展字段，无需新 case。
+                case "chapter_changed":
+                    var chapter = JsonUtility.FromJson<ChapterChangedData>(dataJson);
+                    if (chapter != null) OnChapterChanged?.Invoke(chapter);
+                    break;
+                case "streamer_prompt":
+                    var prompt = JsonUtility.FromJson<StreamerPromptData>(dataJson);
+                    if (prompt != null) OnStreamerPrompt?.Invoke(prompt);
+                    break;
+                case "night_report":
+                    var report = JsonUtility.FromJson<NightReportData>(dataJson);
+                    if (report != null) OnNightReport?.Invoke(report);
+                    break;
+                case "engagement_reminder":
+                    var reminder = JsonUtility.FromJson<EngagementReminderData>(dataJson);
+                    if (reminder != null) OnEngagementReminder?.Invoke(reminder);
+                    break;
             }
         }
 
@@ -1271,6 +1298,22 @@ namespace DrscfZ.Survival
         {
             NetworkManager.Instance?.SendMessage("disable_onboarding_for_session");
             Debug.Log("[SGM] §17.15 disable_onboarding_for_session 已发送");
+        }
+
+        /// <summary>🆕 §34.4 E9 周期/赛季间难度切换（仅主播发送）。服务端校验 isRoomCreator + applyAt 合法性。
+        /// <paramref name="difficulty"/>: "easy" | "normal" | "hard"
+        /// <paramref name="applyAt"/>: "next_night"（恢复期第一个白天）| "next_season"（赛季切换 30s 窗口）</summary>
+        public void SendChangeDifficulty(string difficulty, string applyAt)
+        {
+            if (string.IsNullOrEmpty(difficulty) || string.IsNullOrEmpty(applyAt))
+            {
+                Debug.LogWarning($"[SGM] SendChangeDifficulty 参数非法：difficulty={difficulty}, applyAt={applyAt}");
+                return;
+            }
+            long ts = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            string json = $"{{\"type\":\"change_difficulty\",\"data\":{{\"difficulty\":\"{difficulty}\",\"applyAt\":\"{applyAt}\"}},\"timestamp\":{ts}}}";
+            NetworkManager.Instance?.SendJson(json);
+            Debug.Log($"[SGM] §34.4 E9 change_difficulty 已发送 difficulty={difficulty} applyAt={applyAt}");
         }
 
         private void ResetAllSystems()

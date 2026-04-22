@@ -722,6 +722,15 @@ class SurvivalRoom {
         break;
       }
 
+      // ==================== §34.4 E9 难度切换（主播） ====================
+      // C→S：{ difficulty: 'easy'|'normal'|'hard'|'nightmare', applyAt: 'next_night'|'next_season' }
+      // TODO: _roomCreatorId 鉴权放开（与 §24.4/§37/§39 一致）；引擎内部对 invalid_args 推 change_difficulty_failed
+      case 'change_difficulty': {
+        const pid = ws._playerId || '';
+        this.survivalEngine.handleChangeDifficulty(pid, data || {});
+        break;
+      }
+
       // ==================== §17.15 新手引导气泡 ====================
       // TODO: 抖音 SDK 观众进房事件接入后，由 SDK 路由到本 case（或直接在 SDK 回调里调 engine._maybeTriggerOnboarding()）。
       // 目前仅占位：本地模拟 / GM 测试 / 客户端回放可主动发 viewer_joined 触发一轮 B1–B3 节流。
