@@ -7,11 +7,11 @@
  *   3. 接收 SurvivalGameEngine 的能量增量 + 夜晚入口事件，驱动 session 的能量累积与远征怪释放
  *
  * PM 决策（MVP，P1 9d 范围）：
- *   - 无持久化：仅内存 Map，重启清零（TODO: 等 RoomPersistence schemaVersion 接入）
  *   - 无赛季切换强制断开（§36 未实现）
  *   - _roomCreatorId 鉴权放开（统一到 SurvivalRoom 层的 isRoomCreator 校验；MVP 阶段跳过）
- *   - P2 60s 手动停止冷却 / 结算页攻防记录 全部跳过
- *   - P2 反击：基础实现，damageMultiplier 字段保留但默认 1.0（TODO §37 beacon hook）
+ *   - P2 60s 手动停止冷却：_manualStopCooldowns Map 仅内存（重启即清，符合"冷却不跨重启"语义）
+ *   - P2 战报持久化：engine._warReports 10 条滑动窗口 → RoomPersistence schemaVersion 3
+ *   - P2 反击：damageMultiplier 由 SurvivalRoom 按 §37 beacon 填入（有 beacon 则 1.5，否则 1.0）
  *   - P2 3 分钟无能量自动断开：简单 timer 实现
  */
 
@@ -27,6 +27,8 @@ class TribeWarManager {
     this._attackerToSession = new Map();
     /** @type {Map<string, string>} defenderRoomId → sessionId */
     this._defenderToSession = new Map();
+    /** @type {Map<string, number>} attackerRoomId → cooldownEndTs — §35 P2 手动停止 60s 冷却 */
+    this._manualStopCooldowns = new Map();
     this._sessionIdCounter = 0;
     console.log('[TribeWarManager] Initialized');
   }
@@ -84,6 +86,15 @@ class TribeWarManager {
     }
     if (attackerRoomId === defenderRoomId) {
       return { ok: false, reason: 'self_target' };
+    }
+    // §35 P2 手动停止冷却（60s）：若 attacker 上一次 manual 停攻未到期，拒绝新攻击
+    const cooldownEnd = this._manualStopCooldowns.get(attackerRoomId);
+    if (cooldownEnd && cooldownEnd > Date.now()) {
+      return { ok: false, reason: 'in_cooldown', cooldownMs: cooldownEnd - Date.now() };
+    }
+    // 过期冷却自动清理（双保险；_endSession 时不反向扫描此表，避免重启后残留）
+    if (cooldownEnd && cooldownEnd <= Date.now()) {
+      this._manualStopCooldowns.delete(attackerRoomId);
     }
     if (this._attackerToSession.has(attackerRoomId)) {
       return { ok: false, reason: 'attacker_busy' };
@@ -273,6 +284,37 @@ class TribeWarManager {
     } catch (e) {
       console.warn(`[TribeWarManager] end broadcast error: ${e.message}`);
     }
+
+    // §35 P2 手动停止 → 给 attacker 60s 冷却（仅 reason === 'manual' 生效）
+    if (reason === 'manual' && session.attacker && session.attacker.roomId) {
+      this._manualStopCooldowns.set(session.attacker.roomId, Date.now() + 60000);
+    }
+
+    // §35 P2 战报持久化：向双方 engine._warReports 追加一条（10 条滑动窗口由 engine 自行维持）
+    const report = {
+      sessionId: session.id,
+      startedAt: session.startedAt || Date.now(),
+      endedAt: Date.now(),
+      reason,
+      stolenFood: session.stolenFood,
+      stolenCoal: session.stolenCoal,
+      stolenOre: session.stolenOre,
+      attackerRoomId: session.attacker ? session.attacker.roomId : null,
+      defenderRoomId: session.defender ? session.defender.roomId : null,
+      attackerName: session.attacker ? (session.attacker.streamerName || '') : '',
+      defenderName: session.defender ? (session.defender.streamerName || '') : '',
+      damageMultiplier: session.damageMultiplier || 1.0,
+    };
+    try {
+      const atkEng = session.attacker && session.attacker.survivalEngine;
+      const defEng = session.defender && session.defender.survivalEngine;
+      if (atkEng && typeof atkEng._addWarReport === 'function') {
+        atkEng._addWarReport({ ...report, role: 'attacker' });
+      }
+      if (defEng && typeof defEng._addWarReport === 'function') {
+        defEng._addWarReport({ ...report, role: 'defender' });
+      }
+    } catch (e) { console.warn('[TribeWarManager] war report write fail: ' + e.message); }
 
     // 清登记
     this._sessions.delete(session.id);

@@ -686,7 +686,9 @@ class SurvivalRoom {
         // TODO _roomCreatorId 鉴权放开(MVP,同 §24.4/§37/§39)
         const res = this.tribeWarMgr.startAttack(this.roomId, targetRoomId);
         if (!res.ok) {
-          ws.send(JSON.stringify({ type: 'tribe_war_attack_failed', timestamp: Date.now(), data: { reason: res.reason } }));
+          const failData = { reason: res.reason };
+          if (res.cooldownMs !== undefined) failData.cooldownMs = res.cooldownMs;
+          ws.send(JSON.stringify({ type: 'tribe_war_attack_failed', timestamp: Date.now(), data: failData }));
         }
         break;
       }
@@ -701,7 +703,7 @@ class SurvivalRoom {
       case 'tribe_war_retaliate': {
         // §36.12 tribe_war 门槛（反击也走同一锁）
         if (!this._checkFeatureOrFail('tribe_war', 'tribe_war_attack_failed', {})) break;
-        // 仅防守方(被攻击中)可反击;damageMultiplier 由服务端生成(MVP 默认 1.0,TODO §37 beacon)
+        // 仅防守方(被攻击中)可反击;damageMultiplier 查 engine._buildings.has('beacon') 填 1.5（§37.2 烽火台反击联动）
         if (!this.tribeWarMgr) break;
         const underAttackSid = this.tribeWarMgr._defenderToSession.get(this.roomId);
         if (!underAttackSid) {
@@ -715,9 +717,13 @@ class SurvivalRoom {
           ws.send(JSON.stringify({ type: 'tribe_war_attack_failed', timestamp: Date.now(), data: { reason: 'room_not_found' } }));
           break;
         }
-        const res = this.tribeWarMgr.startAttack(this.roomId, targetRoomId, { damageMultiplier: 1.0 });
+        // §37.2 beacon 反击联动：建有 beacon 时 damageMultiplier=1.5，否则 1.0
+        const _dm = (this.survivalEngine && this.survivalEngine._buildings && this.survivalEngine._buildings.has('beacon')) ? 1.5 : 1.0;
+        const res = this.tribeWarMgr.startAttack(this.roomId, targetRoomId, { damageMultiplier: _dm });
         if (!res.ok) {
-          ws.send(JSON.stringify({ type: 'tribe_war_attack_failed', timestamp: Date.now(), data: { reason: res.reason } }));
+          const failData = { reason: res.reason };
+          if (res.cooldownMs !== undefined) failData.cooldownMs = res.cooldownMs;
+          ws.send(JSON.stringify({ type: 'tribe_war_attack_failed', timestamp: Date.now(), data: failData }));
         }
         break;
       }

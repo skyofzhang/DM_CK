@@ -1819,8 +1819,8 @@ namespace DrscfZ.Survival
             if (data == null || string.IsNullOrEmpty(data.playerId)) return;
             var displayName = string.IsNullOrEmpty(data.playerName) ? "匿名" : data.playerName;
 
-            UI.SurvivalTopBarUI.Instance?.UpdateSupporterCount(data.supporterCount);
-            // BarrageMessageUI 通过订阅 OnPlayerActivityMessage 自动显示（COLOR_JOIN 绿色）
+            // §33 Tier C：TopBar 切换由 SupporterTopBarUI 订阅 OnSupporterJoined 接管（§33.6.1）
+            // BarrageMessageUI 通过 OnPlayerActivityMessage 作日志层；SupporterJoinedToastUI 订阅 OnSupporterJoined 作主视觉层
             OnPlayerActivityMessage?.Invoke($"{displayName} 加入助威！发送弹幕为全队加油");
             OnSupporterJoined?.Invoke(data);
         }
@@ -1831,13 +1831,9 @@ namespace DrscfZ.Survival
             var displayName = string.IsNullOrEmpty(data.playerName) ? "匿名" : data.playerName;
             string cmdDesc = GetSupporterCmdDescription(data.cmd);
 
-            // 跑马灯显示"[助威] XXX：食物+1"
-            UI.HorizontalMarqueeUI.Instance?.AddMessage($"[助威] {displayName}", null, cmdDesc);
+            // §33 Tier C：浅紫跑马灯 + 夜晚 cmd=6 闪光由 SupporterMarqueeUI / SupporterNightFlashUI 订阅 OnSupporterAction 接管（§33.6.2/.6.3）
+            // BarrageMessageUI 通过 OnPlayerActivityMessage 作日志层
             OnPlayerActivityMessage?.Invoke($"[助威] {displayName} → {cmdDesc}");
-
-            // 夜晚 cmd=6 → 随机存活矿工头顶闪光
-            if (data.cmd == 6)
-                WorkerManager.Instance?.FlashRandomAliveWorker();
 
             OnSupporterAction?.Invoke(data);
         }
@@ -1848,8 +1844,11 @@ namespace DrscfZ.Survival
             var newName = string.IsNullOrEmpty(data.newPlayerName) ? "匿名" : data.newPlayerName;
             var oldName = string.IsNullOrEmpty(data.oldPlayerName) ? "匿名" : data.oldPlayerName;
 
+            // WorkerManager 层的矿工绑定迁移：保留（非 UI 副作用）
             WorkerManager.Instance?.HandleSupporterPromoted(data);
-            UI.HorizontalMarqueeUI.Instance?.AddMessage(newName, null, $"替补上场！{oldName} 转为助威");
+
+            // §33 Tier C：金黄跑马灯由 SupporterPromotedMarqueeUI 订阅 OnSupporterPromoted 接管（§33.5）
+            // BarrageMessageUI 通过 OnPlayerActivityMessage 作日志层
             OnPlayerActivityMessage?.Invoke($"{newName} 替补上场！{oldName} 转为助威");
             OnSupporterPromoted?.Invoke(data);
         }

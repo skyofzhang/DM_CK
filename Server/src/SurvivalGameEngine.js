@@ -642,8 +642,11 @@ class SurvivalGameEngine {
     this._expeditions           = new Map();
     this._expeditionIdCounter   = 0;
     this._meteorFragmentPending = false; // 下次 666 触发 efficiency666Bonus ×2.0（单次消费）
-    // mystic_rune 24h 滑动窗口（最多 3 次）——MVP 内存 Map，TODO 接入 RoomPersistence 避免主播刷重启
+    // mystic_rune 24h 滑动窗口（最多 3 次）——跨局永续（RoomPersistence schemaVersion 3）
     this._runeChargeLog         = [];
+
+    /** @type {Array<object>} §35 P2 战报滑动窗口，最多 10 条；跨局永续（RoomPersistence schemaVersion 3） */
+    this._warReports            = [];
 
     // ── §37 建造系统（Building System，MVP）────────────────────────────
     // _buildings: 已建成建筑 ID 集合；跨夜/跨堡垒日保留，失败降级按 BUILDING_KEEP_ON_DEMOTE 部分保留
@@ -889,6 +892,17 @@ class SurvivalGameEngine {
     }
   }
 
+  /**
+   * §35 P2 追加战报，自动维持最多 10 条滑动窗口。
+   * TribeWarManager._endSession 在清登记前按 attacker/defender 双向调用。
+   * @param {object} report — { sessionId, startedAt, endedAt, reason, stolenFood/Coal/Ore, role, ... }
+   */
+  _addWarReport(report) {
+    if (!report) return;
+    this._warReports.push(report);
+    while (this._warReports.length > 10) this._warReports.shift();
+  }
+
   /** §36.12：老用户豁免查询。未注入 tracker 时返 false（默认非老用户）*/
   _isRoomCreatorVeteran() {
     if (!this.veteranTracker) return false;
@@ -922,6 +936,11 @@ class SurvivalGameEngine {
     if (typeof snap._dailyFortressDayGained === 'number') this._dailyFortressDayGained = snap._dailyFortressDayGained | 0;
     if (typeof snap._dailyResetKey          === 'number') this._dailyResetKey          = snap._dailyResetKey          | 0;
     if (typeof snap._dailyCapBlocked        === 'boolean') this._dailyCapBlocked       = snap._dailyCapBlocked;
+
+    // §35 P2 攻防战战报（10 条滑动窗口；缺失回退空数组）
+    if (Array.isArray(snap._warReports))    this._warReports    = snap._warReports.slice(-10);
+    // §38.3 探险符文 24h 滑动窗口（恢复后由 _maybePickRandomEvent / 相关读取点剔除 24h 前记录）
+    if (Array.isArray(snap._runeChargeLog)) this._runeChargeLog = snap._runeChargeLog.slice();
 
     // §36.12 老用户豁免：合并到全局 VeteranTracker（即使 tracker 是空单例，也可从 per-room 快照恢复）
     if (this.veteranTracker && typeof this.veteranTracker.loadSnapshot === 'function') {
@@ -1119,7 +1138,7 @@ class SurvivalGameEngine {
     this._rouletteRunningInited = false;
 
     // §38 探险系统重置：所有 expedition 视作 recall（无资源回馈），清定时器
-    // _runeChargeLog 跨局永续（24h 滑动窗口，MVP 重启丢失；TODO 接入 RoomPersistence）
+    // _runeChargeLog 跨局永续（24h 滑动窗口，由 RoomPersistence 恢复；_maybePickRandomEvent 读取时剔除 24h 前记录）
     this._cancelAllExpeditions('reset');
     this._expeditionIdCounter   = 0;
     this._meteorFragmentPending = false;

@@ -69,6 +69,11 @@ class RoomPersistence {
       // §36.12 老用户豁免（仅增字段；schemaVersion 保持 3）
       _veteranStreamers:     veteranSnapshot ? veteranSnapshot._veteranStreamers     : [],
       _maxSeasonDayAttended: veteranSnapshot ? veteranSnapshot._maxSeasonDayAttended : {},
+
+      // §35 P2 攻防战战报（10 条滑动窗口，跨重启永续）
+      _warReports: engine._warReports || [],
+      // §38.3 探险符文 24h 滑动窗口（跨重启永续）
+      _runeChargeLog: engine._runeChargeLog || [],
     };
 
     try {
