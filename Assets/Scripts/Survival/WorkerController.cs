@@ -813,6 +813,28 @@ namespace DrscfZ.Survival
             _freezeCoroutine = StartCoroutine(DynamicFreezeCoroutine(durationSec));
         }
 
+        /// <summary>🆕 Fix C (组 B Reviewer P0) §34B B3 morale_boost：
+        ///   在矿工头顶显示自定义气泡文字 durationSec 秒后自动 Hide。
+        ///   不覆盖 Frozen / Dead 状态的气泡（由对应状态协程/Invoke 管理）。
+        ///   复用 WorkerBubble.ShowSpecial（橙黄底色，表示鼓舞）。</summary>
+        public void ShowBubbleText(string text, float durationSec)
+        {
+            if (_bubble == null) return;
+            if (_state == State.Frozen || _state == State.Dead) return;
+            _bubble.ShowSpecial(text, new Color(1.0f, 0.78f, 0.2f, 0.9f));
+            // 用 CancelInvoke+Invoke 实现独占定时，避免多次叠加导致提前 Hide
+            CancelInvoke(nameof(HideBubbleIfMorale));
+            Invoke(nameof(HideBubbleIfMorale), Mathf.Max(0.1f, durationSec));
+        }
+
+        private void HideBubbleIfMorale()
+        {
+            // 仅当当前未处于 Frozen / Dead / 工作态时隐藏（工作态气泡由 EnterState 重新 ShowWork）
+            if (_state == State.Frozen || _state == State.Dead) return;
+            if (_bubble != null && _state != State.Work && _state != State.Move)
+                _bubble.Hide();
+        }
+
         /// <summary>
         /// 🆕 §31 解除 Frozen 状态（由 worker_unfrozen 协议或倒计时到期触发）。
         /// 从 Frozen 回到进入前状态（_stateBeforeSpecial），与 OnFrozenEnd 路径统一。

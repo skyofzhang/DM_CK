@@ -375,6 +375,17 @@ namespace DrscfZ.Monster
                 _hpFillImage.fillAmount = _hpBarTargetFill;
         }
 
+        /// <summary>🆕 Fix B (组 B Reviewer P0) §34B B3 heavy_fog：
+        ///   外部（MonsterWaveSpawner 响应 resource_update.hideMonsterHp）控制怪物血条显隐。
+        ///   true=隐藏（fog 事件期间），false=恢复显示（怪物默认血条常驻）。
+        ///   怪物与 Worker 不同：怪物无"白天隐藏/夜晚显示"规则，默认一直可见，此开关直接 SetActive。</summary>
+        public void SetHpBarVisible(bool visible)
+        {
+            if (_hpBarCanvas == null) _hpBarCanvas = transform.Find("HPBarCanvas");
+            if (_hpBarCanvas != null && _hpBarCanvas.gameObject.activeSelf != visible)
+                _hpBarCanvas.gameObject.SetActive(visible);
+        }
+
         /// <summary>兜底重绑定：若 _hpFillImage 意外为 null，尝试从层次结构中重新查找</summary>
         private void RebindHpFillIfNeeded()
         {

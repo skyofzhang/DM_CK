@@ -166,5 +166,12 @@ namespace DrscfZ.Survival
         public const string NightReport         = "night_report";         // S→C：E5b 夜战报告（夜→昼转换 2.5s）
         public const string EngagementReminder  = "engagement_reminder";  // S→C：E8 参与感唤回（每 5 分钟对贡献>0 玩家推送）
         public const string ChangeDifficulty    = "change_difficulty";    // C→S：E9 周期/赛季间难度切换（仅主播）
+
+        // ----- §34 Layer 2 组 B 数据流可视化（🆕 v1.27） -----
+        // random_event 沿用 §2 "random_event" 常量；B3 仅扩展 eventId 枚举（前端 fallback 兜底）。
+        public const string SettlementHighlights    = "settlement_highlights";      // S→C：B2 结算高光数据
+        public const string StreamerSkipSettlement  = "streamer_skip_settlement";   // C→S：B2 主播"立即重开"跳过结算
+        public const string EfficiencyRace          = "efficiency_race";            // S→C：B10a 安全期 Top2 PK 滚动
+        public const string DayPreview              = "day_preview";                // S→C：B10b 白天最后 10s 夜晚预告
     }
 }

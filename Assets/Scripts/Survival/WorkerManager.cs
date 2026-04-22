@@ -636,6 +636,18 @@ namespace DrscfZ.Survival
             return null;
         }
 
+        /// <summary>🆕 Fix C (组 B Reviewer P0) §34B B3 morale_boost：
+        ///   按 playerId 找到矿工并在头顶显示自定义气泡 durationSec 秒。</summary>
+        public void ShowBubbleOnWorker(string playerId, string text, float durationSec)
+        {
+            var w = FindWorkerByPlayerId(playerId);
+            if (w == null) {
+                Debug.Log($"[WorkerManager] ShowBubbleOnWorker: playerId={playerId} 未找到对应Worker，忽略气泡");
+                return;
+            }
+            w.ShowBubbleText(text, durationSec);
+        }
+
         /// <summary>触发全体Worker金色光晕（666弹幕/主播加速）</summary>
         public void ActivateAllWorkersGlow(float duration = 3f)
         {

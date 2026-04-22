@@ -61,17 +61,55 @@ namespace DrscfZ.Monster
             }
         }
 
+        // 🆕 Fix B (组 B Reviewer P0) §34B B3 heavy_fog：
+        //   缓存上一次 hideMonsterHp 状态，仅在切换时刷新所有怪物血条，避免每次 resource_update 重复 SetActive。
+        private bool _hideMonsterHpCached = false;
+
         private void Start()
         {
             // 订阅白天开始事件：夜晚结束时强制清除场上残余怪物
             if (DayNightCycleManager.Instance != null)
                 DayNightCycleManager.Instance.OnDayStarted += HandleDayStarted;
+
+            // 🆕 Fix B §34B B3 heavy_fog：订阅 resource_update，按 data.hideMonsterHp 切换所有存活怪物血条
+            if (DrscfZ.Survival.SurvivalGameManager.Instance != null)
+                DrscfZ.Survival.SurvivalGameManager.Instance.OnResourceUpdate += HandleResourceUpdate;
         }
 
         private void OnDestroy()
         {
             if (DayNightCycleManager.Instance != null)
                 DayNightCycleManager.Instance.OnDayStarted -= HandleDayStarted;
+
+            if (DrscfZ.Survival.SurvivalGameManager.Instance != null)
+                DrscfZ.Survival.SurvivalGameManager.Instance.OnResourceUpdate -= HandleResourceUpdate;
+        }
+
+        // 🆕 Fix B (组 B Reviewer P0) §34B B3：heavy_fog 期间强制隐藏所有怪物血条（30s），结束后恢复。
+        //   新生成的怪物（OnResourceUpdate 之后的 SpawnWave）会因为 _hideMonsterHpCached=true 在 Initialize 完成后
+        //   需要下一次 resource_update 触发来隐藏；重要：SpawnWithVariants/LegacySpawn 添加 _activeMonsters 后立即 apply 当前状态。
+        private void HandleResourceUpdate(Survival.ResourceUpdateData ru)
+        {
+            if (ru == null) return;
+            if (_hideMonsterHpCached == ru.hideMonsterHp) return;
+            _hideMonsterHpCached = ru.hideMonsterHp;
+            // 遍历存活怪物同步血条可见性
+            for (int i = 0; i < _activeMonsters.Count; i++)
+            {
+                var m = _activeMonsters[i];
+                if (m == null || m.IsDead) continue;
+                m.SetHpBarVisible(!_hideMonsterHpCached);
+            }
+        }
+
+        /// <summary>🆕 Fix B §34B B3：当前缓存的 hideMonsterHp 状态（供新生成怪物 apply 当前状态）</summary>
+        public bool HideMonsterHp => _hideMonsterHpCached;
+
+        /// <summary>🆕 Fix B §34B B3：新生成的怪物若当前处于 fog 期应立即隐藏血条（避免闪烁）</summary>
+        private void ApplyInitialHpBarState(MonsterController m)
+        {
+            if (m == null) return;
+            if (_hideMonsterHpCached) m.SetHpBarVisible(false);
         }
 
         private void HandleDayStarted(int day)
@@ -213,6 +251,7 @@ namespace DrscfZ.Monster
 
             ctrl.OnDead += HandleMonsterDead;
             _activeMonsters.Add(ctrl);
+            ApplyInitialHpBarState(ctrl); // Fix B §34B B3：heavy_fog 期内新生成怪物同步隐藏血条
         }
 
         /// <summary>type 字符串 → MonsterType 枚举（未知 → Normal）</summary>
@@ -319,6 +358,7 @@ namespace DrscfZ.Monster
             ctrl.SetMonsterIdAndType(bossId, DrscfZ.Monster.MonsterType.Boss);
             ctrl.OnDead += HandleMonsterDead;
             _activeMonsters.Add(ctrl);
+            ApplyInitialHpBarState(ctrl); // Fix B §34B B3：heavy_fog 期内新生成怪物同步隐藏血条
 
             Debug.Log($"[WaveSpawner] Boss spawned: Day{day} HP={bossHp} ATK={bossAtk} Scale=2.5x");
         }
@@ -362,6 +402,7 @@ namespace DrscfZ.Monster
             ctrl.SetMonsterIdAndType(monsterId, DrscfZ.Monster.MonsterType.Normal);
             ctrl.OnDead += HandleMonsterDead;
             _activeMonsters.Add(ctrl);
+            ApplyInitialHpBarState(ctrl); // Fix B §34B B3：heavy_fog 期内新生成怪物同步隐藏血条
         }
 
         private Vector3 GetSpawnPos(string side)
@@ -475,6 +516,7 @@ namespace DrscfZ.Monster
             ctrl.SetMonsterIdAndType(monsterId, DrscfZ.Monster.MonsterType.Normal);
             ctrl.OnDead += HandleMonsterDead;
             _activeMonsters.Add(ctrl);
+            ApplyInitialHpBarState(ctrl); // Fix B §34B B3：heavy_fog 期内新生成怪物同步隐藏血条
 
             // 红色 tint（MaterialPropertyBlock，不新建材质）
             ApplyTribeWarRedTint(go);
