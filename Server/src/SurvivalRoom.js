@@ -746,6 +746,23 @@ class SurvivalRoom {
         }
         break;
 
+      // ==================== §34.3 B2 主播跳过结算倒计时 ====================
+      // C→S streamer_skip_settlement { playerId? }：仅主播（roomCreatorWs）可发
+      //   服务端收到后立即 clearTimeout 结算 8s 倒计时 → 进入恢复期
+      //   非主播静默忽略；state 非 'settlement' 时返回 false（_enterSettlement 已清句柄则无效）
+      case 'streamer_skip_settlement': {
+        if (!this._isRoomCreator(ws)) {
+          console.log(`[SurvivalRoom:${this.roomId}] streamer_skip_settlement rejected: not room creator`);
+          break;
+        }
+        const pid = (data && data.playerId) || ws._playerId || '';
+        const ok = this.survivalEngine.handleStreamerSkipSettlement(pid);
+        if (!ok) {
+          console.log(`[SurvivalRoom:${this.roomId}] streamer_skip_settlement no-op (state=${this.survivalEngine.state})`);
+        }
+        break;
+      }
+
       default:
         console.log(`[SurvivalRoom:${this.roomId}] Unknown client message: ${msgType}`);
     }

@@ -163,6 +163,16 @@ namespace DrscfZ.Survival
         public event Action<NightReportData>        OnNightReport;
         public event Action<EngagementReminderData> OnEngagementReminder;
 
+        // ----- §34 Layer 2 组 B 数据流可视化（🆕 v1.27）-----
+        // settlement_highlights / efficiency_race / day_preview；random_event 沿用既有路由。
+        public event Action<SettlementHighlightsData> OnSettlementHighlights;
+        public event Action<EfficiencyRaceData>       OnEfficiencyRace;
+        public event Action<DayPreviewData>           OnDayPreview;
+
+        // 🆕 Fix C (组 B Reviewer P0) §34B B3：RandomEvent 事件总线
+        //   订阅者：WorkerManager（morale_boost 矿工气泡）/ 其他 UI（aurora_flash / airdrop 等）。
+        public event Action<RandomEventData> OnRandomEvent;
+
         /// <summary>§36.12 seasonDay 从 N→N+1 递增的那一秒新解锁的功能 id 列表（由 world_clock_tick 触发）。
         /// 参数是该 tick 携带的 newlyUnlockedFeatures 字段内容，UI 层据此逐条播放解锁横幅。</summary>
         public event Action<string[]> OnNewlyUnlockedFeatures;
@@ -182,6 +192,11 @@ namespace DrscfZ.Survival
 
         // §39 本地装备缓存（自己最新的 equipped，供 UI 层做灰化/装备按钮回显）
         public ShopEquipped MyEquipped { get; private set; }
+
+        // §34 B2 结算高光缓存：服务端在 survival_game_ended 前推送 settlement_highlights，
+        // 客户端缓存最近一次，结算 UI 的帧 A 直接读取；非空时由 Reset 清理。
+        public SettlementHighlightsData LastSettlementHighlights => _lastSettlementHighlights;
+        private SettlementHighlightsData _lastSettlementHighlights;
 
         // 贡献追踪
         private System.Collections.Generic.Dictionary<string, float> _contributions
@@ -762,6 +777,25 @@ namespace DrscfZ.Survival
                     var reminder = JsonUtility.FromJson<EngagementReminderData>(dataJson);
                     if (reminder != null) OnEngagementReminder?.Invoke(reminder);
                     break;
+
+                // ----- §34 Layer 2 组 B 数据流可视化（🆕 v1.27） -----
+                // random_event 沿用既有 case "random_event"；B3 仅扩展 eventId 枚举，前端 fallback 兜底。
+                case "settlement_highlights":
+                    var high = JsonUtility.FromJson<SettlementHighlightsData>(dataJson);
+                    if (high != null)
+                    {
+                        _lastSettlementHighlights = high;  // 缓存供 HandleGameEnded 读取
+                        OnSettlementHighlights?.Invoke(high);
+                    }
+                    break;
+                case "efficiency_race":
+                    var race = JsonUtility.FromJson<EfficiencyRaceData>(dataJson);
+                    if (race != null) OnEfficiencyRace?.Invoke(race);
+                    break;
+                case "day_preview":
+                    var dp = JsonUtility.FromJson<DayPreviewData>(dataJson);
+                    if (dp != null) OnDayPreview?.Invoke(dp);
+                    break;
             }
         }
 
@@ -979,6 +1013,16 @@ namespace DrscfZ.Survival
             if (data == null) return;
             ShowFullScreenEvent(data.eventId, data.name);
             Debug.Log($"[SGM] random_event: {data.eventId} ({data.name})");
+
+            // 🆕 Fix C (组 B Reviewer P0) §34B B3：morale_boost 矿工头顶气泡
+            if (data.eventId == "morale_boost" && !string.IsNullOrEmpty(data.targetPlayerId) && !string.IsNullOrEmpty(data.bubbleText))
+            {
+                float sec = data.durationMs > 0 ? data.durationMs / 1000f : 3.0f;
+                WorkerManager.Instance?.ShowBubbleOnWorker(data.targetPlayerId, data.bubbleText, sec);
+            }
+
+            // 🆕 Fix C §34B B3：广播 OnRandomEvent，订阅者（气泡 UI / 效果 UI 等）按 eventId 分发
+            OnRandomEvent?.Invoke(data);
         }
 
         private void HandleGiftPause(string dataJson)
@@ -1016,7 +1060,10 @@ namespace DrscfZ.Survival
             UI.AnnouncementUI.Instance?.ShowAnnouncement(text, "", new Color(1f, 0.85f, 0.1f), duration);
         }
 
-        /// <summary>显示全屏随机事件公告（3秒后消失）</summary>
+        /// <summary>显示全屏随机事件公告（3秒后消失）。
+        /// 🆕 §34 B3 扩展：10 个新 eventId（airdrop_supply / ice_ground / aurora_flash / earthquake /
+        ///   meteor_shower / heavy_fog / hot_spring / food_spoil / inspiration / morale_boost）。
+        /// 未知 eventId fallback 使用服务端下发的 eventName + "特殊事件发生！"，不崩溃。</summary>
         private void ShowFullScreenEvent(string eventId, string eventName)
         {
             string subText = eventId switch
@@ -1029,9 +1076,25 @@ namespace DrscfZ.Survival
                 "snowstorm"        => "炉温衰减加速！",
                 "harvest"          => "食物采集效率提升！",
                 "monster_wave"     => "大量怪物涌入！",
+                // 🆕 §34 B3 新增 10 事件
+                "airdrop_supply"   => "随机资源大礼包降落！",
+                "ice_ground"       => "移动速度 -20%，持续 30 秒！",
+                "aurora_flash"     => "全员效率 +5%，持续 5 秒！",
+                "earthquake"       => "炉温 -5，城门 -50 HP！",
+                "meteor_shower"    => "天降陨石，怪物被消灭 2-3 只！",
+                "heavy_fog"        => "浓雾弥漫，怪物血条隐藏 30 秒！",
+                "hot_spring"       => "炉温 +2℃ / 5s，持续 30 秒！",
+                "food_spoil"       => "食物变质，-15%！",
+                "inspiration"      => "灵感爆发，下次工作产出 ×2！",
+                "morale_boost"     => "矿工士气高涨！",
                 _                  => "特殊事件发生！"
             };
-            Color color = eventId is "E01_snowstorm" or "snowstorm" or "E03_monster_wave" or "monster_wave"
+            // 危险事件：红色；有利事件：绿色（按 eventId 集合归类，未知 eventId 默认绿色）
+            bool isDanger = eventId is "E01_snowstorm" or "snowstorm"
+                            or "E03_monster_wave" or "monster_wave"
+                            or "ice_ground" or "earthquake"
+                            or "heavy_fog" or "food_spoil";
+            Color color = isDanger
                 ? new Color(1f, 0.3f, 0.3f)    // 危险事件：红色
                 : new Color(0.3f, 1f, 0.5f);    // 有利事件：绿色
             UI.AnnouncementUI.Instance?.ShowAnnouncement(eventName, subText, color, 3f);
@@ -1316,9 +1379,20 @@ namespace DrscfZ.Survival
             Debug.Log($"[SGM] §34.4 E9 change_difficulty 已发送 difficulty={difficulty} applyAt={applyAt}");
         }
 
+        /// <summary>🆕 §34 B2 主播"立即重开"跳过结算（仅主播发送）。
+        /// 服务端校验 isRoomCreator + 当前在结算期，校验通过后提前结束 30s 结算并进入 recovery。</summary>
+        public void SendStreamerSkipSettlement()
+        {
+            long ts = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            string json = $"{{\"type\":\"streamer_skip_settlement\",\"data\":{{}},\"timestamp\":{ts}}}";
+            NetworkManager.Instance?.SendJson(json);
+            Debug.Log("[SGM] §34 B2 streamer_skip_settlement 已发送");
+        }
+
         private void ResetAllSystems()
         {
             _contributions.Clear();
+            _lastSettlementHighlights = null;  // 🆕 §34 B2 清理缓存
             SelectedDifficulty = DifficultyLevel.None;  // 重置难度选择，让 DifficultySelectUI 再次显示
             resourceSystem?.Reset();
             cityGateSystem?.Reset();
@@ -2777,8 +2851,33 @@ namespace DrscfZ.Survival
 
     [Serializable] public class RandomEventData
     {
-        public string eventId;       // "E01_snowstorm" 等
+        public string eventId;       // "E01_snowstorm" / "ice_ground" / "heavy_fog" / "morale_boost" / ...
         public string name;          // 中文名称
+        // 🆕 Fix C (组 B Reviewer P0) §34B B3 随机事件扩展字段（服务端每事件带独立字段，
+        //   JsonUtility 反序列化时缺失字段回落 0/false/空，21 个字段全部在此声明）：
+        public int      durationMs;        // 通用：持续时长 ms
+        public float    slowMult;          // ice_ground：产出倍率（策划原文"移速 -20%"，等效产出 ×0.8）
+        public float    effBonus;          // aurora_flash：效率加成
+        public int      subFurnaceTemp;    // earthquake：炉温减少
+        public int      subGateHp;         // earthquake：城门血量减少
+        public int      killedCount;       // meteor_shower：击杀数
+        public string[] killedIds;         // meteor_shower：被击杀怪物 id 列表
+        public bool     hideMonsterHp;     // heavy_fog：30s 隐藏怪物血条（与 resource_update 语义一致）
+        public int      tempPerTick;       // hot_spring：每 tick 炉温增量
+        public int      tickSec;           // hot_spring：tick 间隔秒
+        public int      foodBefore;        // food_spoil：腐败前食物量
+        public int      foodAfter;         // food_spoil：腐败后食物量
+        public float    lossPct;           // food_spoil：损耗百分比
+        public int      nextWorkMult;      // inspiration：下一次工作倍率
+        public string   targetPlayerId;    // morale_boost：被鼓舞矿工 playerId
+        public string   targetPlayerName;  // morale_boost：矿工名（UI 显示）
+        public string   bubbleText;        // morale_boost：气泡文字
+        public int      scoutCount;        // E03 daytime scout：侦察兵数量
+        public string[] scoutIds;          // E03 daytime scout：侦察兵 id 列表
+        public bool     isDaytimeScout;    // E03 daytime scout：标志位
+        public int      addFood;           // airdrop_supply：食物补给
+        public int      addCoal;           // airdrop_supply：煤炭补给
+        public int      addOre;            // airdrop_supply：矿石补给
     }
 
     [Serializable] public class GiftPauseData

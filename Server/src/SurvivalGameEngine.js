@@ -177,14 +177,52 @@ const TIER_SKINS       = ['skin_rookie','skin_veteran','skin_backbone','skin_eli
                           'skin_assault','skin_iron','skin_commander',
                           'skin_wargod','skin_myth','skin_legend'];
 
-// 随机事件名称映射（策划案 §8）
+// 随机事件名称映射（策划案 §8 + §34.3 B3 扩充 5→15）
 const EVENT_NAMES = {
+  // 原有 5 种
   E01_snowstorm:    '暴风雪',
   E02_harvest:      '丰收季节',
   E03_monster_wave: '怪物来袭',
   E04_warm_spring:  '暖流涌现',
   E05_ore_vein:     '矿脉发现',
+  // §34.3 B3 新增 10 种（事件 ID 与策划案 5080-5094 对齐）
+  airdrop_supply:   '空投补给',
+  ice_ground:       '地面冰封',
+  aurora_flash:     '极光闪现',
+  earthquake:       '地震',
+  meteor_shower:    '流星雨',
+  heavy_fog:        '浓雾',
+  hot_spring:       '温泉涌出',
+  food_spoil:       '食物变质',
+  inspiration:      '灵感爆发',
+  morale_boost:     '矿工士气',
 };
+
+// §34.3 B3 随机事件加权池 —— 原 5 种保持权重（为了与旧行为等价，原实现等权 → 各 20）
+//   新增 10 种按策划案：B3 总体加权保留原 5 种，新增 10 种每种 5~10 权重
+const RANDOM_EVENT_POOL = [
+  // 原 5 种（维持原等权行为）
+  { id: 'E01_snowstorm',     weight: 20 },
+  { id: 'E02_harvest',       weight: 20 },
+  { id: 'E03_monster_wave',  weight: 20 },
+  { id: 'E04_warm_spring',   weight: 20 },
+  { id: 'E05_ore_vein',      weight: 20 },
+  // 新增 10 种（权重 5~10）
+  { id: 'airdrop_supply',    weight: 10 },
+  { id: 'ice_ground',        weight:  7 },
+  { id: 'aurora_flash',      weight:  8 },
+  { id: 'earthquake',        weight:  6 },
+  { id: 'meteor_shower',     weight:  5 },
+  { id: 'heavy_fog',         weight:  6 },
+  { id: 'hot_spring',        weight:  8 },
+  { id: 'food_spoil',        weight:  6 },
+  { id: 'inspiration',       weight: 10 },
+  { id: 'morale_boost',      weight: 10 },
+];
+
+// §34.3 B3：事件触发间隔 90-120s → 60-90s
+const RANDOM_EVENT_INTERVAL_MIN_SEC = 60;
+const RANDOM_EVENT_INTERVAL_MAX_SEC = 90;
 
 // ==================== §37 建造系统（Building System，MVP）====================
 // 5 种建筑：watchtower / market / hospital / altar / beacon
@@ -513,7 +551,7 @@ class SurvivalGameEngine {
 
     // 游戏状态
     // §16 v1.26 永续模式：状态机 idle | day | night | settlement | recovery
-    //   settlement (~8s) → recovery (120s，不生成新波次) → night(day+1)，无胜利终点
+    //   settlement (~30s) → recovery (120s，不生成新波次) → night(day+1)，无胜利终点（Fix A：8s→30s）
     this.state          = 'idle';
     this.currentDay     = 0;
     this.remainingTime  = 0;
@@ -648,7 +686,8 @@ class SurvivalGameEngine {
     this._carryoverPool  = 0;    // 上局结余（流入本局）
 
     // 随机事件状态（策划案 §8）
-    this._nextEventTimer     = 90 + Math.random() * 30; // 首次触发时间（90-120s）
+    // Fix F (组 B Reviewer P1)：改用 RANDOM_EVENT_INTERVAL_MIN/MAX_SEC 常量（60-90s）
+    this._nextEventTimer     = RANDOM_EVENT_INTERVAL_MIN_SEC + Math.random() * (RANDOM_EVENT_INTERVAL_MAX_SEC - RANDOM_EVENT_INTERVAL_MIN_SEC);
     this.tempDecayMultiplier = 1.0;  // 炉温衰减倍率（暴风雪事件改为 2.0）
     this.foodBonus           = 1.0;  // 食物采集加成（丰收事件改为 1.5）
     this.oreBonus            = 1.0;  // 矿石采集加成（矿脉事件改为 2.0）
@@ -745,6 +784,61 @@ class SurvivalGameEngine {
     this._pendingDifficulty   = null;
     // E9 next_season 触发判定：记录 _enterDay 最近一次看到的 seasonId，变化时触发一次 onSeasonStart
     this._lastSeasonIdForDiffCheck = null;
+
+    // ── §34.3 Layer 2 组 B 字段 ─────────────────────────────────────────
+    // B2 结算高光 + 跳过
+    //   _damageLeaderboard: 本局累计每玩家伤害（_handleAttack / love_explosion AOE 累加）
+    //   _bestRescue: { playerId, playerName, giftId, giftName, giftTier, tensionWhenSent, sentAt } | null
+    //                仅在 tension>80 时刻发送的礼物被考虑；同 tensionWhenSent>80 前提下取最高 Tier
+    //   _mostDramaticEvent: { type, desc, day } | null
+    //                本局内最戏剧性事件（tension 暴跌 ≥65 / Boss 绝杀 <5HP / free_death_pass 触发）
+    //   _overallClosestCall: { hpPct, day }  本局所有夜晚城门最低 HP 百分比（初值 1.0 不危险）
+    //   _settleTimerHandle: _enterSettlement 30s 倒计时句柄（可被 streamer_skip_settlement 跳过；Fix A：8s→30s）
+    this._damageLeaderboard = {};
+    this._bestRescue        = null;
+    this._mostDramaticEvent = null;
+    this._overallClosestCall = { hpPct: 1.0, day: 0 };
+    this._settleTimerHandle = null;
+    this._tensionPrev       = 0;   // _broadcastResourceUpdate 用：算 tension 暴跌幅度
+
+    // B3 新增事件状态字段
+    //   _iceGroundEndAt:   ice_ground 事件 endAt（Date.now() ms），_applyWorkEffect 检查
+    //                      (读作：玩家采矿速度 ×0.8 → 采矿倍率×0.8；位于 auroraBoost 后乘入)
+    //   _heavyFogEndAt:    heavy_fog 隐藏怪物血条 endAt；客户端据 resource_update.hideMonsterHp 标志渲染
+    //   _hotSpringEndAt:   hot_spring 温泉 endAt；_tick 每秒分 5 tick 处理 +2°C/5s
+    //   _hotSpringLastTick: 上次触发温泉 tickCounter
+    //   _oneShotWorkMult:  inspiration 下一次 work_command 产出 ×2（消费后归 1.0）
+    this._iceGroundEndAt    = 0;
+    this._heavyFogEndAt     = 0;
+    this._hotSpringEndAt    = 0;
+    this._hotSpringLastTick = 0;
+    this._oneShotWorkMult   = 1.0;
+
+    // B4 助威者冷却日志（记录最近 60s 统计，每 60s console.log）
+    //   hitCount: 冷却通过成功执行的指令次数
+    //   blockedByThrottleCount: 冷却内被拦截次数（throttle hit）
+    //   totalAttempts: 总尝试（hit + blocked）
+    //   _supporterStatsLogAt: 上次日志输出 tickCounter
+    this._supporterStats = { hitCount: 0, blockedByThrottleCount: 0, totalAttempts: 0 };
+    this._supporterStatsLogAt = 0;
+
+    // B6 礼物 douyin_id 双路匹配统计
+    //   exactHit: 精确 douyin_id 命中
+    //   fallbackHit: 兜底 price_fen 命中
+    //   missed: 双路都未命中，忽略
+    //   _giftMatchStatsLogAt: 上次日志输出 tickCounter
+    this._giftMatchStats = { exactHit: 0, fallbackHit: 0, missed: 0 };
+    this._giftMatchStatsLogAt = 0;
+
+    // B10 day_preview + efficiency_race
+    //   _dayStats: 白天累计贡献 { contributions: {pid:n}, totalDay: n }；_enterDay 初始化，_enterNight 清零
+    //   _lastEfficiencyRaceAt: 上次 efficiency_race 广播时刻（ms）—— 15s 节流
+    //   _dayPreviewBroadcastedForDay: 已广播 day_preview 的 day 编号（防同白天重复推）
+    //   _pendingNightModifier: day_preview 预算的 nightModifier 缓存（_enterNight 消费，避免二次随机）
+    this._dayStats                  = null;
+    this._lastEfficiencyRaceAt      = 0;
+    this._dayPreviewBroadcastedForDay = -1;
+    this._pendingNightModifier      = null;
 
     // FeatureFlags：§36.5.1 每日闯关上限默认启用
     if (!this.constructor._featureFlagsWarned) {
@@ -977,7 +1071,8 @@ class SurvivalGameEngine {
     this.efficiency666Bonus  = 1.0;
     this.efficiency666Timer  = 0;
     this.totalLikes          = 0;
-    this._nextEventTimer     = 90 + Math.random() * 30;
+    // Fix F (组 B Reviewer P1)：改用 RANDOM_EVENT_INTERVAL_MIN/MAX_SEC 常量（60-90s）
+    this._nextEventTimer     = RANDOM_EVENT_INTERVAL_MIN_SEC + Math.random() * (RANDOM_EVENT_INTERVAL_MAX_SEC - RANDOM_EVENT_INTERVAL_MIN_SEC);
     this.tempDecayMultiplier = 1.0;
     this.foodBonus           = 1.0;
     this.oreBonus            = 1.0;
@@ -1083,6 +1178,32 @@ class SurvivalGameEngine {
     if (this._streamerPromptTimer) { clearInterval(this._streamerPromptTimer); this._streamerPromptTimer = null; }
     // 清除 E8 参与感唤回定时器
     if (this._engagementInterval)  { clearInterval(this._engagementInterval);  this._engagementInterval  = null; }
+
+    // §34.3 Layer 2 组 B 清理：B2/B3/B4/B6/B10 全部每局重置
+    // B2 结算高光 + 跳过
+    this._damageLeaderboard = {};
+    this._bestRescue        = null;
+    this._mostDramaticEvent = null;
+    this._overallClosestCall = { hpPct: 1.0, day: 0 };
+    if (this._settleTimerHandle) { clearTimeout(this._settleTimerHandle); this._settleTimerHandle = null; }
+    this._tensionPrev = 0;
+    // B3 新增事件状态
+    this._iceGroundEndAt    = 0;
+    this._heavyFogEndAt     = 0;
+    this._hotSpringEndAt    = 0;
+    this._hotSpringLastTick = 0;
+    this._oneShotWorkMult   = 1.0;
+    // B4 助威者冷却日志
+    this._supporterStats      = { hitCount: 0, blockedByThrottleCount: 0, totalAttempts: 0 };
+    this._supporterStatsLogAt = 0;
+    // B6 礼物 douyin_id 双路匹配统计
+    this._giftMatchStats      = { exactHit: 0, fallbackHit: 0, missed: 0 };
+    this._giftMatchStatsLogAt = 0;
+    // B10 day_preview + efficiency_race
+    this._dayStats                    = null;
+    this._lastEfficiencyRaceAt        = 0;
+    this._dayPreviewBroadcastedForDay = -1;
+    this._pendingNightModifier        = null;
 
     this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
   }
@@ -1437,16 +1558,32 @@ class SurvivalGameEngine {
       this._guardianLastActive[playerId] = Date.now();
     }
 
-    // 优先按 douyin_id 查找，TBD 期间回退到按 price_fen 查找
+    // §34.3 B6 双路匹配：优先 douyin_id 精确命中 → price_fen 兜底 → 忽略
+    //   命中方式分别计入 _giftMatchStats，供 60s 日志监控
+    //   douyin_id 仍为 TBD（运营待定），兜底 price_fen 是当前主路径
     let gift = findGiftById(giftId);
-    if (!gift) gift = getGift(giftId);          // 模拟/测试时用内部ID直接匹配
-    if (!gift) gift = findGiftByPrice(giftValue);
+    let _matchPath = 'exact';
+    if (!gift) {
+      // 内部 ID 匹配（模拟/测试用）归为 exact（等价精确命中）
+      gift = getGift(giftId);
+    }
+    if (!gift) {
+      gift = findGiftByPrice(giftValue);
+      if (gift) {
+        _matchPath = 'fallback';
+        console.warn(`[Gift] Fallback match: douyin_id=${giftId || '(none)'} price_fen=${giftValue} matched=${gift.id}`);
+      }
+    }
 
     // 完全未知的礼物：忽略，不产生任何游戏效果也不计入贡献/积分池
     if (!gift) {
+      this._giftMatchStats.missed++;
+      console.warn(`[Gift] Unknown gift: douyin_id=${giftId || '(none)'} price_fen=${giftValue}`);
       console.log(`[SurvivalEngine] unknown gift ignored: ${giftName || giftId} (id=${giftId}, val=${giftValue})`);
       return;
     }
+    if (_matchPath === 'exact')    this._giftMatchStats.exactHit++;
+    else if (_matchPath === 'fallback') this._giftMatchStats.fallbackHit++;
 
     // ===== §33 助威者特殊礼物分支：T1 仙女棒 / T5 爱的爆炸 =====
     // 这两种礼物依赖"发送者自己有专属矿工"的假设，助威者无矿工 → 需要重路由到场上其他矿工
@@ -1468,6 +1605,26 @@ class SurvivalGameEngine {
 
     // §34.4 E5b：夜晚 topGift 追踪（取本夜 tier 最高的发送者）
     this._trackNightGift(playerId, playerName, gift.name_cn, giftTierNum);
+
+    // §34.3 B2 bestRescue：tension > 80 时刻发送的礼物视为"救场礼物"
+    //   规则：同危机态（tension>80）下，优先取更高 Tier；Tier 相同取更晚（last write wins）
+    try {
+      const _tensionNow = this._calcTension();
+      if (_tensionNow > 80) {
+        const prev = this._bestRescue;
+        if (!prev || giftTierNum >= prev.giftTier) {
+          this._bestRescue = {
+            playerId,
+            playerName: playerName || playerId || '(未知)',
+            giftId:     gift.id,
+            giftName:   gift.name_cn,
+            giftTier:   giftTierNum,
+            tensionWhenSent: _tensionNow,
+            sentAt:     Date.now(),
+          };
+        }
+      }
+    } catch (e) { /* ignore */ }
 
     // 贡献值 = 礼物得分（策划案 §9）
     this._trackContribution(playerId, gift.score, 'gift');
@@ -1580,6 +1737,11 @@ class SurvivalGameEngine {
         const killed = [];
         for (const [mid, m] of this._activeMonsters) {
           m.currentHp -= aoeDmg;
+          // §34.3 B2：AOE 伤害每击累加到发起者（按怪物剩余 HP 截断上限，避免"伤害"大于实际 HP）
+          if (playerId) {
+            const dealt = Math.min(aoeDmg, Math.max(0, aoeDmg + m.currentHp)); // pre-damage HP 与 aoeDmg 取 min
+            this._damageLeaderboard[playerId] = (this._damageLeaderboard[playerId] || 0) + dealt;
+          }
           if (m.currentHp <= 0) killed.push(mid);
         }
         for (const mid of killed) {
@@ -1769,10 +1931,19 @@ class SurvivalGameEngine {
     // 幂等保底：极端路径（如替补晋升）可能跳过 _promoteToSupporter
     if (!this._promoteToSupporter(playerId, playerName)) return;
 
+    // §34.3 B4：记录一次尝试（在冷却判定前，用于 throttle_rate 统计）
+    this._supporterStats.totalAttempts++;
+
     // 同一 cmd 全局冷却 2s（防 200 人直播间同时刷同一指令）
     const now = Date.now();
-    if (now - (this._supporterCmdCooldown[cmd] || 0) < 2000) return;
+    if (now - (this._supporterCmdCooldown[cmd] || 0) < 2000) {
+      // §34.3 B4：冷却内拦截
+      this._supporterStats.blockedByThrottleCount++;
+      return;
+    }
     this._supporterCmdCooldown[cmd] = now;
+    // §34.3 B4：冷却通过（真实执行前 +1，以便 unsupported cmd 也被计入 hit；若要严格只计生效命令，可移动到 return 前）
+    this._supporterStats.hitCount++;
 
     // 助威效果（§33.3 表）
     switch (cmd) {
@@ -1856,6 +2027,11 @@ class SurvivalGameEngine {
     const killed = [];
     for (const [mid, m] of this._activeMonsters) {
       m.currentHp -= aoeDmg;
+      // §34.3 B2：AOE 伤害计入发起者（助威者）
+      if (playerId) {
+        const dealt = Math.min(aoeDmg, Math.max(0, aoeDmg + m.currentHp));
+        this._damageLeaderboard[playerId] = (this._damageLeaderboard[playerId] || 0) + dealt;
+      }
       if (m.currentHp <= 0) killed.push(mid);
     }
     for (const mid of killed) {
@@ -2041,6 +2217,16 @@ class SurvivalGameEngine {
     this._activeMonsters.clear();
     this.state         = 'day';
 
+    // §34.3 B10a：初始化本日贡献统计（仅白天）
+    this._dayStats = { contributions: {}, totalDay: 0 };
+    // 进入白天 → 重置上次广播的 day_preview 编号，允许新白天再次预告
+    //   注意：this.currentDay 还未赋值（下面 this.currentDay = day）→ 用参数 day 对比
+    if (this._dayPreviewBroadcastedForDay !== day) {
+      this._dayPreviewBroadcastedForDay = -1;
+    }
+    // 每日节流时钟：reset efficiency_race 最近广播时刻，新白天从 0s 起算
+    this._lastEfficiencyRaceAt = 0;
+
     // §31.3 进入白天：清除所有冻结状态并广播解冻（对齐"天亮复活"语义）
     if (this._frozenWorkers.size > 0) {
       for (const [pid] of this._frozenWorkers) {
@@ -2054,8 +2240,9 @@ class SurvivalGameEngine {
     this.currentDay    = day;
     this.remainingTime = this.dayDuration;
 
-    // 每天开始时重置随机事件计时器（90-120s后触发首次事件）
-    this._nextEventTimer = 90 + Math.random() * 30;
+    // 每天开始时重置随机事件计时器
+    // Fix F (组 B Reviewer P1)：改用 RANDOM_EVENT_INTERVAL_MIN/MAX_SEC 常量（60-90s）
+    this._nextEventTimer = RANDOM_EVENT_INTERVAL_MIN_SEC + Math.random() * (RANDOM_EVENT_INTERVAL_MAX_SEC - RANDOM_EVENT_INTERVAL_MIN_SEC);
     // 城门每日升级标志：新一天重置（broadcaster/expedition_trader 路径可再次升级）
     this._gateUpgradedToday = false;
 
@@ -2127,6 +2314,9 @@ class SurvivalGameEngine {
     this.state         = 'night';
     this.currentDay    = day;
 
+    // §34.3 B10a：清零白天贡献统计（夜晚不再推 efficiency_race）
+    this._dayStats = null;
+
     // §34.4 E9：消费 pending 难度（applyAt='next_night'）→ _applyDifficulty 可能覆写 nightDuration
     //   在 remainingTime 赋值前调用，以便 _applyDifficulty 覆写 nightDuration 时下一行读到新值
     this._consumePendingDifficultyOnNight();
@@ -2181,9 +2371,15 @@ class SurvivalGameEngine {
     this._initNightStats();
 
     // §34.4 E6 夜间修饰符：加权随机选一个 → 存 _currentNightModifier → 应用效果（服务端权威）
+    //   §34.3 B10b：若 _pendingNightModifier 已由 day_preview 预算 → 直接消费，避免二次随机
     //   和平夜（peace_night / peace_night_silent）→ 强制 normal，不应用任何规则改写
     if (this._peaceNightSkipSpawn) {
       this._currentNightModifier = NIGHT_MODIFIERS[0]; // normal（仅用于 phase_changed 附带数据）
+      this._pendingNightModifier = null; // 清缓存
+    } else if (this._pendingNightModifier) {
+      this._currentNightModifier = this._pendingNightModifier;
+      this._pendingNightModifier = null; // 消费一次
+      this._applyNightModifier(this._currentNightModifier, day);
     } else {
       this._currentNightModifier = this._pickNightModifier();
       this._applyNightModifier(this._currentNightModifier, day);
@@ -2299,7 +2495,7 @@ class SurvivalGameEngine {
    *   - 固定 payoutRate = 0.3（无胜利分支）
    *   - manual：跳过 _demoteBuildings / _onRoomFail（fortressDay 不变，也不广播 room_failed）
    *   - 结算数据新增 fortressDayBefore / fortressDayAfter / newbieProtected（§16.6）
-   *   - ~8s 后自动进入恢复期（_enterRecovery），不再 reset + startGame
+   *   - ~30s 后自动进入恢复期（_enterRecovery），不再 reset + startGame（Fix A：原 8s → 30s 与前端 §34 B2 3 屏对齐）
    */
   _enterSettlement(reason) {
     if (this.state === 'settlement' || this.state === 'recovery') return;
@@ -2383,6 +2579,18 @@ class SurvivalGameEngine {
       payoutRate,
     };
 
+    // Fix A (组 B Reviewer P0)：settlement_highlights 必须 **先** 于 survival_game_ended 广播。
+    //   原因：客户端 SurvivalSettlementUI 30s 序列的 帧 A (ShowScreenA) 在收到 survival_game_ended 后立即触发，
+    //         若 highlights 未到 → 读 LastSettlementHighlights 为 null → 帧 A 空白。
+    //   修复：先构造并广播 settlement_highlights，再广播 survival_game_ended。
+    try {
+      const highlights = this._buildSettlementHighlights();
+      this.broadcast({ type: 'settlement_highlights', timestamp: Date.now(), data: highlights });
+      console.log(`[Settlement] highlights broadcast: topDamage=${highlights.topDamageValue}/${highlights.topDamagePlayerName || '-'}, bestRescue=${highlights.bestRescueGiftName || '-'}/${highlights.bestRescuePlayerName || '-'}, closestCall=${(highlights.closestCallHpPct*100).toFixed(1)}%`);
+    } catch (e) {
+      console.warn(`[Settlement] buildSettlementHighlights error: ${e.message}`);
+    }
+
     this.broadcast({ type: 'survival_game_ended', timestamp: Date.now(), data });
     console.log(`[SurvivalEngine] Settlement: reason=${reason}, day=${this.currentDay}, fortressDay ${fortressDayBefore}→${fortressDayAfter} (newbie=${newbieProtected})`);
 
@@ -2391,11 +2599,18 @@ class SurvivalGameEngine {
       try { this.roomPersistence.save(this.room); } catch (e) { /* ignore */ }
     }
 
-    // §16.2 step 1 + §16.4：~8s 结算 UI 展示后进入恢复期，不再 reset + startGame 自动重启
-    this._recoveryTimer = setTimeout(() => {
+    // Fix A (组 B Reviewer P0)：结算 UI 定时器 8000ms → 30000ms。
+    //   原因：前端 SurvivalSettlementUI 协程 10+10+10=30s，服务端 8s 后发 phase_changed{variant:recovery}，
+    //         SurvivalGameManager.cs:308-314 在 Settlement 态收到 recovery 时 SetActive(false)，帧 B/C 永看不到。
+    //   修复：后端倒计时延长到 30000ms 与前端对齐；handleStreamerSkipSettlement 在 30s 窗口内仍可提前跳过。
+    // §34.3 B2：同时赋值 _settleTimerHandle，供 streamer_skip_settlement 跳过
+    this._settleTimerHandle = setTimeout(() => {
       this._recoveryTimer = null;
+      this._settleTimerHandle = null;
       this._enterRecovery();
-    }, 8000);
+    }, 30000);
+    // 保留原 _recoveryTimer 句柄以兼容 _clearAllTimers 的清理路径（同一句柄）
+    this._recoveryTimer = this._settleTimerHandle;
   }
 
   /**
@@ -2551,8 +2766,21 @@ class SurvivalGameEngine {
       // §34.4 E6 blizzard_night：每 10s 全矿工 -2HP（仅夜晚）
       this._tickBlizzardNightIfActive();
 
-      // 随机事件触发检查（仅白天）
+      // 随机事件触发检查（§34.3 B3：白天/夜晚均可）
       this._checkRandomEvents();
+
+      // §34.3 B3 hot_spring 温泉 tick：每 5s +2°C
+      this._tickHotSpringIfActive();
+
+      // §34.3 B4 supporter / B6 gift match 日志：每 60s 输出一次
+      this._logSupporterStatsIfDue();
+      this._logGiftMatchStatsIfDue();
+
+      // §34.3 B10a efficiency_race：白天 tension<30 时每 15s 广播 Top3
+      this._broadcastEfficiencyRaceIfDue();
+
+      // §34.3 B10b day_preview：白天最后 10s 广播下一夜预告
+      this._broadcastDayPreviewIfDue();
 
       // 资源衰减
       this._decayResources();
@@ -3049,6 +3277,9 @@ class SurvivalGameEngine {
     const broadcasterBoost = this.broadcasterEfficiencyMultiplier || 1.0;         // 主播紧急加速
     const eff666Boost      = this.efficiency666Bonus || 1.0;                      // 666弹幕加成
     const auroraBoost      = this._auroraEffMult || 1.0;                          // §24.4 极光 ×1.5（60s）
+    // §34.3 B3 ice_ground：矿工移动速度 ×0.8，折算为工作产出 ×0.8（30s）
+    // Fix G (组 B Reviewer P1)：策划案原文"移动速度 -20%"，项目无移动速度概念，采用采矿产出 ×0.8 等效。
+    const iceGroundMult    = (this._iceGroundEndAt && Date.now() < this._iceGroundEndAt) ? 0.8 : 1.0;
     // §39 A1 worker_pep_talk：采矿效率 +15%（与 efficiency666Bonus / ability_pill 按 Math.max 取最大，不叠加）
     const pepTalkBoost     = (Date.now() < this._peptTalkBoostUntil) ? 1.15 : 1.0;
     const efficiencyAdditive = Math.max(pepTalkBoost, eff666Boost);
@@ -3057,7 +3288,9 @@ class SurvivalGameEngine {
     //   legend（10000）_milestoneGlobalMult = 1.2（所有效果 +20%，×进 eff 与 atk 两路）
     const milestoneEff     = this._milestoneEffMult    || 1.0;
     const milestoneGlobal  = this._milestoneGlobalMult || 1.0;
-    const totalMult        = Math.min(3.0, levelMult * playerBonus * globalBoost * broadcasterBoost * efficiencyAdditive * auroraBoost * milestoneEff * milestoneGlobal);
+    // §34.3 B3 inspiration：下一次 work_command ×2（oneShot，消费后归位）
+    const oneShotMult      = this._oneShotWorkMult || 1.0;
+    const totalMult        = Math.min(3.0, levelMult * playerBonus * globalBoost * broadcasterBoost * efficiencyAdditive * auroraBoost * iceGroundMult * milestoneEff * milestoneGlobal * oneShotMult);
 
     // 阶3+（Lv.21+）白天采矿 10% 概率双倍产出（策划案 §30.3 阶3 专属被动）
     // 适用 cmd 1/2/3（采食物/挖煤/采矿），不含 cmd=4 添柴
@@ -3085,6 +3318,17 @@ class SurvivalGameEngine {
 
     this._trackContribution(playerId, 1, 'barrage'); // 工作贡献值=1（弹幕来源，阶2被动 ×1.5）
     this._tribeWarAddEnergy(1);  // §35 攻击能量：工作指令弹幕 cmd 1/2/3/4 +1
+
+    // §34.3 B3 inspiration：消费 oneShot 产出加成（即使 oneShotMult=1.0 也归位，防状态残留）
+    if (this._oneShotWorkMult && this._oneShotWorkMult !== 1.0) {
+      this._oneShotWorkMult = 1.0;
+    }
+
+    // §34.3 B10a：累计白天贡献（供 efficiency_race Top3 + dayTotal）
+    if (this.state === 'day' && this._dayStats && playerId) {
+      this._dayStats.contributions[playerId] = (this._dayStats.contributions[playerId] || 0) + 1;
+      this._dayStats.totalDay++;
+    }
   }
 
   // ==================== 内部：怪物追踪 ====================
@@ -3191,6 +3435,16 @@ class SurvivalGameEngine {
     }
 
     target.currentHp -= damage;
+
+    // §34.3 B2：累计伤害榜（本局；_handleAttack 路径）
+    if (secOpenId) {
+      this._damageLeaderboard[secOpenId] = (this._damageLeaderboard[secOpenId] || 0) + damage;
+    }
+
+    // §34.3 B2：Boss 绝杀（HP<=5 但未倒下那一刀）→ 最戏剧事件候选
+    if (target.type === 'boss' && target.currentHp > 0 && target.currentHp < 5) {
+      this._recordDramaticEvent('boss_low_hp', `Boss 仅剩 ${target.currentHp} HP！`);
+    }
 
     // 贡献奖励（攻击命中）
     const hitScore = 5;
@@ -4023,21 +4277,33 @@ class SurvivalGameEngine {
     this._waveTimers = [];
   }
 
-  // ==================== 随机事件系统（策划案 §8）====================
+  // ==================== 随机事件系统（策划案 §8 + §34.3 B3 扩充）====================
 
   /**
-   * 每秒检查是否触发随机事件（仅白天）
+   * 每秒检查是否触发随机事件
+   * §34.3 B3 改造：
+   *   - 频率 90-120s → 60-90s（RANDOM_EVENT_INTERVAL_MIN/MAX_SEC 常量）
+   *   - 事件池 5 → 15（RANDOM_EVENT_POOL 加权抽取）
+   *   - E03 白天也触发（生成 2-3 只弱侦察怪 atk=0，游走不攻击矿工）
    */
   _checkRandomEvents() {
-    if (this.state !== 'day') return;
+    // B3：白天/夜晚均可触发（原仅白天；E03_monster_wave / meteor_shower 针对夜晚生效）
+    if (this.state !== 'day' && this.state !== 'night') return;
     this._nextEventTimer -= 1; // 每秒递减
     if (this._nextEventTimer > 0) return;
 
-    // 重置计时器（90-120s后触发下次）
-    this._nextEventTimer = 90 + Math.random() * 30;
+    // 重置计时器（60-90s 后触发下次；B3 提频）
+    this._nextEventTimer = RANDOM_EVENT_INTERVAL_MIN_SEC +
+      Math.random() * (RANDOM_EVENT_INTERVAL_MAX_SEC - RANDOM_EVENT_INTERVAL_MIN_SEC);
 
-    const events = ['E01_snowstorm', 'E02_harvest', 'E03_monster_wave', 'E04_warm_spring', 'E05_ore_vein'];
-    const eventId = events[Math.floor(Math.random() * events.length)];
+    // 加权随机抽取事件
+    const totalWeight = RANDOM_EVENT_POOL.reduce((s, e) => s + e.weight, 0);
+    let r = Math.random() * totalWeight;
+    let eventId = RANDOM_EVENT_POOL[0].id;
+    for (const e of RANDOM_EVENT_POOL) {
+      r -= e.weight;
+      if (r <= 0) { eventId = e.id; break; }
+    }
     this._applyRandomEvent(eventId);
   }
 
@@ -4048,7 +4314,11 @@ class SurvivalGameEngine {
     const name = EVENT_NAMES[eventId] || eventId;
     console.log(`[SurvivalEngine] Random event: ${eventId} (${name})`);
 
+    // extraData 用于携带事件特有字段（如 addFood/hideMonsterHp/targetPlayerId 等）
+    const extraData = {};
+
     switch (eventId) {
+      // ========== 原 5 种 ==========
       case 'E01_snowstorm': {
         // 暴风雪：炉温衰减×2，持续60秒
         this.tempDecayMultiplier = 2.0;
@@ -4064,18 +4334,60 @@ class SurvivalGameEngine {
         break;
       }
       case 'E03_monster_wave': {
-        // 怪物潮：额外生成2只怪物（仅夜晚有意义；白天触发则在下次夜晚生效）
+        // §34.3 B3 改造：白天 & 夜晚都触发
+        //   夜晚：保持原行为（生成 2 只弱怪）
+        //   白天：生成 2-3 只弱侦察怪（scout；atk=0 不攻击矿工；hp ×0.3 近似）
         if (this.state === 'night') {
-          const day = this.currentDay;
           for (let i = 0; i < 2; i++) {
             const id = `wave_event_${++this._monsterIdCounter}`;
             this._activeMonsters.set(id, {
-              id, type: 'normal',
+              id, type: 'normal', variant: 'normal',
               maxHp: 30, currentHp: 30, atk: 3,
             });
           }
-          this._broadcastResourceUpdate();
+        } else if (this.state === 'day') {
+          // 白天弱侦察怪：atk=0（不攻击矿工），hp 为普通怪 0.3
+          const cfg = getWaveConfig(this.currentDay || 1);
+          const baseHp = (cfg && cfg.normal && cfg.normal.hp) ? cfg.normal.hp : 150;
+          const scoutHp = Math.max(1, Math.round(baseHp * 0.3));
+          const scoutCount = 2 + Math.floor(Math.random() * 2); // 2-3 只
+          const scoutIds = [];
+          const scoutList = [];
+          for (let i = 0; i < scoutCount; i++) {
+            const id = `scout_${++this._monsterIdCounter}`;
+            // type='normal' + atk=0 近似 scout；客户端无 scout 类型时按普通渲染但不计伤害（atk=0 本身就不打矿工）
+            const normalSpd = +((cfg && cfg.normal && cfg.normal.spd) ? cfg.normal.spd : 2.0).toFixed(2);
+            this._activeMonsters.set(id, {
+              id, type: 'normal', variant: 'normal',
+              maxHp: scoutHp, currentHp: scoutHp, atk: 0, spd: normalSpd,
+            });
+            scoutIds.push(id);
+            scoutList.push({ monsterId: id, type: 'normal', variant: 'normal', hp: scoutHp, speed: normalSpd });
+          }
+          extraData.scoutCount = scoutCount;
+          extraData.scoutIds   = scoutIds;
+          extraData.isDaytimeScout = true;
+
+          // Fix D (组 B Reviewer P0) §34B B3 E03 daytime scout：
+          //   原实现只在 _activeMonsters 新增 scout，未广播 monster_wave，客户端无法渲染侦察兵。
+          //   修复：对齐现有 guard/summon spawn 的 monster_wave 广播格式（waveIndex=-1 标识非常规波次）。
+          if (scoutList.length > 0) {
+            this.broadcast({
+              type: 'monster_wave',
+              timestamp: Date.now(),
+              data: {
+                waveIndex: -1,
+                day: this.currentDay || 1,
+                monsterId: 'scout',
+                count: scoutList.length,
+                spawnSide: 'all',
+                monsters: scoutList,
+                isDaytimeScout: true,
+              }
+            });
+          }
         }
+        this._broadcastResourceUpdate();
         break;
       }
       case 'E04_warm_spring': {
@@ -4091,9 +4403,178 @@ class SurvivalGameEngine {
         this._randomEventTimers.push(t);
         break;
       }
+
+      // ========== §34.3 B3 新增 10 种 ==========
+      case 'airdrop_supply': {
+        // 空投补给：随机 30-80 食物/煤炭/矿石（各自独立取值，任何时段触发）
+        const addFood = 30 + Math.floor(Math.random() * 51);  // 30-80
+        const addCoal = 30 + Math.floor(Math.random() * 51);
+        const addOre  = 30 + Math.floor(Math.random() * 51);
+        this.food = Math.min(2000, this.food + addFood);
+        this.coal = Math.min(1500, this.coal + addCoal);
+        this.ore  = Math.min(800,  this.ore  + addOre);
+        extraData.addFood = addFood;
+        extraData.addCoal = addCoal;
+        extraData.addOre  = addOre;
+        this._broadcastResourceUpdate();
+        break;
+      }
+      case 'ice_ground': {
+        // 地面冰封：矿工移动速度 ×0.8（在 _applyWorkEffect 时间算式处乘入），持续 30s
+        // Fix G (组 B Reviewer P1)：策划案原文"移动速度 -20%"，项目无移动速度概念，
+        //   采用采矿产出 ×0.8 作为等效实现（_applyWorkEffect 里乘入 iceGroundMult）。
+        this._iceGroundEndAt = Date.now() + 30000;
+        extraData.durationMs = 30000;
+        extraData.slowMult   = 0.8;
+        const t = setTimeout(() => {
+          if (Date.now() >= this._iceGroundEndAt) this._iceGroundEndAt = 0;
+        }, 30000);
+        this._randomEventTimers.push(t);
+        break;
+      }
+      case 'aurora_flash': {
+        // 极光闪现：全员效率 +5%，5s（短暂 buff）
+        //   复用 _auroraEffMult 字段？不——_auroraEffMult 已被 §24.4 轮盘使用为 ×1.5 （60s），避免冲突
+        //   这里改为临时 +5% 独立加成：直接改 efficiency666Bonus 的 Math.max 叠加 → 不行（会被覆盖）
+        //   采用 tempDecayMultiplier 风格：新增 _auroraFlashEndAt + efficiency 加权时读取
+        //   简化：给 foodBonus/oreBonus 各 +5% 相当于全员效率 +5%（5s 短暂，影响小）
+        const prevFoodBonus = this.foodBonus;
+        const prevOreBonus  = this.oreBonus;
+        this.foodBonus = Math.max(1.0, this.foodBonus) * 1.05;
+        this.oreBonus  = Math.max(1.0, this.oreBonus)  * 1.05;
+        extraData.durationMs  = 5000;
+        extraData.effBonus    = 0.05;
+        const t = setTimeout(() => {
+          // 保守回滚（如果期间有其他事件设置 foodBonus/oreBonus，不强制复位；仅清除本事件加成）
+          this.foodBonus = prevFoodBonus;
+          this.oreBonus  = prevOreBonus;
+        }, 5000);
+        this._randomEventTimers.push(t);
+        break;
+      }
+      case 'earthquake': {
+        // 地震：炉温 -5，城门 -50HP
+        this.furnaceTemp = Math.max(this.minTemp, this.furnaceTemp - 5);
+        this.gateHp      = Math.max(0, this.gateHp - 50);
+        extraData.subFurnaceTemp = 5;
+        extraData.subGateHp      = 50;
+        this._broadcastResourceUpdate();
+        break;
+      }
+      case 'meteor_shower': {
+        // 流星雨：仅夜晚，随机击杀 2-3 只怪物
+        if (this.state === 'night' && this._activeMonsters.size > 0) {
+          const killCount = Math.min(
+            this._activeMonsters.size,
+            2 + Math.floor(Math.random() * 2) // 2-3 只
+          );
+          const allIds = [...this._activeMonsters.keys()];
+          // 优先击杀普通怪（避免 boss 被流星秒杀破坏节奏）
+          const normalIds = allIds.filter(id => {
+            const m = this._activeMonsters.get(id);
+            return m && m.type === 'normal';
+          });
+          const candidates = normalIds.length >= killCount ? normalIds : allIds;
+          const killed = [];
+          for (let i = 0; i < killCount && candidates.length > 0; i++) {
+            const idx = Math.floor(Math.random() * candidates.length);
+            const mid = candidates.splice(idx, 1)[0];
+            const m   = this._activeMonsters.get(mid);
+            if (!m) continue;
+            this._activeMonsters.delete(mid);
+            this._broadcast({
+              type: 'monster_died',
+              data: { monsterId: mid, monsterType: m.type, killerId: 'meteor_shower' },
+            });
+            this._postMonsterDeathHooks(mid, m.type, m.variant);
+            killed.push(mid);
+          }
+          extraData.killedCount = killed.length;
+          extraData.killedIds   = killed;
+          this._broadcastResourceUpdate();
+        }
+        break;
+      }
+      case 'heavy_fog': {
+        // 浓雾：客户端隐藏怪物血条（服务端发 flag hideMonsterHp=true），30s
+        this._heavyFogEndAt = Date.now() + 30000;
+        extraData.durationMs     = 30000;
+        extraData.hideMonsterHp  = true;
+        const t = setTimeout(() => {
+          if (Date.now() >= this._heavyFogEndAt) {
+            this._heavyFogEndAt = 0;
+            // 事件结束：补发 resource_update 让客户端恢复血条显示
+            this._broadcastResourceUpdate();
+          }
+        }, 30000);
+        this._randomEventTimers.push(t);
+        this._broadcastResourceUpdate();
+        break;
+      }
+      case 'hot_spring': {
+        // 温泉涌出：炉温 +2°C/5s，持续 30s（6 次 tick，由 _tickHotSpring 每秒检查）
+        this._hotSpringEndAt    = Date.now() + 30000;
+        this._hotSpringLastTick = this._tickCounter || 0; // 基于 tick 计数
+        extraData.durationMs  = 30000;
+        extraData.tempPerTick = 2;
+        extraData.tickSec     = 5;
+        break;
+      }
+      case 'food_spoil': {
+        // 食物变质：food ×0.85（一次性，无持续）
+        const before = this.food;
+        this.food = Math.floor(this.food * 0.85);
+        extraData.foodBefore = before;
+        extraData.foodAfter  = this.food;
+        extraData.lossPct    = 0.15;
+        this._broadcastResourceUpdate();
+        break;
+      }
+      case 'inspiration': {
+        // 灵感爆发：下一次 work_command 产出 ×2（_oneShotWorkMult=2，_applyWorkEffect 消费后归 1.0）
+        this._oneShotWorkMult = 2.0;
+        extraData.nextWorkMult = 2.0;
+        break;
+      }
+      case 'morale_boost': {
+        // 矿工士气：随机一名矿工头顶"加油"气泡 3s（服务端选 playerId + 客户端 UI 渲染）
+        //   候选池：contributions 中有记录的玩家 id（守护者 + 已注册）；无则 skip
+        const candidates = Object.keys(this.contributions || {}).filter(pid => pid);
+        if (candidates.length > 0) {
+          const pid = candidates[Math.floor(Math.random() * candidates.length)];
+          extraData.targetPlayerId   = pid;
+          extraData.targetPlayerName = this.playerNames[pid] || pid;
+          extraData.bubbleText       = '加油';
+          extraData.durationMs       = 3000;
+        }
+        break;
+      }
     }
 
-    this.broadcast({ type: 'random_event', timestamp: Date.now(), data: { eventId, name } });
+    // 统一广播 random_event（附带事件特有 data）
+    this.broadcast({
+      type: 'random_event',
+      timestamp: Date.now(),
+      data: Object.assign({ eventId, name }, extraData),
+    });
+  }
+
+  /**
+   * §34.3 B3 hot_spring 事件 tick 处理：每 5s 炉温 +2°C（持续 30s = 6 次）
+   * 由 _tick 每秒调用，_tickCounter % 5 === 0 触发
+   */
+  _tickHotSpringIfActive() {
+    if (!this._hotSpringEndAt || Date.now() >= this._hotSpringEndAt) {
+      if (this._hotSpringEndAt && Date.now() >= this._hotSpringEndAt) {
+        this._hotSpringEndAt = 0;
+        this._hotSpringLastTick = 0;
+      }
+      return;
+    }
+    // 每 5 秒（25 tick）触发一次
+    if (this._tickCounter - this._hotSpringLastTick < 25) return;
+    this._hotSpringLastTick = this._tickCounter;
+    this.furnaceTemp = Math.min(this.maxTemp, this.furnaceTemp + 2);
   }
 
   // ==================== 公开辅助接口 ====================
@@ -4117,6 +4598,233 @@ class SurvivalGameEngine {
     };
     const eventId = mapping[eventType] || eventType;
     this._applyRandomEvent(eventId);
+  }
+
+  // ==================== §34.3 Layer 2 组 B：B2 / B4 / B6 / B10 辅助方法 ====================
+
+  /**
+   * §34.3 B2：记录一个"戏剧性事件"候选，同一局内按优先级/新鲜度替换
+   *   type: 'boss_low_hp' | 'tension_drop' | 'free_death_pass' | 'gate_critical' | 其他
+   *   desc: 简短描述文本
+   *   优先级（按 type 权重）：越往后覆盖越强
+   */
+  _recordDramaticEvent(type, desc) {
+    const PRIORITY = {
+      'tension_drop':     1,
+      'gate_critical':    2,
+      'boss_low_hp':      3,
+      'free_death_pass':  4,
+    };
+    const newP = PRIORITY[type] || 0;
+    const prev = this._mostDramaticEvent;
+    if (!prev || (PRIORITY[prev.type] || 0) <= newP) {
+      this._mostDramaticEvent = {
+        type,
+        desc: desc || '',
+        day:  this.currentDay || 0,
+      };
+    }
+  }
+
+  /**
+   * §34.3 B2：更新 closest call（最危险时刻）——每次 _broadcastResourceUpdate 调用
+   *   跨夜晚跟踪 gateHp / gateMaxHp 最低百分比
+   */
+  _updateClosestCall() {
+    if (!this.gateMaxHp || this.gateMaxHp <= 0) return;
+    const pct = Math.max(0, Math.min(1, this.gateHp / this.gateMaxHp));
+    if (this._overallClosestCall == null || pct < this._overallClosestCall.hpPct) {
+      this._overallClosestCall = { hpPct: pct, day: this.currentDay || 0 };
+    }
+  }
+
+  /**
+   * §34.3 B2：构造 settlement_highlights 数据包
+   *   在 _enterSettlement 中调用（失败/manual 均广播）
+   */
+  _buildSettlementHighlights() {
+    // topDamage: 本局累计伤害最高
+    let topDmgId = null, topDmgVal = 0;
+    for (const [pid, dmg] of Object.entries(this._damageLeaderboard)) {
+      if (dmg > topDmgVal) { topDmgVal = dmg; topDmgId = pid; }
+    }
+    const topDamagePlayerName = topDmgId ? (this.playerNames[topDmgId] || topDmgId) : null;
+
+    const bestRescue = this._bestRescue;
+    const mostDramatic = this._mostDramaticEvent;
+    const closest = this._overallClosestCall || { hpPct: 1.0, day: 0 };
+
+    // 赛季/日 ID（MVP 用 seasonDay）
+    const dayOrSeasonId = (this.seasonMgr && this.seasonMgr.seasonDay)
+      ? this.seasonMgr.seasonDay
+      : (this.currentDay || 0);
+
+    return {
+      dayOrSeasonId,
+      topDamagePlayerId:   topDmgId,
+      topDamagePlayerName: topDamagePlayerName,
+      topDamageValue:      Math.round(topDmgVal),
+      bestRescueGiftId:    bestRescue ? bestRescue.giftId   : null,
+      bestRescueGiftName:  bestRescue ? bestRescue.giftName : null,
+      bestRescuePlayerName: bestRescue ? bestRescue.playerName : null,
+      mostDramaticEvent:   mostDramatic ? {
+        type: mostDramatic.type,
+        desc: mostDramatic.desc,
+        day:  mostDramatic.day,
+      } : null,
+      closestCallHpPct:    Math.round(closest.hpPct * 1000) / 1000,
+      closestCallDay:      closest.day || 0,
+    };
+  }
+
+  /**
+   * §34.3 B2：主播跳过结算倒计时（C→S streamer_skip_settlement）
+   *   校验：state==='settlement' && _settleTimerHandle 存在
+   *   执行：clearTimeout + 立即执行倒计时到期逻辑（_enterRecovery）
+   *   Fix A (组 B Reviewer P0)：结算倒计时已延长至 30000ms，
+   *     跳过窗口自然扩大到 30s（只要 _settleTimerHandle 非 null 即视为 valid）。
+   */
+  handleStreamerSkipSettlement(playerId) {
+    if (this.state !== 'settlement') {
+      console.log(`[Settlement] skip rejected: state=${this.state}`);
+      return false;
+    }
+    if (!this._settleTimerHandle) {
+      console.log(`[Settlement] skip rejected: timer already fired or not set`);
+      return false;
+    }
+    clearTimeout(this._settleTimerHandle);
+    this._settleTimerHandle = null;
+    console.log(`[Settlement] streamer skip: playerId=${playerId}, advance to recovery immediately`);
+    // 立即执行 30s 倒计时到期等价逻辑（Fix A：原 8s → 30s）
+    this._recoveryTimer = null;
+    this._enterRecovery();
+    return true;
+  }
+
+  /**
+   * §34.3 B4：助威者冷却日志输出（每 60s 一次）
+   *   从 _tick 每秒调用；内部判断 tickCounter 差值
+   */
+  _logSupporterStatsIfDue() {
+    // _tickCounter 每秒 +5（5 tick/s）；60s = 300 tick
+    if (this._tickCounter - this._supporterStatsLogAt < 300) return;
+    this._supporterStatsLogAt = this._tickCounter;
+    const s = this._supporterStats;
+    const rate = s.totalAttempts > 0 ? ((s.blockedByThrottleCount / s.totalAttempts) * 100).toFixed(1) : '0.0';
+    console.log(`[Supporter] hit=${s.hitCount} blocked=${s.blockedByThrottleCount} throttle_rate=${rate}%`);
+  }
+
+  /**
+   * §34.3 B6：礼物 douyin_id 双路匹配统计日志（每 60s 一次）
+   */
+  _logGiftMatchStatsIfDue() {
+    if (this._tickCounter - this._giftMatchStatsLogAt < 300) return;
+    this._giftMatchStatsLogAt = this._tickCounter;
+    const s = this._giftMatchStats;
+    const total = s.exactHit + s.fallbackHit + s.missed;
+    if (total === 0) return; // 无礼物活动，不必输出噪音日志
+    const fallbackRate = total > 0 ? ((s.fallbackHit / total) * 100).toFixed(1) : '0.0';
+    const missRate     = total > 0 ? ((s.missed / total) * 100).toFixed(1) : '0.0';
+    console.log(`[Gift] match stats: exact=${s.exactHit} fallback=${s.fallbackHit} missed=${s.missed} fallback_rate=${fallbackRate}% miss_rate=${missRate}%`);
+  }
+
+  /**
+   * §34.3 B10a：效率竞赛推送
+   *   仅 phase='day' && tension<30 时每 15s 推 Top3 + dayTotal
+   *   数据源：_dayStats（_enterDay 初始化，_enterNight 清零；_trackContribution 累加）
+   */
+  _broadcastEfficiencyRaceIfDue() {
+    if (this.state !== 'day') return;
+    if (!this._dayStats) return;
+
+    const now = Date.now();
+    if (now - this._lastEfficiencyRaceAt < 15000) return;
+
+    // 张力实时计算，必须 < 30 才推送（安全期）
+    const tension = this._calcTension();
+    if (tension >= 30) return;
+
+    this._lastEfficiencyRaceAt = now;
+
+    // Top3：从 _dayStats.contributions 排序
+    const entries = Object.entries(this._dayStats.contributions)
+      .map(([pid, contrib]) => ({ pid, contrib }))
+      .sort((a, b) => b.contrib - a.contrib)
+      .slice(0, 3);
+
+    const top3 = entries.map((e, idx) => ({
+      rank:       idx + 1,
+      playerId:   e.pid,
+      playerName: this.playerNames[e.pid] || e.pid,
+      contribution: Math.round(e.contrib),
+    }));
+
+    this.broadcast({
+      type: 'efficiency_race',
+      timestamp: now,
+      data: {
+        top3,
+        dayTotal: Math.round(this._dayStats.totalDay || 0),
+      },
+    });
+  }
+
+  /**
+   * §34.3 B10b：夜晚预告（白天最后 10s 触发一次）
+   *   推送：monsterCount / bossHp / nightModifier（预先选定并缓存，_enterNight 消费）
+   *   定时逻辑：remainingTime<=10 && state=='day' && 当前 day 尚未广播
+   */
+  _broadcastDayPreviewIfDue() {
+    if (this.state !== 'day') return;
+    if (this.remainingTime > 10 || this.remainingTime <= 0) return;
+    // 按当前 day 去重（同一天仅推一次）
+    if (this._dayPreviewBroadcastedForDay === this.currentDay) return;
+
+    this._dayPreviewBroadcastedForDay = this.currentDay;
+
+    // 下一夜配置（等价 _enterNight 的读法）
+    const nextDay = this.currentDay; // day 进入夜晚 day 编号不变（_enterNight 传入当前 day）
+    const cfg     = getWaveConfig(nextDay);
+    // 预算 nightModifier（和平夜强制 normal，其他加权随机）
+    const seasonDay = this.seasonMgr ? this.seasonMgr.seasonDay : 1;
+    const peaceVariant = this._getPeaceNightVariant(seasonDay);
+    const skipSpawn = (peaceVariant === 'peace_night' || peaceVariant === 'peace_night_silent');
+
+    let modifier;
+    if (skipSpawn) {
+      modifier = NIGHT_MODIFIERS[0]; // normal
+      this._pendingNightModifier = null;
+    } else {
+      modifier = this._pickNightModifier();
+      this._pendingNightModifier = modifier; // _enterNight 将消费
+    }
+
+    // 预计算 monsterCount / bossHp（不考虑主题倍率，预告用粗估即可）
+    const hpMult  = (this._monsterHpMult  || 1.0) * (this._dynamicHpMult    || 1.0);
+    const cntMult = (this._monsterCntMult || 1.0) * (this._dynamicCountMult || 1.0);
+    let monsterCount = 0;
+    if (cfg && cfg.normal) monsterCount += Math.max(1, Math.round(cfg.normal.count * cntMult));
+    if (cfg && cfg.elite)  monsterCount += Math.max(0, Math.round(cfg.elite.count  * cntMult));
+    if (cfg && cfg.boss)   monsterCount += 1;
+    const bossHp = cfg && cfg.boss ? Math.max(1, Math.round(cfg.boss.hp * hpMult)) : 0;
+
+    // Fix E (组 B Reviewer P1) §34B B10b day_preview：
+    //   原实现只发 {id, name}，前端 DayPreviewBanner 读 description 为空，固定显示"特殊效果：无"。
+    //   修复：补带 description（服务端字段名为 desc；NightModifierData.description 对齐策划案）。
+    this.broadcast({
+      type: 'day_preview',
+      timestamp: Date.now(),
+      data: {
+        monsterCount,
+        bossHp,
+        nightModifier: modifier ? {
+          id:          modifier.id,
+          name:        modifier.name,
+          description: modifier.desc || '',
+        } : null,
+      },
+    });
   }
 
   // ==================== §37 建造系统（Building System，MVP）====================
@@ -4466,6 +5174,18 @@ class SurvivalGameEngine {
     const giftRecommendation = this._calcGiftRecommendation(tension);
     // §34.4 E5b：每次 resource_update 追踪一次夜晚最低城门 HP%（5s 精度对战报足够）
     this._trackNightGateHp();
+    // §34.3 B2：同步追踪本局 closest call（跨白天/夜晚）+ 张力暴跌检测
+    this._updateClosestCall();
+    // tension 下跌幅度 ≥65 视为"最戏剧性事件"候选
+    if (this._tensionPrev > 0 && (this._tensionPrev - tension) >= 65) {
+      this._recordDramaticEvent('tension_drop', `危机从 ${this._tensionPrev} 降至 ${tension}`);
+    }
+    this._tensionPrev = tension;
+    // gateHp 跌破 5% 记为 "gate_critical"
+    if (this.gateMaxHp > 0 && (this.gateHp / this.gateMaxHp) < 0.05) {
+      this._recordDramaticEvent('gate_critical', `城门仅剩 ${Math.round((this.gateHp / this.gateMaxHp) * 100)}% HP`);
+    }
+
     this.broadcast({
       type: 'resource_update',
       timestamp: Date.now(),
@@ -4491,6 +5211,8 @@ class SurvivalGameEngine {
         tension,
         giftRecommendation,
         totalContribution: Math.round(this._totalContribution || 0),
+        // §34.3 B3 heavy_fog：客户端据此隐藏怪物血条（30s）
+        hideMonsterHp: (this._heavyFogEndAt > 0 && Date.now() < this._heavyFogEndAt),
       }
     });
   }
@@ -4666,6 +5388,8 @@ class SurvivalGameEngine {
     });
     if (typeof this._broadcastWorkerHp === 'function') this._broadcastWorkerHp();
     console.log(`[SurvivalEngine] Free death pass consumed: ${this._getPlayerName(playerId)} saved from death`);
+    // §34.3 B2：记录"最戏剧性事件"候选
+    this._recordDramaticEvent('free_death_pass', `${this._getPlayerName(playerId)} 触发免死豁免`);
     return true;
   }
 
@@ -5700,6 +6424,15 @@ class SurvivalGameEngine {
     if (finalAmount > 0) {
       this._totalContribution += finalAmount;
       this._checkCoopMilestones();
+    }
+
+    // §34.3 B10a：白天贡献累计到 _dayStats（efficiency_race Top3 + dayTotal 数据源）
+    //   仅正 finalAmount 且 state=='day'；_dayStats 在 _enterDay 初始化，_enterNight 清零
+    //   _applyWorkEffect 里已单独计 +1，此处兜底其他路径（礼物/攻击/666 等）；
+    //   为避免 _applyWorkEffect 重复累计，这里排除 source='barrage'（工作指令已在 _applyWorkEffect 里计了 +1）
+    if (finalAmount > 0 && this.state === 'day' && this._dayStats && source !== 'barrage') {
+      this._dayStats.contributions[playerId] = (this._dayStats.contributions[playerId] || 0) + finalAmount;
+      this._dayStats.totalDay += finalAmount;
     }
 
     // 防抖：贡献变化后 1.5s 推送实时榜（避免每条弹幕都广播）
@@ -7133,7 +7866,7 @@ class SurvivalGameEngine {
   _clearAllTimers() {
     this._clearTick();
     this._clearNightWaves();
-    // §16 恢复期定时器（_enterSettlement 的 8s UI 定时器 / _enterRecovery 的 120s 定时器共用同一句柄）
+    // §16 恢复期定时器（_enterSettlement 的 30s UI 定时器 / _enterRecovery 的 120s 定时器共用同一句柄；Fix A：8s→30s）
     if (this._recoveryTimer) { clearTimeout(this._recoveryTimer); this._recoveryTimer = null; }
     // 清除 per-player 临时 boost 定时器（能量电池）
     for (const t of Object.values(this._playerTempBoostTimers || {})) clearTimeout(t);
@@ -7175,6 +7908,9 @@ class SurvivalGameEngine {
     // §34.4 组 D：清 E5a 提词器 + E8 参与感唤回定时器
     if (this._streamerPromptTimer) { clearInterval(this._streamerPromptTimer); this._streamerPromptTimer = null; }
     if (this._engagementInterval)  { clearInterval(this._engagementInterval);  this._engagementInterval  = null; }
+
+    // §34.3 B2：结算 30s 倒计时句柄（streamer_skip_settlement 亦会清；Fix A：原 8s → 30s）
+    if (this._settleTimerHandle) { clearTimeout(this._settleTimerHandle); this._settleTimerHandle = null; }
   }
 }
 

@@ -56,6 +56,10 @@ namespace DrscfZ.Survival
         public int                    tension;              // §34 E1 危机感知 0-100
         public GiftRecommendationData giftRecommendation;   // §34 E4 精准付费触发（可为 null）
         public int                    totalContribution;    // §34 E3b 全服累计贡献（驱动里程碑进度条）
+        // 🆕 §34B B3 heavy_fog 事件：30s 内隐藏所有怪物血条（服务端 resource_update 捎带推送，
+        //   事件结束后置 false 恢复）。缺失字段 JsonUtility 反序列化为 false。
+        //   Fix B (组 B Reviewer P0)：前端 ResourceUpdateData 原本没有对应字段，JsonUtility 会丢弃。
+        public bool                   hideMonsterHp;
     }
 
     /// <summary>昼夜阶段切换</summary>
@@ -1189,5 +1193,69 @@ namespace DrscfZ.Survival
         public string giftName;
         public string impacts;
         public bool   privateOnly;    // fairy_wand=true，其余 false
+    }
+
+    // ==================== §34 Layer 2 组 B 数据流可视化（🆕 v1.27）====================
+    // 协议：settlement_highlights / streamer_skip_settlement(C→S) / efficiency_race / day_preview。
+    // random_event 沿用现有 RandomEventData（B3 仅扩展 eventId 枚举，前端 fallback 兜底）。
+
+    /// <summary>§34 B2 结算"最戏剧性事件"嵌套对象（settlement_highlights.mostDramaticEvent）。
+    /// 缺失时 JsonUtility 反序列化为 null 整块。</summary>
+    [Serializable]
+    public class DramaticEventData
+    {
+        public string type;   // 'tension_drop' / 'boss_killed' / 'gate_almost_broken' / ...
+        public string desc;   // 前端友好文案，MVP 阶段直接渲染
+        public int    day;    // 事件发生在第几天
+    }
+
+    /// <summary>§34 B2 结算高光数据（type=settlement_highlights，S→C）。
+    /// 服务端在 survival_game_ended 之后、结算序列开始前推送；客户端缓存最近一次，
+    /// 在 PlaySettlementSequence 的帧 A（高光时刻）阶段渲染。
+    /// closestCallHpPct 范围 0-1；mostDramaticEvent 可为 null（JsonUtility 整块 null）。</summary>
+    [Serializable]
+    public class SettlementHighlightsData
+    {
+        public int               dayOrSeasonId;
+        public string            topDamagePlayerId;
+        public string            topDamagePlayerName;
+        public int               topDamageValue;
+        public string            bestRescueGiftId;
+        public string            bestRescueGiftName;
+        public string            bestRescuePlayerName;
+        public DramaticEventData mostDramaticEvent;
+        public float             closestCallHpPct;
+        public int               closestCallDay;
+    }
+
+    /// <summary>§34 B10a 安全期效率竞赛单条（efficiency_race.top3[i]）</summary>
+    [Serializable]
+    public class EfficiencyRaceEntry
+    {
+        public int    rank;           // 1-3
+        public string playerId;
+        public string playerName;
+        public int    contribution;
+    }
+
+    /// <summary>§34 B10a 安全期效率竞赛（type=efficiency_race，S→C）。
+    /// 服务端仅在 tension &lt; 30 的白天定期推送（~15s 间隔）；客户端滚动展示 Top2 PK 文案。
+    /// top3 可能为 null 或长度 &lt; 3；top3 为空时前端直接忽略。</summary>
+    [Serializable]
+    public class EfficiencyRaceData
+    {
+        public EfficiencyRaceEntry[] top3;
+        public int                   dayTotal;
+    }
+
+    /// <summary>§34 B10b 夜晚预告（type=day_preview，S→C）。
+    /// 白天最后 10s 服务端推送一次，客户端渲染倒计时横幅；若 phase_changed.phase='night' 则立即隐藏。
+    /// nightModifier 可为 null（普通夜晚），复用组 D 的 NightModifierData。</summary>
+    [Serializable]
+    public class DayPreviewData
+    {
+        public int                monsterCount;
+        public int                bossHp;
+        public NightModifierData  nightModifier;   // null → 普通夜晚
     }
 }
