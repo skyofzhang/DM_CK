@@ -67,6 +67,9 @@ namespace DrscfZ.Monster
 
         public bool IsDead => _state == MonsterState.Dead;
 
+        /// <summary>🆕 §34A B1 StatusLineBannerUI：当前 HP（只读）。供 UI 读取 Boss HP 展示。</summary>
+        public int CurrentHp => _currentHp;
+
         // ==================== 初始化 ====================
 
         /// <summary>由 WaveSpawner 调用，注入参数（旧签名委派到 variant 重载，默认 Normal）</summary>

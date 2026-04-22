@@ -169,6 +169,18 @@ namespace DrscfZ.Survival
         public event Action<EfficiencyRaceData>       OnEfficiencyRace;
         public event Action<DayPreviewData>           OnDayPreview;
 
+        // ----- §34 Layer 2 组 A 新手友好（🆕 v1.27）-----
+        // B1 StatusLineBanner 订阅 OnResourceUpdate / OnPhaseChanged（已有）；
+        // B5 OreRepairFloatingText 订阅 OnResourceUpdate（已有）；
+        // B8 fairy_wand 视觉系统：OnGiftImpact（已有，过滤 giftId=='fairy_wand'）+ OnFairyWandMaxed（新）；
+        // B9 PersonalContribUI 订阅 OnPlayerStatsUpdated（新，随 work_command_response 分发）。
+        public event Action<PlayerStatsData>    OnPlayerStatsUpdated;   // B9 每次 work_command_response 分发
+        public event Action<FairyWandMaxedData> OnFairyWandMaxed;       // B8 仙女棒满级单播（+100% 满级）
+
+        /// <summary>§34 B9 最近一次收到的 playerStats（供 UI 查询，初始为 null）。
+        /// 收到第一条 work_command_response.playerStats 后 PersonalContribUI 常驻显示。</summary>
+        public PlayerStatsData LastPlayerStats { get; private set; }
+
         // 🆕 Fix C (组 B Reviewer P0) §34B B3：RandomEvent 事件总线
         //   订阅者：WorkerManager（morale_boost 矿工气泡）/ 其他 UI（aurora_flash / airdrop 等）。
         public event Action<RandomEventData> OnRandomEvent;
@@ -796,6 +808,26 @@ namespace DrscfZ.Survival
                     var dp = JsonUtility.FromJson<DayPreviewData>(dataJson);
                     if (dp != null) OnDayPreview?.Invoke(dp);
                     break;
+
+                // ----- §34 Layer 2 组 A 新手友好（🆕 v1.27） -----
+                // B9 work_command_response：协议预留 type（当前服务端实际把 playerStats 捎带在 work_command 广播上，
+                //   由 HandleWorkCommand 统一分发 OnPlayerStatsUpdated；此 case 作为未来拆分独立 response type 的兜底）。
+                //   若老服务端不下发本消息，前端保持静默（PersonalContribUI 不显示）。
+                case "work_command_response":
+                    var wcr = JsonUtility.FromJson<WorkCommandResponseData>(dataJson);
+                    if (wcr != null && wcr.playerStats != null)
+                    {
+                        LastPlayerStats = wcr.playerStats;
+                        OnPlayerStatsUpdated?.Invoke(wcr.playerStats);
+                    }
+                    break;
+
+                // B8 fairy_wand_maxed：服务端 fairy_wand 累计跨过 +100% 时 unicast；
+                //   前端全屏金闪 + 跑马灯 "满级矿工达成！{playerName}"。
+                case "fairy_wand_maxed":
+                    var fwm = JsonUtility.FromJson<FairyWandMaxedData>(dataJson);
+                    if (fwm != null) OnFairyWandMaxed?.Invoke(fwm);
+                    break;
             }
         }
 
@@ -938,6 +970,14 @@ namespace DrscfZ.Survival
         {
             OnWorkCommand?.Invoke(data);
             workerManager?.AssignWork(data);
+
+            // 🆕 §34 Layer 2 组 A B9：服务端在 work_command 附带 playerStats 快照（可为 null）
+            //   有快照 → 缓存 + 分发 OnPlayerStatsUpdated，PersonalContribUI / FairyWandAccumUI 消费。
+            if (data?.playerStats != null)
+            {
+                LastPlayerStats = data.playerStats;
+                OnPlayerStatsUpdated?.Invoke(data.playerStats);
+            }
 
             // 上报资源分类贡献到排行系统（commandId 1=食物 2=煤炭 3=矿石）
             string resType = data.commandId switch

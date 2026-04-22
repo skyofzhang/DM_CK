@@ -173,5 +173,10 @@ namespace DrscfZ.Survival
         public const string StreamerSkipSettlement  = "streamer_skip_settlement";   // C→S：B2 主播"立即重开"跳过结算
         public const string EfficiencyRace          = "efficiency_race";            // S→C：B10a 安全期 Top2 PK 滚动
         public const string DayPreview              = "day_preview";                // S→C：B10b 白天最后 10s 夜晚预告
+
+        // ----- §34 Layer 2 组 A 新手友好（🆕 v1.27） -----
+        // B1 StatusLineBanner / B5 OreRepairFloatingText / B8 fairy_wand 视觉系统 / B9 PersonalContribUI
+        public const string WorkCommandResponse = "work_command_response";  // S→C：B9 work_command 单播响应（playerStats）
+        public const string FairyWandMaxed      = "fairy_wand_maxed";        // S→C：B8 仙女棒满级（+100% fairyWandBonus）
     }
 }
