@@ -151,6 +151,11 @@ namespace DrscfZ.Survival
         // §24.5 主播决策中心 HUD（🆕 v1.27）：resource_update 事件转发，供 HUD 触发推荐重算
         public event Action<ResourceUpdateData> OnResourceUpdate;
 
+        // §34 Layer 3 组 C 体验引擎（🆕 v1.27）：GloryMoment / CoopMilestone / GiftImpact
+        public event Action<GloryMomentData>   OnGloryMoment;
+        public event Action<CoopMilestoneData> OnCoopMilestone;
+        public event Action<GiftImpactData>    OnGiftImpact;
+
         /// <summary>§36.12 seasonDay 从 N→N+1 递增的那一秒新解锁的功能 id 列表（由 world_clock_tick 触发）。
         /// 参数是该 tick 携带的 newlyUnlockedFeatures 字段内容，UI 层据此逐条播放解锁横幅。</summary>
         public event Action<string[]> OnNewlyUnlockedFeatures;
@@ -715,6 +720,20 @@ namespace DrscfZ.Survival
                 case "roulette_spin_failed":
                     // §36.12 feature_locked 场景（roulette.minDay=1 实际不触发；此处为防御性兜底，避免静默吞消息）
                     HandleRouletteSpinFailed(dataJson);
+                    break;
+
+                // ----- §34 Layer 3 组 C 体验引擎（🆕 v1.27） -----
+                case "glory_moment":
+                    var glory = JsonUtility.FromJson<GloryMomentData>(dataJson);
+                    if (glory != null) OnGloryMoment?.Invoke(glory);
+                    break;
+                case "coop_milestone":
+                    var milestone = JsonUtility.FromJson<CoopMilestoneData>(dataJson);
+                    if (milestone != null) OnCoopMilestone?.Invoke(milestone);
+                    break;
+                case "gift_impact":
+                    var impact = JsonUtility.FromJson<GiftImpactData>(dataJson);
+                    if (impact != null) OnGiftImpact?.Invoke(impact);
                     break;
             }
         }
