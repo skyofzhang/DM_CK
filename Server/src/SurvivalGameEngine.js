@@ -265,6 +265,65 @@ const SHOP_GATE_QUICKPATCH_HP = 100;
 // A3 emergency_alert 预警提前秒数（§39.2 A3，无瞭望塔时 10s，有瞭望塔时 30s——MVP 简化为固定 10s）
 const SHOP_EMERGENCY_ALERT_LEAD_SEC = 10;
 
+// ==================== §34.4 Layer 3 组 D（E2 五幕 / E5a 提词 / E5b 夜报 / E6 修饰符 / E8 唤回 / E9 难度）====================
+// 策划案 §34.4 第 5205–5482 行，与组 C（E1/E3/E4）并存：
+//   - E2  seasonDay(1..7) → actTag('prologue'/'act1'/'act2'/'act3'/'finale') 映射，幕末事件（mini BossRush 等）
+//   - E5a 每 10s 生成主播专用提示（TODO：_roomCreatorId 未注入 → 现版本广播；客户端按 isRoomCreator 过滤）
+//   - E5b 夜→昼时基于 _nightStats 推送战报
+//   - E6  _enterNight 加权随机 NIGHT_MODIFIERS 选一个（含 §31 交互规则：blood_moon 覆盖、polar_night × 1.5 频率）
+//   - E8  每 300s 对 contributions > 0 玩家推送排名 + gapToTop3（TODO：单播能力未接入 → 广播，客户端自筛）
+//   - E9  change_difficulty C→S（applyAt='next_night' 或 'next_season'），生效时机由 _enterNight / SeasonManager 轮询消费
+
+// E2 赛季幕定义
+//   seasonDay ∈ [1..7] → actTag + name + endNote；D7 终章复用 §36 BossRush（不重复实现）
+const ACT_DEFINITIONS = [
+  { actTag: 'prologue', name: '序章·踏入极地',   startDay: 1, endDay: 1, endNote: '教学+安全' },
+  { actTag: 'act1',     name: '第一幕·资源争夺', startDay: 2, endDay: 3, endNote: '压力上升' },
+  { actTag: 'act2',     name: '第二幕·暗夜降临', startDay: 4, endDay: 5, endNote: '持续高压' },
+  { actTag: 'act3',     name: '第三幕·最后防线', startDay: 6, endDay: 6, endNote: '极限挑战' },
+  { actTag: 'finale',   name: '终章·黎明之前',   startDay: 7, endDay: 7, endNote: 'BossRush 终章（§36）' },
+];
+
+// E5a 提词器：10s 调用一次
+const STREAMER_PROMPT_INTERVAL_MS = 10 * 1000;
+
+// E6 夜间修饰符池
+//   normal 占 40% 权重作为保底，其余 6 种按 minDay 解锁
+//   策划案 §34.4 第 5406-5414 行；权重 = 40+15+12+10+12+8+3 = 100
+const NIGHT_MODIFIERS = [
+  { id: 'normal',         name: '普通夜晚',   desc: '无特殊规则',                                   weight: 40, minDay: 1  },
+  { id: 'blood_moon',     name: '血月',       desc: '单 Boss HP ×3，击杀贡献 ×1.5',                 weight: 15, minDay: 3  },
+  { id: 'polar_night',    name: '极夜',       desc: '夜晚持续 180s，§31 变体频率 ×1.5 + 属性 +20%',  weight: 12, minDay: 5  },
+  { id: 'fortified',      name: '坚守之夜',   desc: '全矿工 HP +30，无 Boss',                        weight: 10, minDay: 4  },
+  { id: 'frenzy',         name: '狂潮之夜',   desc: '波次间隔 ×0.6，每波数量 ×0.5',                  weight: 12, minDay: 6  },
+  { id: 'hunters',        name: '猎手之夜',   desc: '玩家对 Boss 伤害 ×2',                           weight:  8, minDay: 8  },
+  { id: 'blizzard_night', name: '暴风雪夜',   desc: '全矿工 -2HP/10s 冻伤，T4 能量电池治愈',         weight:  3, minDay: 10 },
+];
+// 极夜夜长（秒），默认 nightDuration 为 120
+const MODIFIER_POLAR_NIGHT_DURATION_SEC = 180;
+// blizzard_night 每 10s 冻伤
+const MODIFIER_BLIZZARD_TICK_SEC = 10;
+const MODIFIER_BLIZZARD_DAMAGE   = 2;
+// blizzard_night T4 能量电池治愈量（全矿工 +20HP）
+const MODIFIER_BLIZZARD_T4_HEAL  = 20;
+// frenzy 倍率
+const MODIFIER_FRENZY_INTERVAL_MULT = 0.6;
+const MODIFIER_FRENZY_COUNT_MULT    = 0.5;
+// fortified 矿工 HP 加成
+const MODIFIER_FORTIFIED_HP_BONUS   = 30;
+// blood_moon Boss HP × 3，护卫（elite）数量 2
+const MODIFIER_BLOOD_MOON_BOSS_HP_MULT = 3;
+const MODIFIER_BLOOD_MOON_ELITE_COUNT   = 2;
+const MODIFIER_BLOOD_MOON_CONTRIB_MULT  = 1.5;
+// polar_night §31 变体频率 / 属性倍率
+const MODIFIER_POLAR_VARIANT_FREQ_MULT = 1.5;
+const MODIFIER_POLAR_VARIANT_STAT_MULT = 1.2;
+// hunters Boss 伤害倍率
+const MODIFIER_HUNTERS_BOSS_DMG_MULT   = 2;
+
+// E8 参与感唤回：每 300s 对 contributions > 0 的玩家推送排名
+const ENGAGEMENT_REMINDER_INTERVAL_MS = 300 * 1000;
+
 class BroadcasterRoulette {
   /** @param {SurvivalGameEngine} engine */
   constructor(engine) {
@@ -661,6 +720,32 @@ class SurvivalGameEngine {
     // E3c 礼物效果反馈：礼物结算 2s 后广播 gift_impact（setTimeout 句柄，reset 清理避免残留）
     this._giftImpactTimers        = [];
 
+    // ── §34.4 Layer 3 组 D（叙事节奏 / 主播赋能 / 夜间修饰符 / 参与感唤回 / 难度切换）──
+    // E2 五幕（赛季映射）：_currentActTag 随 seasonDay 变化时广播 chapter_changed；_lastActTagBroadcast 防重复
+    //   同步到 phase_changed.act_tag（客户端 BGM 层切换）
+    this._currentActTag       = 'prologue';  // 'prologue'/'act1'/'act2'/'act3'/'finale'
+    this._lastActTagBroadcast = null;        // 最近广播 chapter_changed 的 actTag
+    // E5a 提词器：setInterval 句柄，每 10s 调用 _generateStreamerPrompt 并推送 streamer_prompt
+    this._streamerPromptTimer = null;
+    // E5b 夜战报告：_enterNight 初始化，_exitNight 广播后清理（_endNight 路径统一处理）
+    //   { monstersKilled, bossDefeated, killsPerPlayer{pid:count}, topGift{tier,playerId,playerName,giftName},
+    //     minGateHpPct, totalWorkersAtStart, nightStartedAt }
+    this._nightStats          = null;
+    // E6 夜间修饰符：_enterNight 加权随机选一个，影响夜晚规则；_exitNight 撤销临时效果
+    //   { id, name, desc } 或 null
+    this._currentNightModifier = null;
+    // Fix 2/5: frenzy 修饰符残留字段（首次初始化为默认值；_applyNightModifier(frenzy) 时设值，_clearNightModifier / reset 归位）
+    this._modifierFrenzyIntervalMult    = 1.0;
+    this._modifierSavedDynamicCountMult = null;
+    // blizzard_night 每 10s 冻伤：_tickCounter 累积基准（以防夜晚内多次切换）
+    this._blizzardLastTickAt   = 0;
+    // E8 参与感唤回：300s setInterval 句柄
+    this._engagementInterval  = null;
+    // E9 难度切换 pending：{ difficulty, applyAt: 'next_night' | 'next_season' }；_enterNight / onSeasonStart 时消费
+    this._pendingDifficulty   = null;
+    // E9 next_season 触发判定：记录 _enterDay 最近一次看到的 seasonId，变化时触发一次 onSeasonStart
+    this._lastSeasonIdForDiffCheck = null;
+
     // FeatureFlags：§36.5.1 每日闯关上限默认启用
     if (!this.constructor._featureFlagsWarned) {
       this.constructor._featureFlagsWarned = true;
@@ -982,6 +1067,22 @@ class SurvivalGameEngine {
     this._freeDeathPass           = false;
     for (const t of (this._giftImpactTimers || [])) clearTimeout(t);
     this._giftImpactTimers        = [];
+
+    // §34.4 Layer 3 组 D 清理：E2/E5a/E5b/E6/E8/E9 全部每局重置
+    this._currentActTag        = 'prologue';
+    this._lastActTagBroadcast  = null;
+    this._currentNightModifier = null;
+    this._nightStats           = null;
+    this._blizzardLastTickAt   = 0;
+    this._pendingDifficulty    = null;
+    this._lastSeasonIdForDiffCheck = null;
+    // Fix 2: 清 frenzy 修饰符残留（若上局夜晚中途失败 → _clearNightModifier 未调 → 跨局残留）
+    this._modifierFrenzyIntervalMult    = 1.0;
+    this._modifierSavedDynamicCountMult = null;
+    // 清除 E5a 提词器定时器（reset 期间不应继续推送）
+    if (this._streamerPromptTimer) { clearInterval(this._streamerPromptTimer); this._streamerPromptTimer = null; }
+    // 清除 E8 参与感唤回定时器
+    if (this._engagementInterval)  { clearInterval(this._engagementInterval);  this._engagementInterval  = null; }
 
     this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
   }
@@ -1365,6 +1466,9 @@ class SurvivalGameEngine {
       ? Object.entries(this.contributions).sort(([, a], [, b]) => b - a).slice()
       : null;
 
+    // §34.4 E5b：夜晚 topGift 追踪（取本夜 tier 最高的发送者）
+    this._trackNightGift(playerId, playerName, gift.name_cn, giftTierNum);
+
     // 贡献值 = 礼物得分（策划案 §9）
     this._trackContribution(playerId, gift.score, 'gift');
     // §35 Tribe War 攻击能量（策划案 §35.3）：T1=1 / T2=5 / T3=10 / T4=20 / T5=50 / T6=100
@@ -1442,6 +1546,8 @@ class SurvivalGameEngine {
           effects.unfrozenWorkers = unfrozen.length;
           console.log(`[SurvivalEngine] energy_battery unfroze ${unfrozen.length} workers (ids=${unfrozen.join(',')})`);
         }
+        // §34.4 E6 blizzard_night 治愈：夜晚若 modifier=blizzard_night → 全矿工额外 +20HP
+        this._applyBlizzardT4Heal();
         needsResourceSync = true;
         break;
       }
@@ -1479,6 +1585,8 @@ class SurvivalGameEngine {
         for (const mid of killed) {
           const m = this._activeMonsters.get(mid);
           this._activeMonsters.delete(mid);
+          // §34.4 E5b：累计夜晚击杀（T5 AOE 计入发起者）
+          this._trackNightKill(playerId, m ? m.type : 'normal');
           this._broadcast({ type: 'monster_died', data: { monsterId: mid, monsterType: m.type, killerId: playerId } });
           // §31 guard/summoner 死亡后置钩子
           this._postMonsterDeathHooks(mid, m.type, m.variant);
@@ -1753,6 +1861,8 @@ class SurvivalGameEngine {
     for (const mid of killed) {
       const m = this._activeMonsters.get(mid);
       this._activeMonsters.delete(mid);
+      // §34.4 E5b：累计夜晚击杀（助威者 T5 AOE 仍计入 playerId）
+      this._trackNightKill(playerId, m ? m.type : 'normal');
       this._broadcast({
         type: 'monster_died',
         data: { monsterId: mid, monsterType: m.type, killerId: playerId },
@@ -1956,9 +2066,25 @@ class SurvivalGameEngine {
     if (!this._rouletteRunningInited) {
       this._rouletteRunningInited = true;
       this._roulette.onReadyAtRunningStart();
+      // §34.4 E5a / E8：首次进入 Running 时启动提词器 + 参与感唤回定时器（幂等）
+      this._startStreamerPromptTimer();
+      this._startEngagementReminderTimer();
     }
 
     console.log(`[SurvivalEngine] ===== Day ${day} Start =====`);
+
+    // §34.4 E9 next_season：若 pending.applyAt='next_season' 且 seasonDay 刚归 1 → 调用 onSeasonStart
+    //   GlobalClock 驱动下 advanceDay 在 night→day 前触发；此时 seasonDay 若为 1 且 _lastSeasonDayForDiffCheck 不是 1 → 新赛季 D1
+    const currSeasonDay = this.seasonMgr ? this.seasonMgr.seasonDay : 1;
+    const currSeasonId  = this.seasonMgr ? this.seasonMgr.seasonId  : 1;
+    if (this._pendingDifficulty && this._pendingDifficulty.applyAt === 'next_season'
+        && currSeasonDay === 1 && this._lastSeasonIdForDiffCheck !== currSeasonId) {
+      this.onSeasonStart(currSeasonId);
+    }
+    this._lastSeasonIdForDiffCheck = currSeasonId;
+
+    // §34.4 E2：检测当前 seasonDay 对应的幕（可能跨幕） → 必要时广播 chapter_changed
+    this._checkActTagChange();
 
     this.broadcast({
       type: 'phase_changed',
@@ -1967,6 +2093,9 @@ class SurvivalGameEngine {
         phase: 'day',
         day,
         phaseDuration: this.dayDuration,
+        // §34.4 E2：白天也附带 act_tag（客户端 BGM 层切换）；白天无 nightModifier
+        act_tag:       this._currentActTag || 'prologue',
+        nightModifier: null,
       }
     });
 
@@ -1997,6 +2126,11 @@ class SurvivalGameEngine {
   _enterNight(day) {
     this.state         = 'night';
     this.currentDay    = day;
+
+    // §34.4 E9：消费 pending 难度（applyAt='next_night'）→ _applyDifficulty 可能覆写 nightDuration
+    //   在 remainingTime 赋值前调用，以便 _applyDifficulty 覆写 nightDuration 时下一行读到新值
+    this._consumePendingDifficultyOnNight();
+
     this.remainingTime = this.nightDuration;
 
     console.log(`[SurvivalEngine] ===== Night ${day} Start =====`);
@@ -2042,11 +2176,42 @@ class SurvivalGameEngine {
       }
     }
 
+    // §34.4 E5b 夜战报告：初始化 _nightStats（跨整夜累积；_endNight 广播后清理）
+    //   必须在 _initWorkerHp 之后，以便 totalWorkersAtStart 统计到正确的开夜人数
+    this._initNightStats();
+
+    // §34.4 E6 夜间修饰符：加权随机选一个 → 存 _currentNightModifier → 应用效果（服务端权威）
+    //   和平夜（peace_night / peace_night_silent）→ 强制 normal，不应用任何规则改写
+    if (this._peaceNightSkipSpawn) {
+      this._currentNightModifier = NIGHT_MODIFIERS[0]; // normal（仅用于 phase_changed 附带数据）
+    } else {
+      this._currentNightModifier = this._pickNightModifier();
+      this._applyNightModifier(this._currentNightModifier, day);
+    }
+
+    // §34.4 E2 幕末事件：应用当日幕末修正（spawn 额外 Boss / mini BossRush / HP × N 等）
+    //   仅非和平夜执行；finale（seasonDay=7）复用 §36 BossRush，不重复触发
+    if (!this._peaceNightSkipSpawn) {
+      this._applyActEndEventIfNeeded(day);
+    }
+
     // §36.5 phase_changed 扩展：variant 字段 + peacePreludeEndsAt（仅 prelude）
+    // §34.4 扩展：act_tag（E2）+ nightModifier（E6）
+    // polar_night 覆写 remainingTime=180s → phaseDuration 以 remainingTime 为准（客户端倒计时基准）
+    const effectivePhaseDuration = (this._currentNightModifier && this._currentNightModifier.id === 'polar_night')
+      ? MODIFIER_POLAR_NIGHT_DURATION_SEC
+      : this.nightDuration;
     const phaseChangedData = {
       phase: 'night',
       day,
-      phaseDuration: this.nightDuration,
+      phaseDuration: effectivePhaseDuration,
+      // §34.4 E2 / E6
+      act_tag: this._currentActTag || 'prologue',
+      nightModifier: this._currentNightModifier ? {
+        id:   this._currentNightModifier.id,
+        name: this._currentNightModifier.name,
+        description: this._currentNightModifier.desc,
+      } : null,
     };
     if (peaceVariant) {
       phaseChangedData.variant = peaceVariant;
@@ -2059,6 +2224,9 @@ class SurvivalGameEngine {
       timestamp: Date.now(),
       data: phaseChangedData,
     });
+
+    // §34.4 E2：夜晚开始检测幕变化（相邻 seasonDay 可能跨幕）
+    this._checkActTagChange();
 
     this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
 
@@ -2138,6 +2306,19 @@ class SurvivalGameEngine {
 
     // §16.4 manual：GM 主动终止不触发降级；其他 reason 均为失败，走降级路径
     const isManual = (reason === 'manual');
+
+    // Fix 3: §34D E5b/E6 —— 夜晚中途失败时补发 night_report + 清 nightModifier
+    //   正常 _endNight 路径已调用这两个方法；_enterSettlement 跳过了 _endNight 直入结算,
+    //   客户端 NightReportUI / NightModifierUI 若不补推永远拿不到清理/报告 → UI 残留旧数据
+    //   放在 _clearAllTimers 之前：避免 broadcast 依赖的 _liveRankingTimer 被先清
+    if (this.state === 'night') {
+      if (typeof this._broadcastNightReportAndClear === 'function') {
+        try { this._broadcastNightReportAndClear(); } catch (e) { /* ignore */ }
+      }
+      if (typeof this._clearNightModifier === 'function') {
+        try { this._clearNightModifier(); } catch (e) { /* ignore */ }
+      }
+    }
 
     // §37.5 失败降级（manual 跳过）：按 BUILDING_KEEP_ON_DEMOTE 部分保留，其余清除
     if (!isManual) {
@@ -2267,6 +2448,7 @@ class SurvivalGameEngine {
     this._reviveAllWorkers('recovery');
 
     // ===== §4.2 广播 phase_changed（phase='day' + variant='recovery'，phaseDuration=120）=====
+    // §34.4 E2 扩展：附带 act_tag；E6 扩展：白天/恢复期 nightModifier=null
     this.broadcast({
       type: 'phase_changed',
       timestamp: Date.now(),
@@ -2275,6 +2457,8 @@ class SurvivalGameEngine {
         day:           this.currentDay,
         phaseDuration: 120,
         variant:       'recovery',
+        act_tag:       this._currentActTag || 'prologue',
+        nightModifier: null,
       },
     });
 
@@ -2363,6 +2547,9 @@ class SurvivalGameEngine {
 
       // §31.3 冰封冻结到期扫描：5s 精度对玩家感知足够
       this._checkFrozenWorkers(Date.now());
+
+      // §34.4 E6 blizzard_night：每 10s 全矿工 -2HP（仅夜晚）
+      this._tickBlizzardNightIfActive();
 
       // 随机事件触发检查（仅白天）
       this._checkRandomEvents();
@@ -2669,6 +2856,13 @@ class SurvivalGameEngine {
     const nightBonus = (this._poolNightBase || 500) * this.currentDay;
     this.scorePool += nightBonus;
     console.log(`[SurvivalEngine] Night ${this.currentDay} cleared [${this._difficulty}], scorePool +${nightBonus} = ${Math.round(this.scorePool)}`);
+
+    // §34.4 E5b：夜→昼广播战报（_nightStats 已在 _enterNight 初始化）
+    //   必须在 _enterDay 之前，因为 _enterDay 会重置 _gateUpgradedToday 等字段并启动新阶段
+    this._broadcastNightReportAndClear();
+
+    // §34.4 E6：撤销夜间修饰符效果（fortified HP 回退 / frenzy 数量倍率还原 / blizzard 计时归零）
+    this._clearNightModifier();
 
     // §16 v1.26 永续模式：无胜利终点。原 `if (nextDay > totalDays) _enterSettlement('win','survived')`
     //   已移除——永续循环由失败降级（§36.5）自平衡压力，挺过的夜直接进入下一天。
@@ -2991,6 +3185,11 @@ class SurvivalGameEngine {
       damage *= 2;
     }
 
+    // §34.4 E6 hunters：玩家对 Boss 伤害 × 2（仅夜晚且 modifier=hunters）
+    if (target.type === 'boss' && this._currentNightModifier && this._currentNightModifier.id === 'hunters') {
+      damage *= MODIFIER_HUNTERS_BOSS_DMG_MULT;
+    }
+
     target.currentHp -= damage;
 
     // 贡献奖励（攻击命中）
@@ -3014,11 +3213,17 @@ class SurvivalGameEngine {
     if (target.currentHp <= 0) {
       this._activeMonsters.delete(target.id);
 
+      // §34.4 E5b：累计夜晚击杀（仅夜晚 _nightStats 存在时；killerId=玩家 ID）
+      this._trackNightKill(secOpenId, target.type);
+
       // §24.4 elite_raid 击杀奖励 +500（策划案明确值）；其余按常规
       const killScore = target.type === 'normal'     ? 20  :
                         target.type === 'elite'      ? 50  :
                         target.type === 'elite_raid' ? 500 : 200;
-      this._addScore(secOpenId, nickname, killScore);
+      // §34.4 E6 blood_moon：击杀贡献 × 1.5（仅夜晚且 modifier=blood_moon）
+      const bloodMoonMult = (this._currentNightModifier && this._currentNightModifier.id === 'blood_moon')
+        ? MODIFIER_BLOOD_MOON_CONTRIB_MULT : 1.0;
+      this._addScore(secOpenId, nickname, killScore * bloodMoonMult);
       // 阶7+ 击杀怪物贡献值 ×2（策划案 §30.3 阶7 专属被动）：再补一份贡献
       // 仅影响 contributions/_lifetimeContrib，不重复加 scorePool（scorePool 反映游戏产出不按身份倍增）
       if (attackerTier >= 7) {
@@ -3210,6 +3415,8 @@ class SurvivalGameEngine {
       }
       for (const d of deaths) {
         this._activeMonsters.delete(d.id);
+        // §34.4 E5b：gate_frost_pulse 计入 monstersKilled 但不计玩家杀数
+        this._trackNightKill('gate_frost_pulse', d.type);
         this._broadcast({ type: 'monster_died', data: { monsterId: d.id, monsterType: d.type, killerId: 'gate_frost_pulse' } });
         // §31 guard/summoner 死亡后置钩子
         this._postMonsterDeathHooks(d.id, d.type, d.variant);
@@ -3238,7 +3445,12 @@ class SurvivalGameEngine {
 
   _scheduleNightWaves(day) {
     const cfg = getWaveConfig(day);
-    console.log(`[SurvivalEngine] Night ${day} waves: ${cfg.baseCount}-${cfg.maxCount} per wave, every ${cfg.refreshTime}s`);
+    // Fix 5: §34.4 E6 frenzy —— 波次间隔 × _modifierFrenzyIntervalMult（0.6 = -40%）
+    //   仅在本夜 _applyNightModifier('frenzy') 后生效；正常夜晚该值 = 1.0
+    const intervalMult   = this._modifierFrenzyIntervalMult || 1.0;
+    const effectiveBeginning   = Math.max(0, Math.round(cfg.beginning   * intervalMult * 1000));
+    const effectiveRefreshMs   = Math.max(100, Math.round(cfg.refreshTime * intervalMult * 1000));
+    console.log(`[SurvivalEngine] Night ${day} waves: ${cfg.baseCount}-${cfg.maxCount} per wave, every ${cfg.refreshTime}s (mult=${intervalMult})`);
 
     let waveIndex = 0;
 
@@ -3257,10 +3469,10 @@ class SurvivalGameEngine {
           return;
         }
         this._spawnWave(cfg, day, waveIndex++);
-      }, cfg.refreshTime * 1000);
+      }, effectiveRefreshMs);
 
       this._waveTimers.push(repeatTimer);
-    }, cfg.beginning * 1000);
+    }, effectiveBeginning);
 
     this._waveTimers.push(firstTimer);
   }
@@ -3599,6 +3811,8 @@ class SurvivalGameEngine {
         // 反伤击杀不计玩家贡献（killerId 为城门标识，不触发 _trackContribution）
         for (const d of deaths) {
           this._activeMonsters.delete(d.id);
+          // §34.4 E5b：gate_thorns 计入 monstersKilled 但不计玩家杀数
+          this._trackNightKill('gate_thorns', d.type);
           this._broadcast({ type: 'monster_died', data: { monsterId: d.id, monsterType: d.type, killerId: 'gate_thorns' } });
           // §31 guard/summoner 死亡后置钩子
           this._postMonsterDeathHooks(d.id, d.type, d.variant);
@@ -4250,6 +4464,8 @@ class SurvivalGameEngine {
     //   totalContribution    全局协作总贡献（_trackContribution 累加），CoopMilestoneUI 进度条驱动
     const tension            = this._calcTension();
     const giftRecommendation = this._calcGiftRecommendation(tension);
+    // §34.4 E5b：每次 resource_update 追踪一次夜晚最低城门 HP%（5s 精度对战报足够）
+    this._trackNightGateHp();
     this.broadcast({
       type: 'resource_update',
       timestamp: Date.now(),
@@ -4574,6 +4790,730 @@ class SurvivalGameEngine {
       default:
         return null;
     }
+  }
+
+  // ==================== §34.4 Layer 3 组 D（E2/E5a/E5b/E6/E8/E9）====================
+
+  /**
+   * §34.4 E2 五幕：根据 seasonDay(1..7) 查询幕定义；越界归入 prologue（保险兜底）
+   * @param {number} seasonDay
+   * @returns {{actTag, name, startDay, endDay, endNote}}
+   */
+  _getActDefinitionForSeasonDay(seasonDay) {
+    if (!Number.isFinite(seasonDay)) return ACT_DEFINITIONS[0];
+    for (const act of ACT_DEFINITIONS) {
+      if (seasonDay >= act.startDay && seasonDay <= act.endDay) return act;
+    }
+    return ACT_DEFINITIONS[0];
+  }
+
+  /**
+   * §34.4 E2 五幕：检查 actTag 变化 → 广播 chapter_changed
+   * 调用时机：_enterDay / _enterNight / _enterDayFromClock / _enterNightFromClock
+   * 广播幂等（_lastActTagBroadcast 去重），同一 actTag 只广播一次
+   */
+  _checkActTagChange() {
+    const seasonDay = this.seasonMgr ? this.seasonMgr.seasonDay : 1;
+    const act = this._getActDefinitionForSeasonDay(seasonDay);
+    if (this._currentActTag !== act.actTag) {
+      this._currentActTag = act.actTag;
+    }
+    if (this._lastActTagBroadcast === act.actTag) return;
+    this._lastActTagBroadcast = act.actTag;
+
+    this.broadcast({
+      type: 'chapter_changed',
+      timestamp: Date.now(),
+      data: {
+        name:     act.name,
+        actTag:   act.actTag,
+        startDay: act.startDay,
+        endDay:   act.endDay,
+        endNote:  act.endNote,
+        seasonDay,
+      },
+    });
+    console.log(`[SurvivalEngine] chapter_changed → ${act.actTag} (${act.name}) seasonDay=${seasonDay}`);
+  }
+
+  /**
+   * §34.4 E2 幕末事件：seasonDay 对应幕的最后一个夜晚 → 应用修正
+   *   seasonDay 1（prologue 结束夜）：首个精英怪 → 作为"强化信号"广播 chapter_end_event
+   *   seasonDay 3（act1 结束夜）   ：双 Boss（spawn 额外 1 只 boss）
+   *   seasonDay 5（act2 结束夜）   ：Boss Rush mini（3 Boss 间隔 30s）
+   *   seasonDay 6（act3 结束夜）   ：全怪 HP ×1.5 + 终极 Boss HP ×2（临时倍率叠加）
+   *   seasonDay 7（finale）       ：沿用 §36 BossRush 结算（不重复实现）
+   *
+   * 调用时机：_enterNight 之后（_activeMonsters 已初始化）
+   */
+  _applyActEndEventIfNeeded(day) {
+    if (!this.seasonMgr) return;
+
+    // Fix 6: §34D E6（修饰符） × E2（幕末事件）冲突优先级 —— E6 优先
+    //   - seasonDay=3 双 Boss × fortified（本夜无 Boss）矛盾
+    //   - seasonDay=5 miniBossRush × fortified 冲突
+    //   - seasonDay=6 HP×1.5 + Boss×2 × blood_moon（Boss×3）叠乘达 ×6 过高
+    //   blood_moon 已重写 _activeMonsters 为 1Boss+2elite；再叠幕末改动会破坏服务端权威状态。
+    //   fortified 无 Boss 条件下 spawn 额外 Boss 直接悖论。
+    //   → 只要本夜修饰符是 blood_moon / fortified，幕末事件整体跳过（含广播）。
+    const modId = this._currentNightModifier && this._currentNightModifier.id;
+    if (modId === 'blood_moon' || modId === 'fortified') {
+      console.log(`[SurvivalEngine] Act-end event skipped due to night modifier: ${modId}`);
+      return;
+    }
+
+    const seasonDay = this.seasonMgr.seasonDay;
+    let extra = null;
+
+    // seasonDay 1 prologue 结束夜：首个精英怪广播（elite 已在 cfg 中按 wave 生成，这里只做全屏通告）
+    if (seasonDay === 1) {
+      extra = { actTag: 'prologue', event: 'first_elite', hint: '首个精英怪来袭！' };
+    }
+    // seasonDay 3 act1 结束夜：双 Boss（spawn 额外 1 只 boss）
+    else if (seasonDay === 3) {
+      this._spawnExtraBossForActEnd(day);
+      extra = { actTag: 'act1', event: 'double_boss', hint: '双 Boss 同时出现！' };
+    }
+    // seasonDay 5 act2 结束夜：mini BossRush（3 Boss 间隔 30s；非 §36 D7，仅本幕独立效果）
+    else if (seasonDay === 5) {
+      this._scheduleActEndMiniBossRush(day);
+      extra = { actTag: 'act2', event: 'mini_boss_rush', hint: 'Boss Rush 降临！' };
+    }
+    // seasonDay 6 act3 结束夜：全怪 HP ×1.5 + 终极 Boss HP ×2（即时应用到 _activeMonsters）
+    else if (seasonDay === 6) {
+      this._applyActEndHpMultiplier(1.5, 2.0);
+      extra = { actTag: 'act3', event: 'hp_amplified', hint: '极限挑战：怪物 HP ×1.5，Boss HP ×2！' };
+    }
+    // seasonDay 7 终章：§36 BossRush 覆盖（不重复）
+    else if (seasonDay === 7) {
+      extra = { actTag: 'finale', event: 'boss_rush_finale', hint: '终章 Boss Rush（§36）' };
+    }
+
+    if (extra) {
+      this.broadcast({
+        type: 'chapter_end_event',
+        timestamp: Date.now(),
+        data: { day, seasonDay, ...extra },
+      });
+      console.log(`[SurvivalEngine] chapter_end_event seasonDay=${seasonDay} ${extra.actTag} ${extra.event}`);
+    }
+  }
+
+  /**
+   * E2 act1 结束夜（seasonDay=3）：额外 spawn 1 只 Boss（与本夜原 Boss 并存 → 双 Boss）
+   */
+  _spawnExtraBossForActEnd(day) {
+    const cfg = getWaveConfig(day);
+    if (!cfg.boss) return;
+    const themeHpMult = this._themeHpMult || 1.0;
+    const hpMult  = (this._monsterHpMult  || 1.0) * (this._dynamicHpMult   || 1.0) * themeHpMult;
+    const hp = Math.max(1, Math.round(cfg.boss.hp * hpMult));
+    const id = `b_${day}_actend_${++this._monsterIdCounter}`;
+    this._activeMonsters.set(id, {
+      id,
+      type: 'boss',
+      variant: 'normal',
+      maxHp: hp,
+      currentHp: hp,
+      atk: cfg.boss.atk,
+    });
+    this.broadcast({
+      type: 'boss_appeared',
+      timestamp: Date.now(),
+      data: { day, bossHp: hp, bossAtk: cfg.boss.atk, isActEndBoss: true },
+    });
+  }
+
+  /**
+   * E2 act2 结束夜（seasonDay=5）：mini BossRush（3 Boss 间隔 30s）
+   * 非 §36 D7 BossRush（后者由 SeasonManager / GlobalClock 管理）
+   */
+  _scheduleActEndMiniBossRush(day) {
+    const cfg = getWaveConfig(day);
+    if (!cfg.boss) return;
+    const themeHpMult = this._themeHpMult || 1.0;
+    const hpMult  = (this._monsterHpMult  || 1.0) * (this._dynamicHpMult   || 1.0) * themeHpMult;
+    for (let i = 0; i < 3; i++) {
+      const t = setTimeout(() => {
+        if (this.state !== 'night') return;
+        const hp = Math.max(1, Math.round(cfg.boss.hp * hpMult));
+        const id = `b_${day}_actend_${i}_${++this._monsterIdCounter}`;
+        this._activeMonsters.set(id, {
+          id,
+          type: 'boss',
+          variant: 'normal',
+          maxHp: hp,
+          currentHp: hp,
+          atk: cfg.boss.atk,
+        });
+        this.broadcast({
+          type: 'boss_appeared',
+          timestamp: Date.now(),
+          data: { day, bossHp: hp, bossAtk: cfg.boss.atk, isActEndBoss: true, rushIndex: i + 1 },
+        });
+      }, i * 30000);
+      this._waveTimers.push(t);
+    }
+  }
+
+  /**
+   * E2 act3 结束夜（seasonDay=6）：即时应用 HP 乘数到 _activeMonsters
+   * 对 normal/elite 应用 baseMult，对 boss 应用 bossMult（累乘到 maxHp/currentHp）
+   */
+  _applyActEndHpMultiplier(baseMult, bossMult) {
+    for (const [, m] of this._activeMonsters) {
+      if (!m) continue;
+      const mult = m.type === 'boss' ? bossMult : baseMult;
+      m.maxHp     = Math.max(1, Math.round(m.maxHp * mult));
+      m.currentHp = Math.max(1, Math.round(m.currentHp * mult));
+    }
+  }
+
+  // ==================== §34.4 E5a 智能提词器 ====================
+
+  /**
+   * §34.4 E5a：生成提词器文本
+   * 返回 { text, priority } 或 null；priority: 'urgent' / 'social' / 'info'
+   */
+  _generateStreamerPrompt() {
+    // 食物告急
+    if (this.food / 2000 < 0.2) {
+      return { text: '食物快没了！提醒观众刷甜甜圈！', priority: 'urgent' };
+    }
+    // 夜晚 Boss 血少
+    if (this.state === 'night' && this._isBossAlive()) {
+      let minBossRatio = 1;
+      for (const m of this._activeMonsters.values()) {
+        if (m && m.type === 'boss') {
+          const r = m.maxHp > 0 ? (m.currentHp / m.maxHp) : 1;
+          if (r < minBossRatio) minBossRatio = r;
+        }
+      }
+      if (minBossRatio < 0.3) {
+        return { text: 'Boss 快死了！号召冲锋！发 6！', priority: 'urgent' };
+      }
+    }
+    // Top2 接近（差 < 300）
+    const sorted = Object.entries(this.contributions).sort(([, a], [, b]) => b - a);
+    if (sorted.length >= 2) {
+      const [pid1, c1] = sorted[0];
+      const [pid2, c2] = sorted[1];
+      const gap = Math.max(0, Math.round(c1 - c2));
+      if (gap < 300) {
+        const nameA = this.playerNames[pid1] || pid1;
+        const nameB = this.playerNames[pid2] || pid2;
+        return { text: `${nameA} 和 ${nameB} 只差 ${gap}！引导他们！`, priority: 'social' };
+      }
+    }
+    // 夜晚矿石修城门 info 提示（附加性信息，不是高优先级）
+    if (this.state === 'night' && this.ore > 0 && this.gateHp < this.gateMaxHp) {
+      const mult = GATE_AUTO_REPAIR_MULT[Math.max(0, this.gateLevel - 1)] || 1.0;
+      const repair = Math.floor(5 * mult);
+      return { text: `矿石自动修复城门 +${repair}HP/2s`, priority: 'info' };
+    }
+    return null;
+  }
+
+  /**
+   * §34.4 E5a：启动 / 重启提词器定时器（每 10s 调用一次）
+   * TODO: 接入 _roomCreatorId 单播能力后按主播身份过滤；当前版本广播，客户端按 isRoomCreator=true 过滤
+   */
+  _startStreamerPromptTimer() {
+    if (this._streamerPromptTimer) {
+      clearInterval(this._streamerPromptTimer);
+      this._streamerPromptTimer = null;
+    }
+    this._streamerPromptTimer = setInterval(() => {
+      if (this.state !== 'day' && this.state !== 'night' && this.state !== 'recovery') return;
+      const prompt = this._generateStreamerPrompt();
+      if (!prompt) return;
+      this.broadcast({
+        type: 'streamer_prompt',
+        timestamp: Date.now(),
+        data: {
+          text:      prompt.text,
+          priority:  prompt.priority,
+          // TODO: 客户端按 isRoomCreator=true 过滤，仅主播 UI 展示
+          recipient: 'broadcaster_only',
+        },
+      });
+    }, STREAMER_PROMPT_INTERVAL_MS);
+  }
+
+  // ==================== §34.4 E5b 夜战报告 ====================
+
+  /**
+   * §34.4 E5b：夜晚开始时初始化统计结构
+   */
+  _initNightStats() {
+    // 统计夜晚开始时的"存活矿工总数"——用 _workerHp（_initWorkerHp 已设置）
+    let totalAtStart = 0;
+    for (const pid of Object.keys(this._workerHp || {})) {
+      const w = this._workerHp[pid];
+      if (w && !w.isDead) totalAtStart++;
+    }
+    this._nightStats = {
+      monstersKilled:     0,
+      bossDefeated:       false,
+      killsPerPlayer:     {},           // { pid: count }
+      topGift:            null,         // { tier, playerId, playerName, giftName }
+      minGateHpPct:       1.0,          // 夜晚内城门最低 HP 百分比
+      totalWorkersAtStart: totalAtStart,
+      nightStartedAt:     Date.now(),
+    };
+  }
+
+  /**
+   * §34.4 E5b：累计怪物击杀（由 monster_died 路径调用）
+   * @param {string} killerId 可能为 'gate_frost_pulse'/'gate_thorns'/玩家 secOpenId
+   */
+  _trackNightKill(killerId, monsterType) {
+    if (!this._nightStats) return;
+    this._nightStats.monstersKilled += 1;
+    if (monsterType === 'boss') {
+      this._nightStats.bossDefeated = true;
+    }
+    // 仅玩家击杀计入 MVP（过滤城门反伤/冲击波）
+    if (!killerId || killerId === 'gate_frost_pulse' || killerId === 'gate_thorns') return;
+    this._nightStats.killsPerPlayer[killerId] = (this._nightStats.killsPerPlayer[killerId] || 0) + 1;
+  }
+
+  /**
+   * §34.4 E5b：记录本夜最佳援助（tier 最高的礼物发送者）
+   * @param {string} playerId
+   * @param {string} playerName
+   * @param {string} giftName
+   * @param {number} tier 1~6
+   */
+  _trackNightGift(playerId, playerName, giftName, tier) {
+    if (!this._nightStats || this.state !== 'night') return;
+    const prev = this._nightStats.topGift;
+    if (!prev || tier > prev.tier) {
+      this._nightStats.topGift = { tier, playerId, playerName: playerName || playerId, giftName };
+    }
+  }
+
+  /**
+   * §34.4 E5b：每次城门 HP 变化时调用（_broadcastResourceUpdate / _decayResources / gate_quickpatch 均可挂）
+   * 此处采取简化策略：在 _broadcastResourceUpdate 入口处调用一次，成本 O(1)
+   */
+  _trackNightGateHp() {
+    if (!this._nightStats || this.state !== 'night') return;
+    const pct = this.gateMaxHp > 0 ? this.gateHp / this.gateMaxHp : 1;
+    if (pct < this._nightStats.minGateHpPct) this._nightStats.minGateHpPct = pct;
+  }
+
+  /**
+   * §34.4 E5b：夜→昼转换时广播 night_report 并清理统计
+   * 由 _endNight 调用（在 _enterDay 之前）
+   */
+  _broadcastNightReportAndClear() {
+    const s = this._nightStats;
+    if (!s) return;
+
+    // MVP：从 killsPerPlayer 里找杀怪最多者
+    let mvpPlayerId = null, mvpKills = 0;
+    for (const pid of Object.keys(s.killsPerPlayer)) {
+      if (s.killsPerPlayer[pid] > mvpKills) {
+        mvpKills   = s.killsPerPlayer[pid];
+        mvpPlayerId = pid;
+      }
+    }
+    const mvpPlayerName = mvpPlayerId ? (this.playerNames[mvpPlayerId] || mvpPlayerId) : null;
+
+    // 存活率：夜晚结束时（此时 _workerHp 仍保留，_endNight 调用顺序决定）
+    let aliveNow = 0;
+    for (const pid of Object.keys(this._workerHp || {})) {
+      const w = this._workerHp[pid];
+      if (w && !w.isDead) aliveNow++;
+    }
+    const survivalRate = s.totalWorkersAtStart > 0
+      ? (aliveNow / s.totalWorkersAtStart)
+      : 1.0;
+
+    this.broadcast({
+      type: 'night_report',
+      timestamp: Date.now(),
+      data: {
+        day:              this.currentDay,
+        monstersKilled:   s.monstersKilled,
+        bossDefeated:     s.bossDefeated,
+        mvpPlayerId,
+        mvpPlayerName,
+        mvpKills,
+        topGifterName:    s.topGift ? s.topGift.playerName : null,
+        topGiftName:      s.topGift ? s.topGift.giftName    : null,
+        closestCallHpPct: +s.minGateHpPct.toFixed(3),
+        survivalRate:     +survivalRate.toFixed(3),
+        nightModifierId:  this._currentNightModifier ? this._currentNightModifier.id : 'normal',
+      },
+    });
+    console.log(`[SurvivalEngine] night_report day=${this.currentDay} kills=${s.monstersKilled} boss=${s.bossDefeated} mvp=${mvpPlayerName || '-'} survival=${survivalRate.toFixed(2)}`);
+    this._nightStats = null;
+  }
+
+  // ==================== §34.4 E6 夜间修饰符 ====================
+
+  /**
+   * §34.4 E6：按 seasonDay 过滤池 + 加权随机选一个 modifier
+   * 若 seasonMgr 未注入，fallback 用 currentDay
+   */
+  _pickNightModifier() {
+    const seasonDay = this.seasonMgr ? this.seasonMgr.seasonDay : this.currentDay;
+    const day       = this.currentDay || 1;
+    // 过滤：minDay <= max(seasonDay, fortressDay, currentDay)——保险起见取 currentDay（以便纯服务器测试时也能触发高阶修饰符）
+    // 策划案字面为 day >= minDay，使用 currentDay 最接近旧版语义
+    const pool = NIGHT_MODIFIERS.filter(m => day >= m.minDay && seasonDay >= 1);
+    if (pool.length === 0) return NIGHT_MODIFIERS[0]; // 兜底 normal
+    const totalWeight = pool.reduce((s, m) => s + m.weight, 0);
+    let r = Math.random() * totalWeight;
+    for (const m of pool) {
+      r -= m.weight;
+      if (r <= 0) return m;
+    }
+    return pool[pool.length - 1];
+  }
+
+  /**
+   * §34.4 E6：应用夜间修饰符效果（服务端权威）
+   * _enterNight 调用：在 _initActiveMonsters 之后（已有 _activeMonsters）
+   */
+  _applyNightModifier(mod, day) {
+    if (!mod || mod.id === 'normal') return;
+
+    switch (mod.id) {
+      case 'blood_moon': {
+        // 覆盖正常波次：清空 _activeMonsters，仅生成 1 Boss + 2 elite 护卫（§31 变体不出现 → 由 _spawnWave 守卫层处理）
+        // PM 决策：直接改写 _activeMonsters（保留原 Boss 或新建 Boss × 3HP）
+        const cfg = getWaveConfig(day);
+        this._activeMonsters.clear();
+        if (cfg.boss) {
+          const bossHp = Math.max(1, Math.round(cfg.boss.hp * MODIFIER_BLOOD_MOON_BOSS_HP_MULT));
+          const id = `b_${day}_bm_${++this._monsterIdCounter}`;
+          this._activeMonsters.set(id, {
+            id, type: 'boss', variant: 'normal',
+            maxHp: bossHp, currentHp: bossHp, atk: cfg.boss.atk,
+          });
+          this.broadcast({
+            type: 'boss_appeared',
+            timestamp: Date.now(),
+            data: { day, bossHp, bossAtk: cfg.boss.atk, isBloodMoon: true },
+          });
+        }
+        if (cfg.elite) {
+          const eliteHp = Math.max(1, Math.round(cfg.elite.hp * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0)));
+          for (let i = 0; i < MODIFIER_BLOOD_MOON_ELITE_COUNT; i++) {
+            const id = `e_${day}_bm_${++this._monsterIdCounter}`;
+            this._activeMonsters.set(id, {
+              id, type: 'elite', variant: 'normal',
+              maxHp: eliteHp, currentHp: eliteHp, atk: cfg.elite.atk,
+            });
+          }
+        }
+        break;
+      }
+      case 'polar_night': {
+        // 夜晚持续 180s（覆盖原 nightDuration；remainingTime 已在 _enterNight 设置为 nightDuration，此处重写）
+        this.remainingTime = MODIFIER_POLAR_NIGHT_DURATION_SEC;
+        // §31 变体频率 × 1.5 + 属性 × 1.2：polar_* 倍率由 _initActiveMonsters 后已生效的 _dynamicHpMult 再叠加一层
+        // PM 决策：MVP 以"属性 × 1.2"一次性应用到已有 _activeMonsters（频率由客户端感知；§31 本身为按 wave 决定的）
+        for (const [, m] of this._activeMonsters) {
+          if (!m) continue;
+          m.maxHp     = Math.max(1, Math.round(m.maxHp * MODIFIER_POLAR_VARIANT_STAT_MULT));
+          m.currentHp = Math.max(1, Math.round(m.currentHp * MODIFIER_POLAR_VARIANT_STAT_MULT));
+          if (typeof m.atk === 'number') m.atk = Math.max(1, Math.round(m.atk * MODIFIER_POLAR_VARIANT_STAT_MULT));
+        }
+        break;
+      }
+      case 'fortified': {
+        // 全矿工 HP +30（_initWorkerHp 已完成，此处遍历 _workerHp 调增 maxHp 并按比例补齐）
+        for (const [, w] of Object.entries(this._workerHp || {})) {
+          if (!w) continue;
+          const ratio = w.maxHp > 0 ? (w.hp / w.maxHp) : 1;
+          w.maxHp = w.maxHp + MODIFIER_FORTIFIED_HP_BONUS;
+          if (!w.isDead) w.hp = Math.round(w.maxHp * ratio);
+        }
+        this._broadcastWorkerHp();
+        // 无 Boss：清除当前 Boss（若已 spawn）→ 从 _activeMonsters 删除所有 boss
+        for (const [id, m] of this._activeMonsters) {
+          if (m && m.type === 'boss') this._activeMonsters.delete(id);
+        }
+        break;
+      }
+      case 'frenzy': {
+        // 波次间隔 -40% + 每波数量减半：MVP 直接把 _dynamicCountMult × 0.5 暂存（_exitNight 恢复）
+        //   间隔通过新增 "frenzy 修饰" 旗标由 _scheduleNightWaves 消费；MVP 简化为仅数量减半 + 直接提前重排
+        // 保存原值由 _exitNight 恢复
+        this._modifierSavedDynamicCountMult = this._dynamicCountMult;
+        this._modifierFrenzyIntervalMult    = MODIFIER_FRENZY_INTERVAL_MULT;
+        this._dynamicCountMult              = (this._dynamicCountMult || 1.0) * MODIFIER_FRENZY_COUNT_MULT;
+        break;
+      }
+      case 'hunters': {
+        // 玩家对 Boss 伤害 × 2：_handleAttack 路径读取 _currentNightModifier.id==='hunters' 即乘 2
+        // 无状态存储，仅标记即可（modifier 存在 _currentNightModifier）
+        break;
+      }
+      case 'blizzard_night': {
+        // 全矿工 -2HP/10s 冻伤：_tick 每 10s 调用一次 _applyBlizzardTick
+        this._blizzardLastTickAt = Date.now();
+        break;
+      }
+    }
+  }
+
+  /**
+   * §34.4 E6：撤销 modifier 临时效果（_exitNight 调用；仅还原需要恢复的字段）
+   */
+  _clearNightModifier() {
+    if (!this._currentNightModifier) return;
+    const mod = this._currentNightModifier;
+    switch (mod.id) {
+      case 'fortified':
+        // HP 加成夜晚结束自动失效：遍历 _workerHp，把 maxHp 回退，hp 按比例缩回
+        for (const [, w] of Object.entries(this._workerHp || {})) {
+          if (!w) continue;
+          const oldMax = w.maxHp;
+          const newMax = Math.max(1, oldMax - MODIFIER_FORTIFIED_HP_BONUS);
+          if (oldMax !== newMax) {
+            const ratio = oldMax > 0 ? w.hp / oldMax : 1;
+            w.maxHp = newMax;
+            if (!w.isDead) w.hp = Math.min(newMax, Math.round(newMax * ratio));
+          }
+        }
+        break;
+      case 'frenzy':
+        if (this._modifierSavedDynamicCountMult != null) {
+          this._dynamicCountMult = this._modifierSavedDynamicCountMult;
+          this._modifierSavedDynamicCountMult = null;
+        }
+        // Fix 2/5: 回归默认 1.0（非 null），便于 _scheduleNightWaves 乘数安全取用
+        this._modifierFrenzyIntervalMult = 1.0;
+        break;
+      case 'blizzard_night':
+        this._blizzardLastTickAt = 0;
+        break;
+      // blood_moon / polar_night / hunters 的倍率作用于已 spawn 的 _activeMonsters 或走读流分支，无需显式回退
+    }
+    this._currentNightModifier = null;
+  }
+
+  /**
+   * §34.4 E6 blizzard_night：每 10s 全矿工 -2HP（由 _tick 1Hz 分支调用）
+   */
+  _tickBlizzardNightIfActive() {
+    if (!this._currentNightModifier || this._currentNightModifier.id !== 'blizzard_night') return;
+    if (this.state !== 'night') return;
+    const now = Date.now();
+    if (this._blizzardLastTickAt && (now - this._blizzardLastTickAt) < MODIFIER_BLIZZARD_TICK_SEC * 1000) return;
+    this._blizzardLastTickAt = now;
+    // 所有存活矿工 -2HP（不走 block，直接扣）
+    for (const pid of Object.keys(this._workerHp || {})) {
+      const w = this._workerHp[pid];
+      if (!w || w.isDead) continue;
+      w.hp = Math.max(0, w.hp - MODIFIER_BLIZZARD_DAMAGE);
+      if (w.hp <= 0) {
+        // 走正常死亡路径（阶10 免死 / free_death_pass 在 _damageWorker 里消费；此处已越过 _damageWorker 但仍需同一结果）
+        // MVP 简化：复用 _damageWorker 的副作用——模拟扣到 0 并走死亡判定
+        // 直接设置 dead + 广播（避免重复 HP 逻辑）
+        // 阶10 免死 / free_death_pass
+        if (this._getWorkerTier(pid) >= 10 && !this._legendReviveUsed[pid]) {
+          this._legendReviveUsed[pid] = true;
+          const maxHp = this._getWorkerMaxHp(pid);
+          w.hp = Math.ceil(maxHp * 0.25);
+          w.isDead = false;
+          w.respawnAt = 0;
+          this._broadcast({
+            type: 'legend_revive_triggered',
+            data: { playerId: pid, playerName: this._getPlayerName(pid) }
+          });
+          continue;
+        }
+        if (this._consumeFreeDeathPass(pid)) continue;
+        w.isDead = true;
+        const respawnSec = this._getWorkerRespawnSec(pid);
+        w.respawnAt = Date.now() + respawnSec * 1000;
+        this._broadcast({
+          type: 'worker_died',
+          data: { playerId: pid, respawnAt: w.respawnAt, cause: 'blizzard' },
+        });
+      }
+    }
+    this._broadcastWorkerHp();
+  }
+
+  /**
+   * §34.4 E6 blizzard_night：T4 能量电池全矿工治愈 +20HP（由 handleGift energy_battery case 调用）
+   */
+  _applyBlizzardT4Heal() {
+    if (!this._currentNightModifier || this._currentNightModifier.id !== 'blizzard_night') return;
+    if (this.state !== 'night') return;
+    let healed = 0;
+    for (const pid of Object.keys(this._workerHp || {})) {
+      const w = this._workerHp[pid];
+      if (!w || w.isDead) continue;
+      if (w.hp < w.maxHp) {
+        w.hp = Math.min(w.maxHp, w.hp + MODIFIER_BLIZZARD_T4_HEAL);
+        healed++;
+      }
+    }
+    if (healed > 0) this._broadcastWorkerHp();
+  }
+
+  // ==================== §34.4 E8 参与感唤回 ====================
+
+  /**
+   * §34.4 E8：启动 / 重启定时器（每 300s 推送一次）
+   * TODO: 单播能力未接入 → 广播，客户端按 playerId === self 过滤
+   */
+  _startEngagementReminderTimer() {
+    if (this._engagementInterval) { clearInterval(this._engagementInterval); this._engagementInterval = null; }
+    this._engagementInterval = setInterval(() => {
+      if (this.state !== 'day' && this.state !== 'night' && this.state !== 'recovery') return;
+      // 排序（降序）
+      const sorted = Object.entries(this.contributions).sort(([, a], [, b]) => b - a);
+      if (sorted.length === 0) return;
+      const top3 = sorted.slice(0, 3);
+      const top3Min = top3.length === 3 ? top3[2][1] : 0;
+
+      // 打包成单个 engagement_reminder 批量消息（对所有 contrib > 0 玩家）
+      const entries = [];
+      for (let i = 0; i < sorted.length; i++) {
+        const [pid, contrib] = sorted[i];
+        if (contrib <= 0) continue;
+        const rank = i + 1;
+        const gapToTop3 = (rank <= 3) ? 0 : Math.max(0, Math.round(top3Min - contrib));
+        entries.push({
+          playerId:       pid,
+          rank,
+          gapToTop3,
+          currentContrib: Math.round(contrib),
+        });
+      }
+      if (entries.length === 0) return;
+      this.broadcast({
+        type: 'engagement_reminder',
+        timestamp: Date.now(),
+        data: {
+          // TODO: 后端单播能力落地后改为单播；当前版本广播，客户端按 playerId === self 过滤
+          entries,
+        },
+      });
+    }, ENGAGEMENT_REMINDER_INTERVAL_MS);
+  }
+
+  // ==================== §34.4 E9 赛季/周期间难度切换 ====================
+
+  /**
+   * §34.4 E9：C→S handler，主播请求下一夜/下一赛季切换难度
+   * @param {string} playerId
+   * @param {object} data { difficulty: 'easy'|'normal'|'hard'|'nightmare', applyAt: 'next_night'|'next_season' }
+   */
+  handleChangeDifficulty(playerId, data) {
+    // TODO: _roomCreatorId 鉴权未注入 → 放开（与 §24.4/§37/§39 一致）
+    //   if (this.room && this.room.roomCreatorOpenId && playerId !== this.room.roomCreatorOpenId) {
+    //     this._broadcast({ type: 'change_difficulty_failed', data: { reason: 'not_room_creator' } });
+    //     return;
+    //   }
+    const diff    = (data && data.difficulty) || '';
+    const applyAt = (data && data.applyAt)    || '';
+    // Fix 7: §34D E9 —— `nightmare` preset 策划案未定具体参数,_softApplyDifficulty 会静默回退 hard,
+    //   客户端与主播不会被告知差异 → 直接拒绝该值,强制 supported = ['easy','normal','hard'],
+    //   与 ChangeDifficultyData.difficulty 文档字段声明口径对齐。
+    const SUPPORTED_DIFFS = ['easy', 'normal', 'hard'];
+    const validDiff    = SUPPORTED_DIFFS.includes(diff);
+    const validApplyAt = (applyAt === 'next_night' || applyAt === 'next_season');
+    if (!validDiff) {
+      this._broadcast({
+        type: 'change_difficulty_failed',
+        data: { reason: 'invalid_difficulty', supported: SUPPORTED_DIFFS, difficulty: diff, applyAt },
+      });
+      return;
+    }
+    if (!validApplyAt) {
+      this._broadcast({
+        type: 'change_difficulty_failed',
+        data: { reason: 'invalid_args', difficulty: diff, applyAt },
+      });
+      return;
+    }
+    this._pendingDifficulty = { difficulty: diff, applyAt };
+    this._broadcast({
+      type: 'change_difficulty_accepted',
+      data: { difficulty: diff, applyAt },
+    });
+    console.log(`[SurvivalEngine] change_difficulty pending: ${diff} @ ${applyAt}`);
+  }
+
+  /**
+   * §34.4 E9：软难度切换（中途切换，不重置资源 / 不改 currentDay / 不改 gateHp）
+   * 仅更新：_difficulty / _monsterHpMult / _monsterCntMult / _poolNightBase / dayDuration / nightDuration
+   *         / foodDecayDay / foodDecayNight / tempDecayDay / tempDecayNight / coalBurnTicks / totalDays
+   * 不更新：food / coal / ore / gateHp / gateMaxHp（_applyDifficulty 里的 resource reset 仅开局 startGame 时合适）
+   */
+  _softApplyDifficulty(difficulty) {
+    const presets = {
+      easy:   { hpMult: 0.6, cntMult: 0.6, decayMult: 0.7, coalBurnTicks: 10, totalDays: 30, poolNightBase: 300, dayDuration: 120, nightDuration: 120 },
+      normal: { hpMult: 1.0, cntMult: 1.0, decayMult: 1.0, coalBurnTicks: 7,  totalDays: 50, poolNightBase: 500, dayDuration: 120, nightDuration: 120 },
+      hard:   { hpMult: 1.5, cntMult: 1.5, decayMult: 1.5, coalBurnTicks: 5,  totalDays: 40, poolNightBase: 800, dayDuration: 120, nightDuration: 120 },
+    };
+    const p = presets[difficulty] || presets.normal;
+    this._difficulty       = difficulty;
+    this._monsterHpMult    = p.hpMult;
+    this._monsterCntMult   = p.cntMult;
+    this._poolNightBase    = p.poolNightBase;
+    this.totalDays         = p.totalDays;
+    this.dayDuration       = p.dayDuration;
+    this.nightDuration     = p.nightDuration;
+    this.foodDecayDay      = (this.config.foodDecayDay   ?? 1.0)  * p.decayMult;
+    this.foodDecayNight    = (this.config.foodDecayNight ?? 1.0)  * p.decayMult;
+    this.tempDecayDay      = (this.config.tempDecayDay   ?? 0.15) * p.decayMult;
+    this.tempDecayNight    = (this.config.tempDecayNight ?? 0.40) * p.decayMult;
+    this.coalBurnTicks     = p.coalBurnTicks || 10;
+    console.log(`[Engine] 软难度切换: ${difficulty} | HP×${p.hpMult} 数量×${p.cntMult} 衰减×${p.decayMult} （不重置资源）`);
+  }
+
+  /**
+   * §34.4 E9：在 _enterNight 消费 applyAt='next_night' 的 pending
+   * 使用 _softApplyDifficulty，不重置资源；nightmare MVP 回退 hard
+   */
+  _consumePendingDifficultyOnNight() {
+    if (!this._pendingDifficulty) return;
+    if (this._pendingDifficulty.applyAt !== 'next_night') return;
+    const diff = this._pendingDifficulty.difficulty;
+    const effectiveDiff = (diff === 'nightmare') ? 'hard' : diff;
+    this._softApplyDifficulty(effectiveDiff);
+    const applied = this._pendingDifficulty;
+    this._pendingDifficulty = null;
+    this.broadcast({
+      type: 'difficulty_changed',
+      timestamp: Date.now(),
+      data: { difficulty: applied.difficulty, appliedDifficulty: effectiveDiff, applyAt: 'next_night' },
+    });
+    console.log(`[SurvivalEngine] difficulty applied (next_night): ${diff} → ${effectiveDiff}`);
+  }
+
+  /**
+   * §34.4 E9：由 _enterDay 检测新赛季 D1 时调用；消费 applyAt='next_season' 的 pending
+   * 同样使用 _softApplyDifficulty
+   */
+  onSeasonStart(newSeasonId) {
+    if (!this._pendingDifficulty) return;
+    if (this._pendingDifficulty.applyAt !== 'next_season') return;
+    const diff = this._pendingDifficulty.difficulty;
+    const effectiveDiff = (diff === 'nightmare') ? 'hard' : diff;
+    this._softApplyDifficulty(effectiveDiff);
+    const applied = this._pendingDifficulty;
+    this._pendingDifficulty = null;
+    this.broadcast({
+      type: 'difficulty_changed',
+      timestamp: Date.now(),
+      data: {
+        difficulty: applied.difficulty, appliedDifficulty: effectiveDiff,
+        applyAt: 'next_season', seasonId: newSeasonId,
+      },
+    });
+    console.log(`[SurvivalEngine] difficulty applied (next_season ${newSeasonId}): ${diff} → ${effectiveDiff}`);
   }
 
   // ==================== 内部：矿工成长系统（策划案 §30）====================
@@ -4968,6 +5908,7 @@ class SurvivalGameEngine {
     this._eliteRaidMonsterId = null;
     const dmg = 30;
     this.gateHp = Math.max(0, this.gateHp - dmg);
+    // §34.4 E5b：elite_raid 超时消失不算击杀，不计 monstersKilled（killerId 空）
     this._broadcast({
       type: 'monster_died',
       data: { monsterId: mid, monsterType: 'elite_raid', killerId: '', reason: 'elite_raid_timeout' },
@@ -5125,6 +6066,8 @@ class SurvivalGameEngine {
     for (const mid of killed) {
       const m = this._activeMonsters.get(mid);
       this._activeMonsters.delete(mid);
+      // §34.4 E5b：流星雨（§24.4 轮盘效果）计入 monstersKilled 但不计玩家杀数（killerId 空字符串 → 被过滤）
+      this._trackNightKill('', m ? m.type : 'normal');
       this._broadcast({
         type: 'monster_died',
         data: { monsterId: mid, monsterType: m.type, killerId: '', reason: 'meteor_shower' },
@@ -6228,6 +7171,10 @@ class SurvivalGameEngine {
 
     // §10 Lv6 寒冰冲击波定时器
     this._stopFrostPulseTimer();
+
+    // §34.4 组 D：清 E5a 提词器 + E8 参与感唤回定时器
+    if (this._streamerPromptTimer) { clearInterval(this._streamerPromptTimer); this._streamerPromptTimer = null; }
+    if (this._engagementInterval)  { clearInterval(this._engagementInterval);  this._engagementInterval  = null; }
   }
 }
 

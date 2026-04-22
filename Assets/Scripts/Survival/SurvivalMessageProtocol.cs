@@ -158,5 +158,13 @@ namespace DrscfZ.Survival
         public const string GloryMoment    = "glory_moment";     // S→C：E3a 荣耀时刻横幅
         public const string CoopMilestone  = "coop_milestone";   // S→C：E3b 全服合作里程碑
         public const string GiftImpact     = "gift_impact";      // S→C：E4 礼物影响详情
+
+        // ----- §34 Layer 3 组 D 叙事引擎（🆕 v1.27） -----
+        // act_tag / nightModifier 捎带在 phase_changed 消息内，无需常量。
+        public const string ChapterChanged      = "chapter_changed";      // S→C：E2 幕切换（prologue/act1/act2/act3/finale）
+        public const string StreamerPrompt      = "streamer_prompt";      // S→C：E5a 智能提词器（仅主播可见）
+        public const string NightReport         = "night_report";         // S→C：E5b 夜战报告（夜→昼转换 2.5s）
+        public const string EngagementReminder  = "engagement_reminder";  // S→C：E8 参与感唤回（每 5 分钟对贡献>0 玩家推送）
+        public const string ChangeDifficulty    = "change_difficulty";    // C→S：E9 周期/赛季间难度切换（仅主播）
     }
 }

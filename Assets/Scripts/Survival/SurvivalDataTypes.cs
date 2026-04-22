@@ -74,6 +74,91 @@ namespace DrscfZ.Survival
         // §36.5 v1.27 peace_night_prelude 专用：prelude 结束（怪物开始刷新）的 Unix ms 时间戳。
         // 其它 variant 服务端不下发（JsonUtility 反序列化默认为 0）
         public long   peacePreludeEndsAt;
+        // 🆕 §34 Layer 3 组 D 叙事节奏（E2）：当前幕标签（prologue/act1/act2/act3/finale），
+        //   仅用于 BGM 层切换；服务端下划线命名对齐，JsonUtility 反序列化缺失时保持空字符串。
+        public string act_tag;
+        // 🆕 §34 Layer 3 组 D 夜间修饰符（E6）：phase="night" 时服务端可能下发；其他变体/白天为 null。
+        //   缺失字段 JsonUtility 反序列化为 null（整块），不触发 UI。
+        public NightModifierData nightModifier;
+    }
+
+    /// <summary>🆕 §34 Layer 3 组 D（E2）叙事节奏 —— 幕切换公告数据（type=chapter_changed）
+    /// 映射到赛季日范围：prologue(D1) / act1(D2-3) / act2(D4-5) / act3(D6) / finale(D7)。</summary>
+    [Serializable]
+    public class ChapterChangedData
+    {
+        public string name;      // "序章·踏入极地" / "第一幕·资源争夺" 等
+        public int    startDay;  // 起始赛季日（含）
+        public int    endDay;    // 结束赛季日（含）
+        public string actTag;    // "prologue"/"act1"/"act2"/"act3"/"finale"（驼峰命名，与 phase_changed.act_tag 对齐 BGM 层）
+    }
+
+    /// <summary>🆕 §34 Layer 3 组 D（E6）夜间修饰符 —— 单次夜晚的"关卡条件"
+    /// 7 种变体：normal / blood_moon / polar_night / fortified / frenzy / hunters / blizzard_night。
+    /// 客户端根据 id 切换全屏光照预设 + 全屏公告文本。</summary>
+    [Serializable]
+    public class NightModifierData
+    {
+        public string id;          // "normal"/"blood_moon"/"polar_night"/"fortified"/"frenzy"/"hunters"/"blizzard_night"
+        public string name;        // "血月"/"极夜"/"坚守之夜"/...
+        public string description; // "单 Boss HP x3，击杀贡献 x1.5"
+    }
+
+    /// <summary>🆕 §34 Layer 3 组 D（E5a）智能提词器 —— 仅主播可见的话术提示（type=streamer_prompt）
+    /// priority 三级视觉：urgent（红底加粗）/ social（蓝底）/ info（灰底半透）。
+    /// 主播端仅 isRoomCreator=true 显示；其他观众端收到也应过滤。</summary>
+    [Serializable]
+    public class StreamerPromptData
+    {
+        public string text;       // "食物快没了！提醒观众刷甜甜圈！"
+        public string priority;   // "urgent" | "social" | "info"
+    }
+
+    /// <summary>🆕 §34 Layer 3 组 D（E5b）夜战报告 —— 夜→昼转换时 2.5s 多行回顾（type=night_report）
+    /// 不与结算面板重叠（结算仅游戏结束时，夜战报告每夜转白天时）。</summary>
+    [Serializable]
+    public class NightReportData
+    {
+        public int    day;               // 第几夜
+        public int    monstersKilled;    // 总消灭数
+        public bool   bossDefeated;      // 是否击杀 Boss
+        public string mvpPlayerId;       // 夜间 MVP（可为空）
+        public string mvpPlayerName;     // MVP 昵称（可为空）
+        public int    mvpKills;          // MVP 击杀数
+        public string topGifterName;     // 最佳援助昵称（可为空）
+        public string topGiftName;       // 最佳援助礼物名（可为空）
+        public float  closestCallHpPct;  // 城门最低血量比（0-1）
+        public float  survivalRate;      // 矿工存活率（0-1）
+    }
+
+    /// <summary>🆕 §34 Layer 3 组 D（E8）参与感唤回 —— 单条记录（entries[] 数组元素）
+    /// 服务端批量推送时每条代表一个贡献>0 的玩家。</summary>
+    [Serializable]
+    public class EngagementEntryData
+    {
+        public string playerId;         // 目标玩家 ID（广播模式下客户端过滤用）
+        public int    rank;             // 当前排名（全服）
+        public int    gapToTop3;        // 距 Top 3 的贡献差值
+        public int    currentContrib;   // 当前贡献
+    }
+
+    /// <summary>🆕 §34 Layer 3 组 D（E8）参与感唤回 —— 每 5 分钟对贡献>0 的玩家推送（type=engagement_reminder）
+    /// 服务端批量广播 entries[] 数组；客户端按 playerId === self 过滤或主播端一律跳过。
+    /// ⚠️ 使用 EngagementEntryData[] 数组而非 List&lt;T&gt;，与项目其他协议结构（MonsterSpawnInfo[] 等）对齐，
+    ///   规避 Unity JsonUtility 对嵌套 List&lt;T&gt; 的反序列化兼容性风险。</summary>
+    [Serializable]
+    public class EngagementReminderData
+    {
+        public EngagementEntryData[] entries;
+    }
+
+    /// <summary>🆕 §34 Layer 3 组 D（E9）周期/赛季间难度切换 —— 仅主播可发（type=change_difficulty C→S）
+    /// 恢复期第一个白天 / 赛季切换时展示按钮，点击后由 E9 UI 收集选择后发送。</summary>
+    [Serializable]
+    public class ChangeDifficultyData
+    {
+        public string difficulty;  // "easy" | "normal" | "hard"
+        public string applyAt;     // "next_night" | "next_season"
     }
 
     /// <summary>单只怪物元数据（🆕 §31 多样性系统：monster_wave.monsters[] 数组元素）。
