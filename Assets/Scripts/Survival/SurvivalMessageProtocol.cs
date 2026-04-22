@@ -152,5 +152,11 @@ namespace DrscfZ.Survival
         public const string TribeWarAttackEnded          = "tribe_war_attack_ended";           // S→C：攻击结束广播（双方房间）
         // C→S 消息（客户端发送时直接用字面量，无需此常量解析）：
         //   tribe_war_room_list / tribe_war_attack / tribe_war_stop / tribe_war_retaliate
+
+        // ----- §34 Layer 3 组 C 体验引擎（🆕 v1.27） -----
+        // tension / giftRecommendation / totalContribution 附加在 resource_update 消息内，无需常量。
+        public const string GloryMoment    = "glory_moment";     // S→C：E3a 荣耀时刻横幅
+        public const string CoopMilestone  = "coop_milestone";   // S→C：E3b 全服合作里程碑
+        public const string GiftImpact     = "gift_impact";      // S→C：E4 礼物影响详情
     }
 }

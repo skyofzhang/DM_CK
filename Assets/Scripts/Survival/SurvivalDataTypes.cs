@@ -52,6 +52,10 @@ namespace DrscfZ.Survival
         public string   gateTierName;
         public string[] gateFeatures;
         public bool     gateDailyUpgraded;
+        // 🆕 §34 Layer 3 组 C 体验引擎扩展字段（服务端捎带推送；缺失字段 JsonUtility 回落 0/null）
+        public int                    tension;              // §34 E1 危机感知 0-100
+        public GiftRecommendationData giftRecommendation;   // §34 E4 精准付费触发（可为 null）
+        public int                    totalContribution;    // §34 E3b 全服累计贡献（驱动里程碑进度条）
     }
 
     /// <summary>昼夜阶段切换</summary>
@@ -1043,5 +1047,62 @@ namespace DrscfZ.Survival
         public string reason;     // 失败原因
         public int    unlockDay;  // 仅 reason='feature_locked' 时有效（§36.12 broadcaster_boost.minDay=2）
         public string action;     // 子动作名 'efficiency_boost' / 'trigger_event'
+    }
+
+    // ==================== §34 Layer 3 组 C 体验引擎 ====================
+    // E1 TensionOverlay / E3 GloryMoment & CoopMilestone / E4 GiftImpact & Recommendation
+    // 协议：resource_update 捎带 tension/totalContribution/giftRecommendation；
+    //      glory_moment / coop_milestone / gift_impact 为独立消息。
+
+    /// <summary>§34 E4 精准付费：资源缺口时服务端附加的礼物推荐（resource_update.giftRecommendation）。
+    /// 缺失字段 JsonUtility 反序列化为 null（整块），不触发 UI。</summary>
+    [Serializable]
+    public class GiftRecommendationData
+    {
+        public string giftId;
+        public string reason;
+        public string urgency;  // "gentle" | "medium" | "high" | "critical"
+    }
+
+    /// <summary>§34 E3a 荣耀时刻（type=glory_moment）：礼物触发的高光瞬间横幅。
+    /// overtaken 后端可发 null，JsonUtility 将 string 字段解为空字符串而非 null，客户端按空字符串判空。</summary>
+    [Serializable]
+    public class GloryMomentData
+    {
+        public string playerId;
+        public string playerName;
+        public string giftName;
+        public int    giftTier;
+        public int    rank;
+        public int    gapToFirst;
+        public bool   isNewFirst;
+        public string overtaken;  // nullable; 后端传 null 时 JsonUtility 解为空字符串
+    }
+
+    /// <summary>§34 E3b 合作里程碑（type=coop_milestone）：全服累计贡献达到阈值时触发。
+    /// 阈值档：unity(500) / steel_will(2000) / miracle(5000) / legend(10000) / immortal(20000)。
+    /// nextTarget ≤ 0 表示已封顶（immortal 之后无进一步阈值）。</summary>
+    [Serializable]
+    public class CoopMilestoneData
+    {
+        public string id;          // "unity" | "steel_will" | "miracle" | "legend" | "immortal"
+        public string name;
+        public string desc;
+        public int    total;          // 本次达成阈值（500/2000/5000/10000/20000）
+        public int    currentTotal;   // 达成时全服累计贡献
+        public int    nextTarget;     // 0 或负数代表封顶
+    }
+
+    /// <summary>§34 E4 礼物影响详情（type=gift_impact）：点亮付费动机的即时反馈。
+    /// privateOnly=true 时（fairy_wand）仅发送者本人看到；其余礼物房间广播。</summary>
+    [Serializable]
+    public class GiftImpactData
+    {
+        public string playerId;
+        public string playerName;
+        public string giftId;
+        public string giftName;
+        public string impacts;
+        public bool   privateOnly;    // fairy_wand=true，其余 false
     }
 }

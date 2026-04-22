@@ -635,6 +635,32 @@ class SurvivalGameEngine {
     this._lastOnboardingSessionId = null;  // 最近一次推送的 sessionId，供 sync_state 30s 补发窗口重发
     this._onboardingDisabled      = false; // 主播"关闭引导"标志（本次房间会话级，reset 时清除）
 
+    // ── §34.4 Layer 3 组 C（沉浸体验：E1 张力 / E3 社交竞争 / E4 精准付费）──
+    // 全部字段每局 reset，仅 _totalContribution 用于协作里程碑累计（每局独立）
+    //
+    // E1 危机感知（_calcTension）：无状态，每次 _broadcastResourceUpdate 现场计算
+    // E4 精准付费触发（_calcGiftRecommendation）需 60s 同 giftId 节流防刷屏
+    this._lastRecGiftId = null;    // E4 上一次非 gentle 推荐的 giftId
+    this._lastRecAt     = 0;       // E4 上一次非 gentle 推荐的 Unix ms
+    // E3b 协作里程碑
+    //   _totalContribution 累计正向 finalAmount（_trackContribution 末尾累加）；_checkCoopMilestones 按阈值解锁
+    //   _milestonesUnlocked 记录已触发阈值 id（Set 防重入）；reset() 清空（本局结束不续跨局）
+    //   五档增益字段：
+    //     _milestoneEffMult        全员效率 ×1.1（_applyWorkEffect 乘入 totalMult）
+    //     _milestoneGateRepairMult 矿石修城门 ×2.0（_decayResources 矿石段）
+    //     _milestoneWorkerHpBonus  矿工 HP 基线 +50（_getWorkerMaxHp 返回值 +bonus，同步重算现存 _workerHp）
+    //     _milestoneGlobalMult     所有效果 ×1.2（_applyWorkEffect / _handleAttack / love_explosion AOE 乘入）
+    //     _freeDeathPass           一次免死豁免（首次矿工将死时消费，广播 free_death_pass_triggered）
+    this._totalContribution       = 0;
+    this._milestonesUnlocked      = new Set();
+    this._milestoneEffMult        = 1.0;
+    this._milestoneGateRepairMult = 1.0;
+    this._milestoneWorkerHpBonus  = 0;
+    this._milestoneGlobalMult     = 1.0;
+    this._freeDeathPass           = false;
+    // E3c 礼物效果反馈：礼物结算 2s 后广播 gift_impact（setTimeout 句柄，reset 清理避免残留）
+    this._giftImpactTimers        = [];
+
     // FeatureFlags：§36.5.1 每日闯关上限默认启用
     if (!this.constructor._featureFlagsWarned) {
       this.constructor._featureFlagsWarned = true;
@@ -943,6 +969,19 @@ class SurvivalGameEngine {
     this._lastOnboardingAt        = 0;
     this._lastOnboardingSessionId = null;
     this._onboardingDisabled      = false;
+
+    // §34.4 Layer 3 组 C 清理（E1/E3/E4 全部每局重置，不跨局）
+    this._lastRecGiftId           = null;
+    this._lastRecAt               = 0;
+    this._totalContribution       = 0;
+    this._milestonesUnlocked.clear();
+    this._milestoneEffMult        = 1.0;
+    this._milestoneGateRepairMult = 1.0;
+    this._milestoneWorkerHpBonus  = 0;
+    this._milestoneGlobalMult     = 1.0;
+    this._freeDeathPass           = false;
+    for (const t of (this._giftImpactTimers || [])) clearTimeout(t);
+    this._giftImpactTimers        = [];
 
     this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
   }
@@ -1319,6 +1358,13 @@ class SurvivalGameEngine {
       return;
     }
 
+    // §34.4 E3a 荣耀时刻（T3+）：先拍快照送礼前的排行，用于对比 isNewFirst / overtaken
+    //   T1/T2 不触发；T3+ 在 survival_gift 广播前派发 glory_moment
+    const giftTierNum = getTierNumber(gift.tier);
+    const rankingBefore = (giftTierNum >= 3)
+      ? Object.entries(this.contributions).sort(([, a], [, b]) => b - a).slice()
+      : null;
+
     // 贡献值 = 礼物得分（策划案 §9）
     this._trackContribution(playerId, gift.score, 'gift');
     // §35 Tribe War 攻击能量（策划案 §35.3）：T1=1 / T2=5 / T3=10 / T4=20 / T5=50 / T6=100
@@ -1423,7 +1469,8 @@ class SurvivalGameEngine {
 
       case 'love_explosion': {
         // 爱的爆炸：全体怪物AOE伤害200、所有矿工HP全满恢复、城门+200HP
-        const aoeDmg = 200;
+        // §34.4 E3b legend 里程碑（10000）：AOE 伤害 ×_milestoneGlobalMult（+20%）
+        const aoeDmg = Math.round(200 * (this._milestoneGlobalMult || 1.0));
         const killed = [];
         for (const [mid, m] of this._activeMonsters) {
           m.currentHp -= aoeDmg;
@@ -1480,6 +1527,25 @@ class SurvivalGameEngine {
     };
 
     this.broadcast({ type: 'survival_gift', timestamp: Date.now(), data: giftData });
+
+    // §34.4 E3a 荣耀时刻（T3+ 送礼后）：对比送礼前快照 → 广播 glory_moment
+    if (giftTierNum >= 3 && rankingBefore) {
+      this._broadcastGloryMoment(playerId, playerName, gift.name_cn, giftTierNum, rankingBefore);
+    }
+
+    // §34.4 E3c 礼物效果反馈：礼物结算 2s 后广播 gift_impact
+    //   fairy_wand privateOnly=true（仅 sender 显示），其他 6 种礼物 privateOnly=false
+    const impactsText = this._formatGiftImpactText(gift.id, gift.name_cn, playerName, effects);
+    if (impactsText) {
+      this._scheduleGiftImpact(
+        playerId,
+        playerName,
+        gift.id,
+        gift.name_cn,
+        impactsText,
+        gift.id === 'fairy_wand'
+      );
+    }
 
     if (needsResourceSync) this._broadcastResourceUpdate();
     console.log(`[SurvivalEngine] gift: ${playerName} → ${gift.name_cn} (${gift.tier}, score=${gift.score})`);
@@ -1661,6 +1727,11 @@ class SurvivalGameEngine {
       effects,
     };
     this.broadcast({ type: 'survival_gift', timestamp: Date.now(), data: giftData });
+    // §34.4 E3c 助威者 fairy_wand 也广播 gift_impact（privateOnly，仅 sender 看；文案复用守护者模板）
+    const impactsText = this._formatGiftImpactText(gift.id, gift.name_cn, playerName, effects);
+    if (impactsText) {
+      this._scheduleGiftImpact(playerId, playerName, gift.id, gift.name_cn, impactsText, /* privateOnly */ true);
+    }
     console.log(`[SurvivalEngine] supporter gift: ${playerName} → ${gift.name_cn} redirected to ${effects.redirectTargetName || '(no guardian)'}`);
   }
 
@@ -1670,9 +1741,10 @@ class SurvivalGameEngine {
    */
   _handleSupporterLoveExplosion(playerId, playerName, avatarUrl, gift, giftValue) {
     const effects = { supporterRedirect: true };
-    const aoeDmg  = 200;
+    // §34.4 E3b legend 里程碑（10000）：AOE 伤害 ×_milestoneGlobalMult（+20%），与守护者路径保持一致
+    const aoeDmg  = Math.round(200 * (this._milestoneGlobalMult || 1.0));
 
-    // AOE 全体怪物 -200 HP
+    // AOE 全体怪物 HP
     const killed = [];
     for (const [mid, m] of this._activeMonsters) {
       m.currentHp -= aoeDmg;
@@ -1725,6 +1797,12 @@ class SurvivalGameEngine {
       effects,
     };
     this.broadcast({ type: 'survival_gift', timestamp: Date.now(), data: giftData });
+    // §34.4 E3c 助威者 love_explosion 也广播 gift_impact（全场可见）
+    //   助威者无 contributions 条目 → _broadcastGloryMoment 自动 no-op，不单独抑制
+    const impactsText = this._formatGiftImpactText(gift.id, gift.name_cn, playerName, effects);
+    if (impactsText) {
+      this._scheduleGiftImpact(playerId, playerName, gift.id, gift.name_cn, impactsText, /* privateOnly */ false);
+    }
     this._broadcastResourceUpdate();
     console.log(`[SurvivalEngine] supporter T5 love_explosion by ${playerName}: killed ${killed.length} monsters, revived ${effects.revivedWorkers ? effects.revivedWorkers.length : 0} worker(s)`);
   }
@@ -2712,11 +2790,13 @@ class SurvivalGameEngine {
     // 矿石 → 自动修复城门（每2秒消耗1矿石；基础 5HP，随城门等级缩放）
     // 设计意图：矿石让玩家挖矿有动力——矿越多，城门越能抵御怪物攻击
     // §10 v2：Lv2-4 ×1.5（修 7HP），Lv5-6 ×2.0（修 10HP）
+    // §34.4 E3b steel_will 里程碑（2000）：_milestoneGateRepairMult ×2 → 单次修 10/14/20HP
     if (this._tickCounter % 10 === 0 && this.ore > 0 && this.gateHp < this.gateMaxHp) {
-      const mult = GATE_AUTO_REPAIR_MULT[Math.max(0, this.gateLevel - 1)] || 1.0;
-      const repairUnit = Math.floor(5 * mult);
-      const need       = Math.max(0, this.gateMaxHp - this.gateHp);
-      const actual     = Math.min(repairUnit, need);
+      const mult         = GATE_AUTO_REPAIR_MULT[Math.max(0, this.gateLevel - 1)] || 1.0;
+      const milestoneMult = this._milestoneGateRepairMult || 1.0;
+      const repairUnit   = Math.floor(5 * mult * milestoneMult);
+      const need         = Math.max(0, this.gateMaxHp - this.gateHp);
+      const actual       = Math.min(repairUnit, need);
       if (actual > 0) {
         this.gateHp = Math.min(this.gateMaxHp, this.gateHp + actual);
         this.ore    = Math.max(0, this.ore - 1);
@@ -2778,7 +2858,12 @@ class SurvivalGameEngine {
     // §39 A1 worker_pep_talk：采矿效率 +15%（与 efficiency666Bonus / ability_pill 按 Math.max 取最大，不叠加）
     const pepTalkBoost     = (Date.now() < this._peptTalkBoostUntil) ? 1.15 : 1.0;
     const efficiencyAdditive = Math.max(pepTalkBoost, eff666Boost);
-    const totalMult        = Math.min(3.0, levelMult * playerBonus * globalBoost * broadcasterBoost * efficiencyAdditive * auroraBoost);
+    // §34.4 E3b 协作里程碑（乘入 totalMult）：
+    //   unity（500）_milestoneEffMult = 1.1（全员效率 +10%）
+    //   legend（10000）_milestoneGlobalMult = 1.2（所有效果 +20%，×进 eff 与 atk 两路）
+    const milestoneEff     = this._milestoneEffMult    || 1.0;
+    const milestoneGlobal  = this._milestoneGlobalMult || 1.0;
+    const totalMult        = Math.min(3.0, levelMult * playerBonus * globalBoost * broadcasterBoost * efficiencyAdditive * auroraBoost * milestoneEff * milestoneGlobal);
 
     // 阶3+（Lv.21+）白天采矿 10% 概率双倍产出（策划案 §30.3 阶3 专属被动）
     // 适用 cmd 1/2/3（采食物/挖煤/采矿），不含 cmd=4 添柴
@@ -2894,9 +2979,11 @@ class SurvivalGameEngine {
     if (!target) return;
 
     // §30 等级攻击系数 (+0.8%/级) × §33 助威者全局攻击加成 (1 + buff, 0~0.20)
-    const atkMult       = this._getWorkerLevelAtkMult(secOpenId);
-    const supporterBuff = 1 + (this._supporterAtkBuff || 0);
-    let damage = Math.max(1, Math.round(10 * atkMult * supporterBuff));
+    //   × §34.4 E3b legend 里程碑全局效果 ×1.2（所有效果 +20%）
+    const atkMult         = this._getWorkerLevelAtkMult(secOpenId);
+    const supporterBuff   = 1 + (this._supporterAtkBuff || 0);
+    const milestoneGlobal = this._milestoneGlobalMult || 1.0;
+    let damage = Math.max(1, Math.round(10 * atkMult * supporterBuff * milestoneGlobal));
 
     // §30.3 阶5+ 20% 概率重击（伤害 ×2）
     const attackerTier = this._getWorkerTier(secOpenId);
@@ -3245,7 +3332,7 @@ class SurvivalGameEngine {
     w.hp -= actualDmg;
 
     if (w.hp <= 0) {
-      // §30.3 阶10 每晚 1 次免死
+      // §30.3 阶10 每晚 1 次免死（优先消费；阶10 本身免死 → 不再消费 free_death_pass）
       if (this._getWorkerTier(pid) >= 10 && !this._legendReviveUsed[pid]) {
         this._legendReviveUsed[pid] = true;
         const maxHp = this._getWorkerMaxHp(pid);
@@ -3257,6 +3344,11 @@ class SurvivalGameEngine {
           data: { playerId: pid, playerName: this._getPlayerName(pid) }
         });
         console.log(`[SurvivalEngine] Legend revive: ${this._getPlayerName(pid)} saved from death (${w.hp}/${maxHp} HP)`);
+        return actualDmg;
+      }
+
+      // §34.4 E3b immortal 里程碑（20000）：一次全局免死豁免，消费后满血复活
+      if (this._consumeFreeDeathPass(pid)) {
         return actualDmg;
       }
 
@@ -3433,7 +3525,7 @@ class SurvivalGameEngine {
         remainingDamage -= actualDmg;
 
         if (w.hp <= 0) {
-          // §30.3 阶10 每晚1次免死
+          // §30.3 阶10 每晚1次免死（优先消费；阶10 本身免死 → 不再消费 free_death_pass）
           if (this._getWorkerTier(pid) >= 10 && !this._legendReviveUsed[pid]) {
             this._legendReviveUsed[pid] = true;
             const maxHp = this._getWorkerMaxHp(pid);
@@ -3445,6 +3537,11 @@ class SurvivalGameEngine {
               data: { playerId: pid, playerName: this._getPlayerName(pid) }
             });
             console.log(`[SurvivalEngine] Legend revive: ${this._getPlayerName(pid)} saved from death (${w.hp}/${maxHp} HP)`);
+            continue;
+          }
+
+          // §34.4 E3b immortal 里程碑（20000）：一次全局免死豁免
+          if (this._consumeFreeDeathPass(pid)) {
             continue;
           }
 
@@ -4147,6 +4244,12 @@ class SurvivalGameEngine {
   }
 
   _broadcastResourceUpdate() {
+    // §34.4 Layer 3 组 C E1/E4/E3b 同步下发：前端 TensionOverlay / GiftRecommendation / CoopMilestone 驱动
+    //   tension              危机张力（0~100），前端按阈值切 BGM 暗角脉冲（计算纯算术，无副作用）
+    //   giftRecommendation   精准付费推荐 { giftId, reason, urgency }（内部含 60s 节流 + tension≤40 gentle 锁）
+    //   totalContribution    全局协作总贡献（_trackContribution 累加），CoopMilestoneUI 进度条驱动
+    const tension            = this._calcTension();
+    const giftRecommendation = this._calcGiftRecommendation(tension);
     this.broadcast({
       type: 'resource_update',
       timestamp: Date.now(),
@@ -4168,8 +4271,309 @@ class SurvivalGameEngine {
             hp: w.hp, maxHp: w.maxHp, isDead: w.isDead, respawnAt: w.respawnAt
           }])
         ),
+        // §34.4 Layer 3 组 C 扩展字段
+        tension,
+        giftRecommendation,
+        totalContribution: Math.round(this._totalContribution || 0),
       }
     });
+  }
+
+  // ==================== §34.4 Layer 3 组 C（沉浸体验：E1 / E3 / E4）====================
+
+  /**
+   * §34.4 E1 危机感知：计算当前全局张力值（0-100 整数）
+   * 权重分配（策划案 5216-5230）：食物 35 / 炉温 25 / 城门 25 / 煤炭 10-15
+   * 时间乘数（永续模式）：fortressDay 100 日达到 +30% 封顶
+   *
+   * 每次 _broadcastResourceUpdate 调用一次，保持轻量（纯算术，无副作用）
+   */
+  _calcTension() {
+    let t = 0;
+    // 食物：消耗最快的致命资源，权重最高
+    t += (1 - this.food / 2000) * 35;
+    // 炉温：越接近 -100 越危急（向下偏离 20℃起计）
+    t += Math.max(0, -this.furnaceTemp + 20) / 120 * 25;
+    // 城门：HP 比例直接映射（夜晚核心压力）
+    const gateMax = this.gateMaxHp > 0 ? this.gateMaxHp : 1;
+    t += (1 - this.gateHp / gateMax) * 25;
+    // 煤炭：为零 = 炉温即将下降（间接危险，权重跳升 10→15）
+    t += (this.coal <= 0 ? 15 : (1 - this.coal / 1500) * 10);
+    // 时间乘数：永续模式 fortressDay 驱动，100 日达到满权重（+30%）
+    //   §34 永续模式改 fortressDay 为主；回退到 currentDay（|| 1 兜底避免 /0）
+    const day = (this.fortressDay != null ? this.fortressDay : this.currentDay) || 1;
+    const timeMult = 1 + Math.min(1, day / 100) * 0.3;
+    return Math.round(Math.min(100, Math.max(0, t * timeMult)));
+  }
+
+  /**
+   * §34.4 E4 精准付费触发：基于当前张力 + 资源比例 + 阶段推荐礼物
+   *
+   * 关键规则（策划案 5349）：
+   *   - 仅 tension > 40 时允许返回非 gentle（否则强制兜底 fairy_wand:gentle，避免安全期推销）
+   *   - 同种 giftId 推荐 60s 最小间隔（_lastRecGiftId + _lastRecAt）防刷屏；命中节流回落到 gentle
+   *
+   * 调用时机：仅 _broadcastResourceUpdate 内部（5s / 事件驱动），不单独定时
+   */
+  _calcGiftRecommendation(tensionVal) {
+    const tension    = tensionVal != null ? tensionVal : this._calcTension();
+    const gateRatio  = this.gateMaxHp > 0 ? this.gateHp / this.gateMaxHp : 1;
+    const foodRatio  = this.food / 2000;
+    const tempDanger = this.furnaceTemp < -30;
+
+    // 原始候选（严格按策划案 5327-5339 顺序匹配）
+    let rec;
+    if (gateRatio < 0.2 && this.state === 'night') {
+      rec = { giftId: 'love_explosion',  reason: '城门即将倒塌！',           urgency: 'critical' };
+    } else if (foodRatio < 0.15) {
+      rec = { giftId: 'mystery_airdrop', reason: '食物告急！全面补给！',       urgency: 'critical' };
+    } else if (foodRatio < 0.3) {
+      rec = { giftId: 'donut',           reason: '食物偏低，甜甜圈补食物+修城门', urgency: 'high'     };
+    } else if (tempDanger) {
+      rec = { giftId: 'energy_battery',  reason: '炉温下降！紧急加热',         urgency: 'high'     };
+    } else if (this.state === 'night' && this._isBossAlive()) {
+      rec = { giftId: 'love_explosion',  reason: 'Boss 在场！AOE 清场+修城门', urgency: 'medium'   };
+    } else {
+      rec = { giftId: 'fairy_wand',      reason: '提升你的矿工效率',           urgency: 'gentle'   };
+    }
+
+    // 关键设计：tension ≤ 40 时强制 gentle（不强推销）
+    if (rec.urgency !== 'gentle' && tension <= 40) {
+      rec = { giftId: 'fairy_wand', reason: '提升你的矿工效率', urgency: 'gentle' };
+    }
+
+    // 60s 最小间隔（同 giftId + 非 gentle）；命中节流时回落 gentle，保持客户端视觉"降级"
+    const now = Date.now();
+    if (rec.urgency !== 'gentle') {
+      if (this._lastRecGiftId === rec.giftId && (now - (this._lastRecAt || 0)) < 60000) {
+        rec = { giftId: 'fairy_wand', reason: '提升你的矿工效率', urgency: 'gentle' };
+      } else {
+        this._lastRecGiftId = rec.giftId;
+        this._lastRecAt     = now;
+      }
+    }
+    return rec;
+  }
+
+  /** §34.4 E4 Boss 活跃判定：_activeMonsters 中存在 type='boss' */
+  _isBossAlive() {
+    for (const m of this._activeMonsters.values()) {
+      if (m && m.type === 'boss') return true;
+    }
+    return false;
+  }
+
+  /**
+   * §34.4 E3b 协作里程碑：全服总贡献跨阈值 → 广播 coop_milestone + 应用全局增益
+   *
+   * 阈值设计（策划案 5300-5304）：500 / 2000 / 5000 / 10000 / 20000
+   * 每个阈值的效果：
+   *   500  「众志成城」全员采矿效率 +10%      → _milestoneEffMult = 1.1
+   *   2000 「钢铁意志」矿石修城门速度 x2      → _milestoneGateRepairMult = 2.0
+   *   5000 「极地奇迹」全矿工 HP 基线 +50      → _milestoneWorkerHpBonus = 50
+   *   10000「传说降临」所有效果 +20%          → _milestoneGlobalMult = 1.2
+   *   20000「不朽证明」一次免费死亡豁免       → _freeDeathPass = true（首次死亡时消费）
+   *
+   * 调用时机：_trackContribution 正向 finalAmount 累加后立即触发（每次跨阈值只触发一次）
+   */
+  _checkCoopMilestones() {
+    const MILESTONES = [
+      { total: 500,   id: 'unity',       name: '众志成城', desc: '全员采矿效率 +10%',       apply: () => { this._milestoneEffMult        = 1.1;  } },
+      { total: 2000,  id: 'steel_will',  name: '钢铁意志', desc: '矿石修城门速度 ×2',        apply: () => { this._milestoneGateRepairMult = 2.0;  } },
+      { total: 5000,  id: 'miracle',     name: '极地奇迹', desc: '全矿工 HP 基线 +50',       apply: () => { this._applyMilestoneWorkerHpBonus(50); } },
+      { total: 10000, id: 'legend',      name: '传说降临', desc: '所有效果 +20%',            apply: () => { this._milestoneGlobalMult     = 1.2;  } },
+      { total: 20000, id: 'immortal',    name: '不朽证明', desc: '一次免费死亡豁免',         apply: () => { this._freeDeathPass           = true; } },
+    ];
+
+    for (let i = 0; i < MILESTONES.length; i++) {
+      const m = MILESTONES[i];
+      if (this._totalContribution < m.total) break;
+      if (this._milestonesUnlocked.has(m.id)) continue;
+      this._milestonesUnlocked.add(m.id);
+      try { m.apply(); } catch (e) { console.warn(`[SurvivalEngine] milestone apply error (${m.id}): ${e.message}`); }
+
+      const next = MILESTONES[i + 1];
+      this.broadcast({
+        type: 'coop_milestone',
+        timestamp: Date.now(),
+        data: {
+          id:           m.id,
+          name:         m.name,
+          desc:         m.desc,
+          total:        m.total,
+          currentTotal: Math.round(this._totalContribution),
+          nextTarget:   next ? next.total : null,
+        }
+      });
+      console.log(`[SurvivalEngine] coop_milestone unlocked: ${m.name} (total=${Math.round(this._totalContribution)})`);
+    }
+  }
+
+  /**
+   * §34.4 E3b 极地奇迹（5000）：全矿工已激活 _workerHp maxHp +bonus，同时 hp 按比例补齐。
+   * 新加入玩家会在 _getWorkerMaxHp 返回值 +bonus（构造函数或首次伤害结算时生效）。
+   */
+  _applyMilestoneWorkerHpBonus(bonus) {
+    if (bonus <= 0) return;
+    this._milestoneWorkerHpBonus = bonus;
+    for (const [, w] of Object.entries(this._workerHp || {})) {
+      if (!w) continue;
+      const ratio = w.maxHp > 0 ? (w.hp / w.maxHp) : 1;
+      w.maxHp = w.maxHp + bonus;
+      // 死亡矿工保持 isDead（避免误复活），hp 保持 0；存活则按原比例补齐
+      if (!w.isDead) w.hp = Math.round(w.maxHp * ratio);
+    }
+    if (typeof this._broadcastWorkerHp === 'function') this._broadcastWorkerHp();
+  }
+
+  /**
+   * §34.4 E3b 不朽证明（20000）：矿工将死时消费一次免死豁免 → 满血复活 + 广播 free_death_pass_triggered
+   *   调用时机：所有 worker HP<=0 分支（_legendRevive 之后）—— §30.3 legend_revive 仍优先消费（阶10 免死）
+   *   消费顺序：legend_revive → free_death_pass；两个互斥，不同时生效
+   * @param {string} playerId
+   * @returns {boolean} true=消费成功（调用方必须跳过后续死亡处理）
+   */
+  _consumeFreeDeathPass(playerId) {
+    if (!this._freeDeathPass) return false;
+    const w = this._workerHp[playerId];
+    if (!w) return false;
+    this._freeDeathPass = false;
+    w.hp       = w.maxHp;
+    w.isDead   = false;
+    w.respawnAt = 0;
+    this._broadcast({
+      type: 'free_death_pass_triggered',
+      data: {
+        playerId,
+        playerName: this._getPlayerName(playerId),
+      }
+    });
+    if (typeof this._broadcastWorkerHp === 'function') this._broadcastWorkerHp();
+    console.log(`[SurvivalEngine] Free death pass consumed: ${this._getPlayerName(playerId)} saved from death`);
+    return true;
+  }
+
+  /**
+   * §34.4 E3a 荣耀时刻：T3+ 礼物发送时广播
+   *   计算：发送者当前排名 + gapToFirst + isNewFirst + overtaken
+   * 注：送礼后已通过 _trackContribution 更新 contributions，本函数在 handleGift 内调用时必须
+   *     使用"送礼前快照"的排名，才能准确判断 isNewFirst / overtaken。
+   * @param {string} playerId
+   * @param {string} playerName
+   * @param {string} giftName
+   * @param {number} giftTier  1~6
+   * @param {Array<[string, number]>} rankingBefore  送礼前排序的 [playerId, contrib] 数组（entries）
+   */
+  _broadcastGloryMoment(playerId, playerName, giftName, giftTier, rankingBefore) {
+    // 送礼后的当前排行（降序）
+    const sortedAfter = Object.entries(this.contributions).sort(([, a], [, b]) => b - a);
+    const afterIdx = sortedAfter.findIndex(([pid]) => pid === playerId);
+    if (afterIdx < 0) return; // 助威者无 contributions 条目 → 不播荣耀时刻
+
+    const rank        = afterIdx + 1;
+    const firstEntry  = sortedAfter[0];
+    const gapToFirst  = firstEntry ? Math.max(0, Math.round(firstEntry[1] - sortedAfter[afterIdx][1])) : 0;
+
+    // 送礼前排行（入参）→ 对比判定 isNewFirst / overtaken
+    const beforeIdx = (rankingBefore || []).findIndex(([pid]) => pid === playerId);
+    const isNewFirst = (afterIdx === 0 && beforeIdx !== 0);
+
+    // overtaken：送礼前排在当前玩家之前、送礼后排在当前玩家之后的第一个人
+    let overtaken = null;
+    if (beforeIdx > afterIdx && rankingBefore && rankingBefore.length > 0) {
+      for (let i = afterIdx; i < beforeIdx; i++) {
+        const beforeOther = rankingBefore[i];
+        if (!beforeOther || beforeOther[0] === playerId) continue;
+        overtaken = this.playerNames[beforeOther[0]] || beforeOther[0];
+        break;
+      }
+    }
+
+    this.broadcast({
+      type: 'glory_moment',
+      timestamp: Date.now(),
+      data: {
+        playerId,
+        playerName:  playerName || this.playerNames[playerId] || playerId,
+        giftName,
+        giftTier,
+        rank,
+        gapToFirst,
+        isNewFirst,
+        overtaken,
+      }
+    });
+  }
+
+  /**
+   * §34.4 E3c 礼物效果反馈：礼物结算 2s 后广播 gift_impact
+   *   fairy_wand 设 privateOnly=true（仅 sender 显示）；其他 6 种 privateOnly=false 广播全场
+   *   客户端按 privateOnly && playerId!==selfId 过滤
+   * @param {string} playerId
+   * @param {string} playerName
+   * @param {string} giftId      GiftConfig 内部 id
+   * @param {string} giftName    中文名
+   * @param {string} impacts     格式化后的效果字串（含具体数字）
+   * @param {boolean} [privateOnly=false]  true=fairy_wand（仅 sender 显示）
+   */
+  _scheduleGiftImpact(playerId, playerName, giftId, giftName, impacts, privateOnly = false) {
+    if (!impacts) return;
+    const t = setTimeout(() => {
+      this.broadcast({
+        type: 'gift_impact',
+        timestamp: Date.now(),
+        data: {
+          playerId,
+          playerName: playerName || this.playerNames[playerId] || playerId,
+          giftId,
+          giftName,
+          impacts,
+          privateOnly: !!privateOnly,
+        }
+      });
+    }, 2000);
+    this._giftImpactTimers.push(t);
+  }
+
+  /**
+   * §34.4 E3c: 根据礼物 id + effects 构造 impacts 字串（格式严格按任务文档）。
+   * 返回 null 表示不广播（未知礼物或无效 effects）。
+   */
+  _formatGiftImpactText(giftId, giftName, playerName, effects) {
+    const pn = playerName || '玩家';
+    const ef = effects || {};
+    switch (giftId) {
+      case 'love_explosion': {
+        const n    = ef.monstersKilled || 0;
+        const gate = ef.addGateHp || 0;
+        return `消灭 ${n} 只怪物，城门 +${gate}HP`;
+      }
+      case 'mystery_airdrop': {
+        const f = ef.addFood   || 0;
+        const c = ef.addCoal   || 0;
+        const o = ef.addOre    || 0;
+        const g = ef.addGateHp || 0;
+        return `食物+${f}，煤炭+${c}，矿石+${o}，城门+${g}HP`;
+      }
+      case 'donut': {
+        const g = ef.addGateHp || 0;
+        const f = ef.addFood   || 0;
+        return `城门+${g}HP，食物+${f}`;
+      }
+      case 'energy_battery': {
+        const h = ef.addHeat || 0;
+        return `炉温+${h}℃，${pn}效率+30%`;
+      }
+      case 'ability_pill': {
+        const dur = ef.globalEfficiencyDuration || 30;
+        return `全员采矿效率+50%，持续${dur}s`;
+      }
+      case 'fairy_wand': {
+        return `${pn}效率+5%`;
+      }
+      default:
+        return null;
+    }
   }
 
   // ==================== 内部：矿工成长系统（策划案 §30）====================
@@ -4192,10 +4596,10 @@ class SurvivalGameEngine {
     return 1 + (lv - 1) * 0.008;
   }
 
-  /** 等级决定的最大HP（基础100 + 每级+3） */
+  /** 等级决定的最大HP（基础100 + 每级+3 + §34.4 E3b miracle 里程碑 +bonus） */
   _getWorkerMaxHp(playerId) {
     const lv = this._playerLevel[playerId] || 1;
-    return 100 + (lv - 1) * 3;
+    return 100 + (lv - 1) * 3 + (this._milestoneWorkerHpBonus || 0);
   }
 
   /** 矿工复活秒数（§30 阶4+ -10s；§37 hospital -15s；最低 5s） */
@@ -4349,6 +4753,14 @@ class SurvivalGameEngine {
     if (this._playerLevel[playerId] == null) this._playerLevel[playerId] = 1;
     // 等级检查 + 跨阶广播
     this._checkLevelUp(playerId);
+
+    // §34.4 E3b 协作里程碑：仅正向 finalAmount 累加（§30 catchUpMult 乘进 _lifetimeContrib，
+    //   但 _totalContribution 对齐 contributions 水位 → 进度条与实时榜口径一致，不重复×3）
+    //   负值场景（reset/惩罚等）不计入；0 也跳过避免无谓调用 _checkCoopMilestones
+    if (finalAmount > 0) {
+      this._totalContribution += finalAmount;
+      this._checkCoopMilestones();
+    }
 
     // 防抖：贡献变化后 1.5s 推送实时榜（避免每条弹幕都广播）
     this._scheduleLiveRankingBroadcast();
@@ -5089,6 +5501,13 @@ class SurvivalGameEngine {
         this._workerHp[playerId] = { hp: 0, maxHp, isDead: true, respawnAt: 0 };
       }
       const w = this._workerHp[playerId];
+
+      // §34.4 E3b immortal 里程碑（20000）：探险死亡也消耗一次免死豁免
+      //   消耗成功 → 跳过死亡标记与广播（玩家视角：探险归来满血）
+      if (this._consumeFreeDeathPass(playerId)) {
+        this._broadcastWorkerHp();
+      } else {
+
       w.hp = 0;
       w.isDead = true;
       // 白天抵达 → 下次 _enterNight 之前由 _reviveAllWorkers('day_started') 复活（§2.2 既有路径）
@@ -5113,6 +5532,7 @@ class SurvivalGameEngine {
         });
       }
       this._broadcastWorkerHp();
+      } // end: !_consumeFreeDeathPass（§34.4 E3b immortal）
     }
 
     // 广播 returned
@@ -5236,6 +5656,23 @@ class SurvivalGameEngine {
       this._workerHp[playerId] = { hp: 0, maxHp, isDead: true, respawnAt: 0 };
     }
     const w = this._workerHp[playerId];
+
+    // §34.4 E3b immortal 里程碑（20000）：夜晚兜底死亡也消耗一次免死豁免
+    //   消耗成功 → 玩家满血归队，仍广播 expedition_returned 但不广播 worker_died
+    if (this._consumeFreeDeathPass(playerId)) {
+      this._broadcast({
+        type: 'expedition_returned',
+        data: {
+          playerId,
+          expeditionId: exp.expeditionId,
+          outcome: { type: 'safe', resources: null, contributions: 0, died: false },
+        },
+      });
+      this._broadcastWorkerHp();
+      console.log(`[SurvivalEngine] expedition night KIA saved by free_death_pass: ${this._getPlayerName(playerId)} id=${exp.expeditionId}`);
+      return;
+    }
+
     w.hp = 0;
     w.isDead = true;
     const respawnSec = this._getWorkerRespawnSec(playerId);
