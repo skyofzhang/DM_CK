@@ -42,6 +42,7 @@ class TribeWarSession {
     this.stolenOre  = 0;
 
     this.startAt = Date.now();
+    this.startedAt = Date.now();  // §35 P2 战报用（与 startAt 语义一致，显式命名便于读者）
     this.lastEnergyAt = Date.now();
     this.damageMultiplier = (typeof damageMultiplier === 'number') ? damageMultiplier : 1.0;
 
