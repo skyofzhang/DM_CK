@@ -52,7 +52,8 @@ namespace DrscfZ.UI
             if (data == null) return;
             _current = data;
 
-            if (_panel != null) _panel.SetActive(true);
+            // §17.16 A 类 modal：同时只能打开一个（占用时静默打开仍以已有面板为准）
+            if (_panel != null) ModalRegistry.TryOpenModalA(_panel);
             if (_proposerText != null) _proposerText.text = $"{data.proposerName} 发起建造投票";
 
             int n = data.options != null ? data.options.Length : 0;
@@ -128,7 +129,7 @@ namespace DrscfZ.UI
         private IEnumerator DelayHide(float seconds)
         {
             yield return new WaitForSeconds(seconds);
-            if (_panel != null) _panel.SetActive(false);
+            if (_panel != null) ModalRegistry.CloseModalA(_panel);
             _current = null;
         }
 

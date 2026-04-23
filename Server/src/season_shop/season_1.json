@@ -1,0 +1,24 @@
+{
+  "season": "season_1",
+  "note": "§39.8 赛季 1 限定商品（MVP 示例；运营据此格式维护各赛季目录）",
+  "items": [
+    {
+      "id": "b9_frost_crown",
+      "name": "冰霜王冠",
+      "slot": "title",
+      "price": 1500,
+      "category": "B",
+      "lifetimeContribMin": 1000,
+      "effect": "S1 限定称号：昵称前缀 [冰霜王冠]，冰蓝色文字"
+    },
+    {
+      "id": "b10_aurora_frame",
+      "name": "极光头像框",
+      "slot": "frame",
+      "price": 2000,
+      "category": "B",
+      "lifetimeContribMin": 1000,
+      "effect": "S1 限定头像框：极光渐变边框"
+    }
+  ]
+}

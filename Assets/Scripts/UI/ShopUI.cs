@@ -69,11 +69,42 @@ namespace DrscfZ.UI
             if (_tabB != null)         _tabB.onClick.AddListener(() => SwitchTab("B"));
             if (_tabInventory != null) _tabInventory.onClick.AddListener(() => SwitchTab("I"));
             if (_btnClose != null)     _btnClose.onClick.AddListener(ClosePanel);
+
+            // Batch I 补齐：订阅失败/购买事件做最小 toast + 库存刷新
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm != null)
+            {
+                sgm.OnShopPurchaseFailed  += HandleShopPurchaseFailedToast;
+                sgm.OnShopPurchaseConfirm += HandleShopPurchaseConfirmRefresh;
+            }
         }
 
         private void OnDestroy()
         {
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm != null)
+            {
+                sgm.OnShopPurchaseFailed  -= HandleShopPurchaseFailedToast;
+                sgm.OnShopPurchaseConfirm -= HandleShopPurchaseConfirmRefresh;
+            }
             if (Instance == this) Instance = null;
+        }
+
+        /// <summary>Batch I：购买失败 → toast（主面板可见时显示），复用 FailureToastLocale</summary>
+        private void HandleShopPurchaseFailedToast(ShopPurchaseFailedData data)
+        {
+            if (_statusText == null || _panel == null || !_panel.activeSelf) return;
+            string reasonText = DrscfZ.UI.FailureToastLocale.Get(data?.reason);
+            _statusText.text = $"购买失败：{reasonText}";
+        }
+
+        /// <summary>Batch I：购买成功（本人或他人） → 若在 Inventory Tab 重绘；否则仅清理 status 文字</summary>
+        private void HandleShopPurchaseConfirmRefresh(ShopPurchaseConfirmData data)
+        {
+            if (_panel == null || !_panel.activeSelf) return;
+            if (_currentTab == "I")
+                RenderInventory();
+            if (_statusText != null) _statusText.text = "";
         }
 
         // ==================== 对外接口 ====================

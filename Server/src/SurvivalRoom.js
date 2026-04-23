@@ -41,9 +41,20 @@ class SurvivalRoom {
     // WebSocket 客户端集合
     this.clients = new Set();
 
-    // 房间创建者：第一个连接的WebSocket客户端即为主播（房间创建者）
+    // 房间创建者：
+    //   - GM 模式（isGMMode=true）：第一个连接的 ws 即主播（first-client 兜底）
+    //   - 真实抖音模式：roomCreatorOpenId 由 /api/douyin/init 预注入（owner open_id），
+    //     ws 的 _playerId / openId 需与之匹配才认定为主播
     // 用于 broadcaster_action 权限验证
     this.roomCreatorWs = null;
+
+    // 房间运行模式标记：
+    //   false = 真实抖音（默认；roomCreatorOpenId 必须严格匹配）
+    //   true  = GM 模式（first-client 绑定，roomCreatorOpenId 形如 gm_creator_xxx）
+    // 第一条携带 isGMMode 的 join_room 会缓存到这里。
+    this.isGMMode = false;
+    // 仅首次 join_room 决定房间模式；后续 join（重连等）不再变更
+    this._modeInitialized = false;
 
     // 主播专用：效率加速乘数（broadcaster_action触发）
     this.broadcasterEfficiencyMultiplier = 1.0;
@@ -97,18 +108,106 @@ class SurvivalRoom {
 
   // ==================== 客户端管理 ====================
 
-  addClient(ws) {
-    // 第一个连接的客户端即为房间创建者（主播）
-    const isFirstClient = this.clients.size === 0 && this.roomCreatorWs === null;
-    if (isFirstClient) {
-      this.roomCreatorWs = ws;
-      // §36.12 从 ws._playerId 缓存 roomCreatorOpenId；若 WS 尚未带 openId（抖音 SDK 连接晚绑定），
-      //   则稍后由 handleDouyinComment 兜底（见 handleDouyinComment 起首）
-      if (ws && ws._playerId) {
-        this.roomCreatorOpenId = ws._playerId;
-        this._refreshVeteranStatus();
+  /**
+   * 由 /api/douyin/init 回调调用，预绑定抖音平台 owner open_id
+   * 这样当主播 WS 连上来发 join_room 时，真实抖音模式能据此认定创建者
+   * @param {string} openId - 抖音 anchor_open_id（从 GetRoomInfo 获取）
+   */
+  bindDouyinAnchor(openId) {
+    if (!openId) return;
+    // 仅在 GM 模式未占位 / 尚未绑定时写入，避免覆盖 GM 占位或已有的真实 openId
+    if (this.isGMMode) {
+      console.log(`[SurvivalRoom:${this.roomId}] bindDouyinAnchor skipped (room is in GM mode)`);
+      return;
+    }
+    if (this.roomCreatorOpenId && this.roomCreatorOpenId === openId) return;
+    this.roomCreatorOpenId = openId;
+    this._refreshVeteranStatus();
+    console.log(`[SurvivalRoom:${this.roomId}] bindDouyinAnchor: roomCreatorOpenId=${openId}`);
+  }
+
+  /**
+   * 处理 join_room 消息（来自 RoomManager.routeMessage / handleClientConnect）
+   * 读取 isGMMode / playerId / playerName 并决定主播绑定策略
+   * @param {WebSocket} ws
+   * @param {object} joinData - { roomId, isGMMode?, explicitGMMode?, playerId?, playerName? }
+   */
+  handleJoinRoom(ws, joinData) {
+    const isGMMode = !!(joinData && joinData.isGMMode === true);
+    const playerId = (joinData && typeof joinData.playerId === 'string') ? joinData.playerId : '';
+
+    // 缓存 openId 到 ws（便于后续 _isRoomCreator 判定 / 审计）
+    if (playerId) {
+      ws._playerId = playerId;
+      ws.openId = playerId;  // 保留别名，便于日志/审计引用
+    }
+
+    // 仅首次带 isGMMode 的 join_room 决定房间模式；后续 join（重连等）尊重已有 mode
+    if (!this._modeInitialized) {
+      this.isGMMode = isGMMode;
+      this._modeInitialized = true;
+      if (isGMMode) {
+        // GM 模式：若尚未有 roomCreatorOpenId，用随机 token 占位（方便日志追踪）
+        if (!this.roomCreatorOpenId) {
+          this.roomCreatorOpenId = 'gm_creator_' + Math.random().toString(36).slice(2, 10);
+        }
       }
-      console.log(`[SurvivalRoom:${this.roomId}] Room creator assigned (first client, openId=${this.roomCreatorOpenId || 'pending'})`);
+      console.log(`[DrscfZ-Net] Room mode initialized: roomId=${this.roomId}, isGMMode=${this.isGMMode}, creatorOpenId=${this.roomCreatorOpenId || 'pending'}`);
+    }
+
+    // 已在 clients 集合内的 ws（URL 直连先 addClient，join_room 后补签模式）
+    //   → 不重复 addClient；只需重新判定 creator 身份并回补 join_room_confirm
+    if (this.clients.has(ws)) {
+      // 真实抖音模式下 openId 匹配时升级为 creator（URL 直连时默认非 creator）
+      if (!this.isGMMode && this.roomCreatorOpenId && !String(this.roomCreatorOpenId).startsWith('gm_creator_')
+          && ws._playerId && ws._playerId === this.roomCreatorOpenId) {
+        this.roomCreatorWs = ws;
+        console.log(`[SurvivalRoom:${this.roomId}] Creator upgraded on late join_room (douyin mode): openId=${ws._playerId}`);
+      }
+      // 回补 join_room_confirm（客户端可重读 isRoomCreator）
+      try {
+        ws.send(JSON.stringify({
+          type: 'join_room_confirm',
+          roomId: this.roomId,
+          timestamp: Date.now(),
+          data: {
+            isRoomCreator: this._isRoomCreator(ws),
+            has_active_session: this.survivalEngine &&
+              this.survivalEngine.state !== 'idle' &&
+              this.survivalEngine.state !== undefined
+          }
+        }));
+      } catch (e) { /* ignore */ }
+      return;
+    }
+
+    // 新 ws：走 addClient 正常流程（内部据 isGMMode/openId 决定是否为 creator）
+    this.addClient(ws);
+  }
+
+  addClient(ws) {
+    // 真实抖音模式：优先匹配 openId → 命中者即为主播
+    // GM 模式 / 尚未绑定 openId：沿用"第一个连接即主播"兜底
+    if (!this.isGMMode && this.roomCreatorOpenId && !String(this.roomCreatorOpenId).startsWith('gm_creator_')) {
+      // 真实抖音模式：只认 openId 匹配
+      if (ws._playerId && ws._playerId === this.roomCreatorOpenId) {
+        this.roomCreatorWs = ws;
+        console.log(`[SurvivalRoom:${this.roomId}] Creator identified by openId match (douyin mode): openId=${ws._playerId}`);
+      } else {
+        console.log(`[SurvivalRoom:${this.roomId}] Client joined as viewer (douyin mode, openId=${ws._playerId || 'none'}, expected=${this.roomCreatorOpenId})`);
+      }
+    } else {
+      // GM 模式 / 未知模式：first-client 兜底
+      const isFirstClient = this.clients.size === 0 && this.roomCreatorWs === null;
+      if (isFirstClient) {
+        this.roomCreatorWs = ws;
+        // §36.12 从 ws._playerId 缓存 roomCreatorOpenId；GM 模式下若构造时已写入 gm_creator_* 占位则保留
+        if (ws && ws._playerId && !this.roomCreatorOpenId) {
+          this.roomCreatorOpenId = ws._playerId;
+        }
+        this._refreshVeteranStatus();
+        console.log(`[SurvivalRoom:${this.roomId}] Room creator assigned (first client fallback, openId=${this.roomCreatorOpenId || 'pending'}, isGMMode=${this.isGMMode})`);
+      }
     }
 
     this.clients.add(ws);
@@ -123,7 +222,7 @@ class SurvivalRoom {
 
     // 告知客户端是否为房间创建者（主播端凭此决定是否显示BroadcasterPanel）
     // has_active_session=true 表示服务器有进行中的游戏，客户端弹出断线重连对话框
-    const isCreator = ws === this.roomCreatorWs;
+    const isCreator = this._isRoomCreator(ws);
     const hasActiveSession = this.survivalEngine &&
       this.survivalEngine.state !== 'idle' &&
       this.survivalEngine.state !== undefined;
@@ -143,17 +242,24 @@ class SurvivalRoom {
 
     // 新客户端连接：发送当前完整状态
     this._sendStateToClient(ws);
-    console.log(`[SurvivalRoom:${this.roomId}] Client added (isCreator=${isCreator}, total: ${this.clients.size})`);
+    console.log(`[DrscfZ-Net] Mode=${this.isGMMode ? 'GM' : 'DOUYIN'}, roomId=${this.roomId}, openId=${ws.openId || ws._playerId || 'N/A'}, isCreator=${isCreator}, clients=${this.clients.size}`);
   }
 
   removeClient(ws) {
     this.clients.delete(ws);
 
-    // 如果房间创建者断线，将创建者身份转交给当前第一个在线客户端（若有）
+    // 主播断线后的创建者转交策略：
+    //   - 真实抖音模式：roomCreatorOpenId 由 /api/douyin/init 固定，不能转交给观众；
+    //     仅清空 roomCreatorWs，等待主播 WS 重连时按 openId 重新绑定
+    //   - GM 模式：沿用 first-client 兜底，转交给当前第一个在线客户端（便于本地调试）
     if (ws === this.roomCreatorWs) {
-      if (this.clients.size > 0) {
+      if (!this.isGMMode && this.roomCreatorOpenId && !String(this.roomCreatorOpenId).startsWith('gm_creator_')) {
+        // 真实抖音模式：仅清空 ws 引用；openId 保留，等重连
+        this.roomCreatorWs = null;
+        console.log(`[SurvivalRoom:${this.roomId}] Creator WS disconnected (douyin mode, openId preserved=${this.roomCreatorOpenId})`);
+      } else if (this.clients.size > 0) {
         this.roomCreatorWs = this.clients.values().next().value;
-        console.log(`[SurvivalRoom:${this.roomId}] Creator disconnected, transferring creator to next client`);
+        console.log(`[SurvivalRoom:${this.roomId}] Creator disconnected, transferring creator to next client (GM mode fallback)`);
         // 通知新创建者
         try {
           this.roomCreatorWs.send(JSON.stringify({
@@ -384,18 +490,22 @@ class SurvivalRoom {
   handleClientMessage(ws, msgType, data) {
     switch (msgType) {
       case 'start_game':
+        if (!this._requireBroadcaster(ws, 'start_game')) break;
         // 新一局开始时，停止上一局残留的模拟器
         this._stopSimulation();
         // 支持难度参数：data.difficulty = 'easy' | 'normal' | 'hard'
         this.survivalEngine.startGame(data && data.difficulty ? data.difficulty : 'normal');
+        this._gmAudit(ws, 'start_game', { difficulty: data && data.difficulty });
         break;
       case 'reset_game':
+        if (!this._requireBroadcaster(ws, 'reset_game')) break;
         // §36 重置前保存一次（保留 fortressDay / 持久化字段）
         if (this.roomPersistence) {
           try { this.roomPersistence.save(this); } catch (e) { /* ignore */ }
         }
         this._stopSimulation();
         this.survivalEngine.reset();
+        this._gmAudit(ws, 'reset_game', {});
         break;
       case 'sync_state':
         // 客户端请求重新同步当前游戏状态（用于"继续上一局"场景）
@@ -417,6 +527,7 @@ class SurvivalRoom {
         } catch (e) { }
         break;
       case 'upgrade_gate': {
+        if (!this._requireBroadcaster(ws, 'upgrade_gate')) break;
         // 城门升级（需要矿石资源）
         // data.secOpenId 可选，用于记录操作者；也接受连接时注册的操作者 ID
         // 防御：客户端不可通过 source='gift_t6' 免费升级——只允许 broadcaster / expedition_trader
@@ -430,15 +541,18 @@ class SurvivalRoom {
         // 客户端 GateUpgradeFailedData 权威字段名为 blockedLevel（§10/§19.2）
         if (!this._checkFeatureOrFail(featureId, 'gate_upgrade_failed', { blockedLevel: targetLv })) break;
         this.survivalEngine._upgradeGate(data && data.secOpenId || '', safeSource);
+        this._gmAudit(ws, 'upgrade_gate', { targetLv, source: safeSource });
         break;
       }
       case 'toggle_sim':
+        if (!this._requireBroadcaster(ws, 'toggle_sim')) break;
         // 生存游戏模拟器（直接触发测试事件）
         if (data && data.enabled) {
           this._runSimulation();
         } else {
           this._stopSimulation();
         }
+        this._gmAudit(ws, 'toggle_sim', { enabled: !!(data && data.enabled) });
         break;
       case 'get_weekly_ranking':
         // 客户端请求本周贡献榜（面板打开时触发）
@@ -473,12 +587,14 @@ class SurvivalRoom {
         break;
 
       case 'end_game': {
+        if (!this._requireBroadcaster(ws, 'end_game')) break;
         // §16.4 GM 手动结束游戏 → 阶段性结算（走失败结算 UI，但不触发 fortressDay 降级 / 不重置每日 cap）
         // §36 结束前保存一次（_enterSettlement 内部会再保存；此处双保险）
         if (this.roomPersistence) {
           try { this.roomPersistence.save(this); } catch (e) { /* ignore */ }
         }
         this._stopSimulation();
+        this._gmAudit(ws, 'end_game', { state: this.survivalEngine.state });
         // §16.4 v1.27 修正语病：必须逐项比较（state === 'day' || 'night' 按 JS 语义恒真，原表达有 bug）
         const engineState = this.survivalEngine.state;
         if (engineState === 'day' || engineState === 'night') {
@@ -500,33 +616,38 @@ class SurvivalRoom {
         // 客户端主动离开，忽略（连接断开由 WebSocket close 事件处理）
         break;
       case 'broadcaster_action': {
-        // §36.12 broadcaster_boost 门槛（seasonDay ≥ 2）；失败带 action 子动作名
         const action = (data && data.action) || '';
+        if (!this._requireBroadcaster(ws, action || 'broadcaster_action')) break;
+        // §36.12 broadcaster_boost 门槛（seasonDay ≥ 2）；失败带 action 子动作名
         if (!this._checkFeatureOrFail('broadcaster_boost', 'broadcaster_action_failed', { action })) break;
         this._handleBroadcasterAction(ws, data);
         break;
       }
 
       // ==================== §24.4 主播事件轮盘 ====================
-      // PM 决策（MVP）：_roomCreatorId 未注入 → 放开给任何玩家；
-      //   TODO: 等 _roomCreatorId 实现后，这里应先校验 `_isRoomCreator(ws)` 再路由
       case 'broadcaster_roulette_spin': {
+        if (!this._requireBroadcaster(ws, 'roulette_spin')) break;
         // §36.12 roulette 门槛（seasonDay ≥ 1 — 默认解锁；仅为保险起见放置）
         if (!this._checkFeatureOrFail('roulette', 'roulette_spin_failed', {})) break;
         const pid = ws._playerId || '';
         this.survivalEngine.handleBroadcasterRouletteSpin(pid);
+        this._gmAudit(ws, 'roulette_spin', {});
         break;
       }
       case 'broadcaster_roulette_apply': {
+        if (!this._requireBroadcaster(ws, 'roulette_apply')) break;
         if (!this._checkFeatureOrFail('roulette', 'roulette_spin_failed', {})) break;
         const pid = ws._playerId || '';
         this.survivalEngine.handleBroadcasterRouletteApply(pid);
+        this._gmAudit(ws, 'roulette_apply', {});
         break;
       }
       case 'broadcaster_trader_accept': {
+        if (!this._requireBroadcaster(ws, 'trader_accept')) break;
         const pid = ws._playerId || '';
         const choice = (data && data.choice) || '';
         this.survivalEngine.handleBroadcasterTraderAccept(pid, choice);
+        this._gmAudit(ws, 'trader_accept', { choice });
         break;
       }
 
@@ -629,39 +750,71 @@ class SurvivalRoom {
         this.survivalEngine.handleShopEquip(pid, slot, itemIdE);
         break;
       }
+      case 'shop_inventory': {
+        // §39 库存查询（C→S）—— 主动触发 shop_inventory_data 推送
+        // §36.12 shop 门槛：未解锁时推送空 inventory（避免客户端空指针，与 shop_list 锁定期返空一致）
+        const pidI = ws._playerId || (data && data.playerId) || '';
+        this._refreshVeteranStatus();
+        if (!isFeatureUnlocked(this, 'shop')) {
+          this.broadcast({
+            type: 'shop_inventory_data',
+            timestamp: Date.now(),
+            data: {
+              playerId: pidI,
+              owned: [],
+              equipped: { title: '', frame: '', entrance: '', barrage: '' },
+              contribBalance: 0,
+              lifetimeContrib: 0,
+            },
+          });
+          break;
+        }
+        this.survivalEngine.handleShopInventory(pidI);
+        break;
+      }
 
       // ==================== GM 测试指令 ====================
+      // 注：这些指令主要为调试用，GM 模式下也会执行（符合"保留但审计"的要求）；
+      //     真实抖音模式下同样需要主播身份，防止观众客户端伪造消息触发
       case 'pause_game':
+        if (!this._requireBroadcaster(ws, 'pause_game')) break;
         // 暂停/恢复游戏（仅限调试）
         if (this.survivalEngine.state === 'day' || this.survivalEngine.state === 'night') {
           this.survivalEngine._clearAllTimers();
           this.broadcast({ type: 'game_paused', data: { paused: true } });
           console.log(`[SurvivalRoom:${this.roomId}] GM: game paused`);
         }
+        this._gmAudit(ws, 'pause_game', { state: this.survivalEngine.state });
         break;
 
       case 'simulate_gift': {
+        if (!this._requireBroadcaster(ws, 'simulate_gift')) break;
         // 模拟礼物（tier 1-6，默认 tier=2）
         const tierMap = { 1: 'fairy_wand', 2: 'ability_pill', 3: 'donut', 4: 'energy_battery', 5: 'love_explosion', 6: 'mystery_airdrop' };
         const tier    = (data && data.tier && tierMap[data.tier]) ? data.tier : 2;
         const giftId  = tierMap[tier];
         this.survivalEngine.handleGift('gm_test', 'GM测试', '', giftId, 0, `GM礼物T${tier}`);
         console.log(`[SurvivalRoom:${this.roomId}] GM: simulate_gift tier=${tier} (${giftId})`);
+        this._gmAudit(ws, 'simulate_gift', { tier, giftId });
         break;
       }
 
       case 'simulate_freeze':
+        if (!this._requireBroadcaster(ws, 'simulate_freeze')) break;
         // 模拟冻结特效（广播 special_effect freeze_all，不触发游戏结束）
         this.broadcast({ type: 'special_effect', timestamp: Date.now(), data: { effect: 'frozen_all', duration: 5 } });
         console.log(`[SurvivalRoom:${this.roomId}] GM: simulate_freeze`);
+        this._gmAudit(ws, 'simulate_freeze', {});
         break;
 
       case 'simulate_monster':
+        if (!this._requireBroadcaster(ws, 'simulate_monster')) break;
         // 模拟刷怪（立即追加1只普通怪物）
         if (this.survivalEngine.state === 'night') {
           this.survivalEngine._spawnWave({ type: 'normal', count: 1 }, this.survivalEngine.day, 99);
           console.log(`[SurvivalRoom:${this.roomId}] GM: simulate_monster`);
         }
+        this._gmAudit(ws, 'simulate_monster', { state: this.survivalEngine.state });
         break;
 
       // ==================== §35 Tribe War C→S ====================
@@ -675,6 +828,7 @@ class SurvivalRoom {
         break;
       }
       case 'tribe_war_attack': {
+        if (!this._requireBroadcaster(ws, 'tribe_war_attack')) break;
         // §36.12 tribe_war 门槛（seasonDay ≥ 7）
         if (!this._checkFeatureOrFail('tribe_war', 'tribe_war_attack_failed', {})) break;
         if (!this.tribeWarMgr) break;
@@ -683,16 +837,17 @@ class SurvivalRoom {
           ws.send(JSON.stringify({ type: 'tribe_war_attack_failed', timestamp: Date.now(), data: { reason: 'room_not_found' } }));
           break;
         }
-        // TODO _roomCreatorId 鉴权放开(MVP,同 §24.4/§37/§39)
         const res = this.tribeWarMgr.startAttack(this.roomId, targetRoomId);
         if (!res.ok) {
           const failData = { reason: res.reason };
           if (res.cooldownMs !== undefined) failData.cooldownMs = res.cooldownMs;
           ws.send(JSON.stringify({ type: 'tribe_war_attack_failed', timestamp: Date.now(), data: failData }));
         }
+        this._gmAudit(ws, 'tribe_war_attack', { targetRoomId });
         break;
       }
       case 'tribe_war_stop': {
+        if (!this._requireBroadcaster(ws, 'tribe_war_stop')) break;
         if (!this.tribeWarMgr) break;
         const sid = this.tribeWarMgr._attackerToSession.get(this.roomId);
         if (sid) {
@@ -701,6 +856,7 @@ class SurvivalRoom {
         break;
       }
       case 'tribe_war_retaliate': {
+        if (!this._requireBroadcaster(ws, 'tribe_war_retaliate')) break;
         // §36.12 tribe_war 门槛（反击也走同一锁）
         if (!this._checkFeatureOrFail('tribe_war', 'tribe_war_attack_failed', {})) break;
         // 仅防守方(被攻击中)可反击;damageMultiplier 查 engine._buildings.has('beacon') 填 1.5（§37.2 烽火台反击联动）
@@ -725,15 +881,17 @@ class SurvivalRoom {
           if (res.cooldownMs !== undefined) failData.cooldownMs = res.cooldownMs;
           ws.send(JSON.stringify({ type: 'tribe_war_attack_failed', timestamp: Date.now(), data: failData }));
         }
+        this._gmAudit(ws, 'tribe_war_retaliate', { targetRoomId, damageMultiplier: _dm });
         break;
       }
 
       // ==================== §34.4 E9 难度切换（主播） ====================
       // C→S：{ difficulty: 'easy'|'normal'|'hard'|'nightmare', applyAt: 'next_night'|'next_season' }
-      // TODO: _roomCreatorId 鉴权放开（与 §24.4/§37/§39 一致）；引擎内部对 invalid_args 推 change_difficulty_failed
       case 'change_difficulty': {
+        if (!this._requireBroadcaster(ws, 'change_difficulty')) break;
         const pid = ws._playerId || '';
         this.survivalEngine.handleChangeDifficulty(pid, data || {});
+        this._gmAudit(ws, 'change_difficulty', { difficulty: data && data.difficulty, applyAt: data && data.applyAt });
         break;
       }
 
@@ -757,15 +915,13 @@ class SurvivalRoom {
       //   服务端收到后立即 clearTimeout 结算 8s 倒计时 → 进入恢复期
       //   非主播静默忽略；state 非 'settlement' 时返回 false（_enterSettlement 已清句柄则无效）
       case 'streamer_skip_settlement': {
-        if (!this._isRoomCreator(ws)) {
-          console.log(`[SurvivalRoom:${this.roomId}] streamer_skip_settlement rejected: not room creator`);
-          break;
-        }
+        if (!this._requireBroadcaster(ws, 'streamer_skip_settlement')) break;
         const pid = (data && data.playerId) || ws._playerId || '';
         const ok = this.survivalEngine.handleStreamerSkipSettlement(pid);
         if (!ok) {
           console.log(`[SurvivalRoom:${this.roomId}] streamer_skip_settlement no-op (state=${this.survivalEngine.state})`);
         }
+        this._gmAudit(ws, 'streamer_skip_settlement', { ok });
         break;
       }
 
@@ -785,13 +941,13 @@ class SurvivalRoom {
   handleDouyinComment(secOpenId, nickname, avatarUrl, content) {
     this.lastActiveAt = Date.now();
 
-    // §36.12 roomCreatorOpenId 兜底绑定：若 addClient 时 ws 未带 _playerId，此处第一次见到 secOpenId 时绑定
-    //   MVP 简化：任一评论者（含主播本人）只要 roomCreatorOpenId 还空就补写；不严格区分"主播/观众"
-    //   当 WS 连接有 _playerId 时 addClient 已写入，此处仅兜底
-    if (!this.roomCreatorOpenId && secOpenId) {
+    // §36.12 roomCreatorOpenId 兜底绑定：仅在"GM 模式 + 尚未绑定"时生效
+    //   真实抖音模式下应由 /api/douyin/init → bindDouyinAnchor() 预注入，不再让首个评论者抢占主播身份
+    //   （若真实抖音模式下 init 未能获取到 anchor_open_id，也仅视为兼容性兜底）
+    if (!this.roomCreatorOpenId && secOpenId && (this.isGMMode || !this._modeInitialized)) {
       this.roomCreatorOpenId = secOpenId;
       this._refreshVeteranStatus();
-      console.log(`[SurvivalRoom:${this.roomId}] roomCreatorOpenId fallback-bound to ${secOpenId}`);
+      console.log(`[SurvivalRoom:${this.roomId}] roomCreatorOpenId fallback-bound to ${secOpenId} (isGMMode=${this.isGMMode})`);
     }
 
     // §36.12 markSeasonAttendance：每次观众评论都记录当前赛季日（适用于老用户判定）
@@ -877,11 +1033,64 @@ class SurvivalRoom {
 
   /**
    * 判断当前客户端是否为房间创建者（主播）
+   * - GM 模式：沿用 ws === this.roomCreatorWs（first-client 兜底，兼容 Play Mode 无真实 openId 场景）
+   * - 真实抖音模式：优先比对 ws.openId / ws._playerId 是否匹配 this.roomCreatorOpenId
+   *   （防止重连后 roomCreatorWs 对象引用过期导致权限丢失）
    * @param {WebSocket} ws
    * @returns {boolean}
    */
   _isRoomCreator(ws) {
+    if (!ws) return false;
+
+    // 真实抖音模式：openId 严格匹配
+    if (!this.isGMMode && this.roomCreatorOpenId && !String(this.roomCreatorOpenId).startsWith('gm_creator_')) {
+      const wsOpenId = ws._playerId || ws.openId || '';
+      if (wsOpenId && wsOpenId === this.roomCreatorOpenId) return true;
+      // 兜底：引用相等（首次绑定未来得及重连场景）
+      return ws === this.roomCreatorWs;
+    }
+
+    // GM 模式 / 尚未确立模式：first-client 兜底
     return ws === this.roomCreatorWs;
+  }
+
+  /**
+   * broadcaster 动作鉴权统一入口：
+   *   若不是主播 → 广播 broadcaster_action_failed { action, reason:'not_broadcaster' } 并返回 false
+   *   调用方直接 `if (!this._requireBroadcaster(ws, 'upgrade_gate')) break;`
+   *
+   * @param {WebSocket} ws
+   * @param {string} action - 子动作名（如 'upgrade_gate' / 'end_game' / 'roulette_spin'）
+   * @returns {boolean}
+   */
+  _requireBroadcaster(ws, action) {
+    if (this._isRoomCreator(ws)) return true;
+    try {
+      // 单播给违规方，不向全房间广播（避免骚扰）
+      ws.send(JSON.stringify({
+        type: 'broadcaster_action_failed',
+        timestamp: Date.now(),
+        data: { action: action || 'unknown', reason: 'not_broadcaster' }
+      }));
+    } catch (e) { /* ignore */ }
+    const wsOpenId = ws && (ws._playerId || ws.openId) || 'N/A';
+    console.log(`[GM-AUDIT] REJECTED action=${action} roomId=${this.roomId} openId=${wsOpenId} isGM=${this.isGMMode} reason=not_broadcaster`);
+    return false;
+  }
+
+  /**
+   * GM / broadcaster 动作统一审计日志
+   *   GM 模式下这些指令通常允许执行（调试用），但仍记录便于回溯
+   *   真实抖音模式下的合法执行也会在此落地（故无条件记）
+   * @param {WebSocket} ws
+   * @param {string} action
+   * @param {object} extra - 附加字段（不含密钥）
+   */
+  _gmAudit(ws, action, extra) {
+    const wsOpenId = ws && (ws._playerId || ws.openId) || 'N/A';
+    const wsId     = ws && ws._wsId ? ws._wsId : 'unknown';
+    const payload  = extra && typeof extra === 'object' ? JSON.stringify(extra) : '';
+    console.log(`[GM-AUDIT] action=${action} roomId=${this.roomId} ws=${wsId} openId=${wsOpenId} isGM=${this.isGMMode}${payload ? ' extra=' + payload : ''}`);
   }
 
   /**
@@ -892,12 +1101,14 @@ class SurvivalRoom {
    * @param {object} data    - 消息体 { action, duration?, cooldown? }
    */
   _handleBroadcasterAction(ws, data) {
+    // 外层 case 'broadcaster_action' 已调用 _requireBroadcaster；此处双保险
     if (!this._isRoomCreator(ws)) {
-      console.log(`[SurvivalRoom:${this.roomId}] broadcaster_action ignored: not room creator`);
+      console.log(`[SurvivalRoom:${this.roomId}] broadcaster_action ignored: not room creator (second-layer check)`);
       return;
     }
 
     const action = data && data.action;
+    this._gmAudit(ws, action || 'broadcaster_action', { raw: data });
 
     if (action === 'efficiency_boost') {
       const duration = (data && data.duration) || 30000; // 默认30秒

@@ -25,7 +25,7 @@ namespace DrscfZ.Survival
     {
         // ==================== 状态枚举 ====================
 
-        public enum State { Idle, Move, Work, Special, Frozen, Dead }
+        public enum State { Idle, Move, Work, Special, Frozen, Dead, Expedition }
 
         // ==================== Inspector 引用 ====================
 
@@ -456,6 +456,13 @@ namespace DrscfZ.Survival
                     if (_deadCoroutine != null) StopCoroutine(_deadCoroutine);
                     _deadCoroutine = StartCoroutine(DeadCoroutine());
                     break;
+
+                case State.Expedition:
+                    // 停止 Work/Move 协程；头顶气泡提示；GO 可能已被 WorkerManager SetActive(false)
+                    StopAllCoroutines();
+                    SetAnimatorState(false, false);
+                    if (_bubble != null) _bubble.ShowSpecial("探", new Color(0.6f, 0.85f, 1f, 0.9f));
+                    break;
             }
         }
 
@@ -486,6 +493,10 @@ namespace DrscfZ.Survival
                 case State.Dead:
                     if (_deadCoroutine != null) { StopCoroutine(_deadCoroutine); _deadCoroutine = null; }
                     if (_visual != null) _visual.SetFrozen(false);
+                    if (_bubble != null) _bubble.Hide();
+                    break;
+
+                case State.Expedition:
                     if (_bubble != null) _bubble.Hide();
                     break;
             }
@@ -901,6 +912,30 @@ namespace DrscfZ.Survival
         public void SetPaused(bool paused)
         {
             _visual?.SetFrozen(paused);
+        }
+
+        // ==================== §38 探险状态（Batch I 补齐） ====================
+
+        /// <summary>
+        /// 矿工出发探险（expedition_started）——策划案 §22.1。
+        /// MVP 行为：切 State.Expedition + 头顶气泡 "探险中"。
+        /// 注意：WorkerManager.HandleExpeditionStarted 同时会 SetActive(false) 让整个 GO 隐形，
+        /// 本方法的视觉仅作为一个兜底，若场景改为不隐 GO，本状态仍能显示正确。
+        /// </summary>
+        public void EnterExpedition()
+        {
+            if (_state == State.Expedition) return;
+            TransitionTo(State.Expedition);
+        }
+
+        /// <summary>
+        /// 矿工探险归来（expedition_returned）——回到 Idle 流程。
+        /// 若探险中阵亡，WorkerManager 会直接调 EnterDead，不走本方法。
+        /// </summary>
+        public void ExitExpedition()
+        {
+            if (_state != State.Expedition) return;
+            TransitionTo(State.Idle);
         }
 
         // ==================== §30 矿工成长系统 ====================

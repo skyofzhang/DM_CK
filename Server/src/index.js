@@ -238,10 +238,28 @@ app.post('/api/douyin/init', async (req, res) => {
     console.log(`[DRSCFZ] Douyin init request: token=${token.substring(0, 20)}... (len=${token.length})`);
 
     const result = await douyinAPI.initFromToken(token);
+
+    // 预绑定主播 open_id 到房间：此时 WS 尚未连接，预创建 room 并写入 roomCreatorOpenId
+    // 这样真实抖音模式下 join_room 时 _isRoomCreator 可据 openId 匹配识别创建者
+    if (result.roomId && result.anchorOpenId) {
+      try {
+        const room = roomManager.getOrCreateRoom(result.roomId);
+        if (room && typeof room.bindDouyinAnchor === 'function') {
+          room.bindDouyinAnchor(result.anchorOpenId);
+          console.log(`[DrscfZ-Net] /api/douyin/init bound anchor openId to room: roomId=${result.roomId}, anchorOpenId=${result.anchorOpenId}, anchorName=${result.nickName}`);
+        }
+      } catch (e) {
+        console.warn(`[DRSCFZ] Douyin init: bindDouyinAnchor failed: ${e.message}`);
+      }
+    } else if (result.roomId && !result.anchorOpenId) {
+      console.warn(`[DRSCFZ] Douyin init: anchor_open_id missing from GetRoomInfo for roomId=${result.roomId} — douyin mode may fallback to first-client binding`);
+    }
+
     res.json({
       success: true,
       roomId: result.roomId,
       anchorName: result.nickName,
+      anchorOpenId: result.anchorOpenId || '',
       startedTypes: result.startedTypes,
       retrying: result.retrying || false
     });
@@ -345,14 +363,22 @@ wss.on('connection', (ws, req) => {
     try {
       const msg = JSON.parse(message.toString());
 
-      // 处理加入房间（首次连接时）
+      // 处理加入房间（首次连接时 / URL 直连后补发 join_room 都经由此路径）
       if (msg.type === 'join_room') {
-        const roomId = (msg.data && msg.data.roomId) || 'default';
+        const joinData = msg.data || {};
+        const roomId   = joinData.roomId || 'default';
         if (ws._pendingJoin || !ws._roomId) {
           ws._pendingJoin = false;
-          roomManager.handleClientConnect(ws, roomId);
-          console.log(`[DRSCFZ] Client joined room: ${roomId}`);
-          // SurvivalRoom.addClient() 已内置处理 paused→active 恢复，无需额外操作
+          // 携带 joinData（含 isGMMode / playerId / playerName / explicitGMMode）
+          // → RoomManager.handleClientConnect 会据此走 SurvivalRoom.handleJoinRoom 分流
+          roomManager.handleClientConnect(ws, roomId, joinData);
+          console.log(`[DRSCFZ] Client joined room: ${roomId}, isGMMode=${!!joinData.isGMMode}, playerId=${joinData.playerId || 'none'}`);
+        } else if (ws._roomId === roomId) {
+          // 已在房间内的 join_room（URL 直连后补发 / 重发场景）：让房间重新走 handleJoinRoom 识别模式 + creator
+          const room = roomManager.getRoom(roomId);
+          if (room && typeof room.handleJoinRoom === 'function') {
+            room.handleJoinRoom(ws, joinData);
+          }
         }
         return;
       }

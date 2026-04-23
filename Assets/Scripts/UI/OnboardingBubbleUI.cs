@@ -14,8 +14,8 @@ namespace DrscfZ.UI
     ///   B1 开场引导   - show_onboarding_sequence 触发后 0.3s，3s 文案"活过今夜就算胜利！白天采矿，夜晚打怪"
     ///   B2 矿工介绍   - B1 结束后 0.5s，3s 文案"矿工帮你打工，刷礼物让他变强"
     ///   B3 礼物介绍   - B2 结束后 0.5s，3s 文案"刷这些礼物来参与，最便宜 1 元"
-    ///   B4 夜晚警示   - phase_changed→night 且 seasonDay≥3 且 fortressDay∈[3,5]，4s 文案"夜晚来临！做好准备"
-    ///   B5 坚持鼓励   - fortress_day_changed{reason=promoted} 且 newFortressDay∈[3,5] 且 seasonDay≥3，3s 文案"活下来了！明天继续"
+    ///   B4 夜晚警示   - phase_changed→night 且 seasonDay∈[3,5] 且 fortressDay∈[3,5]，4s 文案"夜晚来临！做好准备"
+    ///   B5 坚持鼓励   - fortress_day_changed{reason=promoted} 且 newFortressDay∈[3,5] 且 seasonDay∈[3,5]，3s 文案"活下来了！明天继续"
     ///
     /// B1-B3 幂等：<c>_lastSessionId</c> 内存变量，同 sessionId 重复推送不重播；断线重连自动清空。
     /// B4/B5 每个房间生命周期仅触发一次（<c>_b4ShownThisSession</c> / <c>_b5ShownThisSession</c>）。
@@ -47,7 +47,7 @@ namespace DrscfZ.UI
         [SerializeField] private float _fadeOutSec       = 0.25f;
 
         [Header("文案（中文，禁用 emoji；CLAUDE.md UI emoji 踩坑）")]
-        [SerializeField] private string _b1Text = "活过今夜就算胜利！白天采矿，夜晚打怪";
+        [SerializeField] private string _b1Text = "守住城门，活过今夜！白天采矿，夜晚打怪";
         [SerializeField] private string _b2Text = "矿工帮你打工，刷礼物让他变强";
         [SerializeField] private string _b3Text = "刷这些礼物来参与，最便宜 1 元";
         [SerializeField] private string _b4Text = "夜晚来临！做好准备";
@@ -168,9 +168,10 @@ namespace DrscfZ.UI
         {
             if (pc == null) return;
 
-            // B4 触发：phase=night + seasonDay>=3 + fortressDay∈[3,5] + 未触发过
+            // B4 触发：phase=night + seasonDay∈[3,5] + fortressDay∈[3,5] + 未触发过
             if (pc.phase == "night"
                 && _currentSeasonDay >= 3
+                && _currentSeasonDay <= 5
                 && _currentFortressDay >= 3
                 && _currentFortressDay <= 5
                 && !_b4ShownThisSession)
@@ -188,11 +189,12 @@ namespace DrscfZ.UI
             // 更新缓存
             _currentFortressDay = data.newFortressDay;
 
-            // B5 触发：reason=promoted + newFortressDay∈[3,5] + seasonDay>=3 + 未触发过
+            // B5 触发：reason=promoted + newFortressDay∈[3,5] + seasonDay∈[3,5] + 未触发过
             if (data.reason == "promoted"
                 && data.newFortressDay >= 3
                 && data.newFortressDay <= 5
                 && data.seasonDay >= 3
+                && data.seasonDay <= 5
                 && !_b5ShownThisSession)
             {
                 _b5ShownThisSession = true;
@@ -342,6 +344,12 @@ namespace DrscfZ.UI
             textRT.offsetMax = new Vector2(-20f, 0f);
 
             var tmp = textGO.AddComponent<TextMeshProUGUI>();
+            // AUTO-INJECT: 统一 Alibaba 字体
+            if (tmp.font == null) {
+                var __f = Resources.Load<TMPro.TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF");
+                if (__f == null) __f = Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
+                if (__f != null) tmp.font = __f;
+            }
             tmp.text         = "";
             tmp.fontSize     = 36f;
             tmp.alignment    = TextAlignmentOptions.Center;

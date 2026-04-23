@@ -31,6 +31,11 @@ namespace DrscfZ.Survival
         //   老用户豁免时服务端返全集；getFullState 每次推送
         //   feature id 常量见 SurvivalMessageProtocol.FeatureXxx
         public string[] unlockedFeatures;
+        // 🆕 §36.5.1 每日闯关上限扩展 4 字段（服务端未启用 cap flag 时 dailyCapMax 可能为 0）
+        public int  dailyFortressDayGained;
+        public int  dailyCapMax;
+        public long dailyResetAt;              // Unix ms，下次 UTC+8 05:00
+        public bool dailyCapBlocked;
         // 注：服务端还发送 workerHp（dict），因 JsonUtility 不支持 Dictionary，
         //     由独立的 worker_hp_update 消息负责同步，此处忽略
     }
@@ -437,6 +442,18 @@ namespace DrscfZ.Survival
         public LiveRankingEntry[] rankings; // Top 5
     }
 
+    /// <summary>单个玩家贡献更新（type=contribution_update，§34 Batch D Agent 新增）。
+    /// 服务端推送单人贡献增量；前端用来刷新个人贡献条/徽标。协议宽松：
+    /// contribution / delta 后端可只发一个，前端按存在字段使用。</summary>
+    [Serializable]
+    public class ContributionUpdateData
+    {
+        public string playerId;
+        public string playerName;
+        public int    contribution;    // 当局累计贡献（0 表示"未下发"时由前端用 delta 累加）
+        public int    delta;           // 本次增量（可正可负）
+    }
+
     // ==================== 助威模式 §33（🆕 v1.27，PM MVP：跳过 §36.12 / §30 依赖）====================
 
     /// <summary>观众注册为助威者（type=supporter_joined）</summary>
@@ -560,6 +577,7 @@ namespace DrscfZ.Survival
         public string   cardId;           // 定格卡 ID（elite_raid/time_freeze/double_contrib/mystery_trader/meteor_shower/aurora）
         public string[] displayedCards;   // 长度 3，展示给主播的 3 张卡
         public long     spunAt;           // spin 发生时刻（Unix ms，用于兜底 autoApplyAt 计算）
+        public long     autoApplyAt;      // 未主动 apply 时的 5s 兜底自动 apply 时刻（Unix ms，= spunAt + 5000）
     }
 
     /// <summary>轮盘效果结束通知（type=broadcaster_roulette_effect_ended）</summary>
@@ -655,7 +673,8 @@ namespace DrscfZ.Survival
     public class ExpeditionFailedData
     {
         public string playerId;
-        public string reason;      // 'max_concurrent'/'wrong_phase'/'worker_dead'/'duplicate'/'supporter_not_allowed'/'season_ending'/'feature_locked'
+        public string workerId;    // 被拒的 Worker 索引/id（服务端 workerIdx 字符串化，空字符串为默认）
+        public string reason;      // 'max_concurrent'/'wrong_phase'/'worker_dead'/'duplicate'/'supporter'/'supporter_not_allowed'/'season_ending'/'feature_locked'/'already_expedition'/'over_limit'
         public int    unlockDay;   // 仅 reason='feature_locked' 时有效；其他场景序列化为 0
     }
 
@@ -717,6 +736,17 @@ namespace DrscfZ.Survival
         public Vector3Data position;
     }
 
+    /// <summary>建造进度刷新（type=build_progress）
+    /// 服务端在建造中周期下发；progress ∈ [0,1]。后端若未发本消息，
+    /// 客户端可从 BuildStartedData.completesAt 自行线性插值做动画。</summary>
+    [Serializable]
+    public class BuildProgressData
+    {
+        public string buildId;
+        public float  progress;       // 0.0 ~ 1.0
+        public long   completesAt;    // Unix ms，冗余字段供校准倒计时
+    }
+
     /// <summary>建造完成（type=build_completed）</summary>
     [Serializable]
     public class BuildCompletedData
@@ -732,10 +762,13 @@ namespace DrscfZ.Survival
         public string reason;           // 'manual'/'attacked'/'demoted'/'demoted_during_build'
     }
 
-    /// <summary>建造提议被拒（type=build_propose_failed）</summary>
+    /// <summary>建造提议被拒（type=build_propose_failed）
+    /// reason 枚举：insufficient_resource / already_exists / wrong_phase / feature_locked / daily_limit /
+    ///   insufficient_resources / already_built / already_voting / supporter_not_allowed / season_ending（完整枚举见 §19.2 / §37.3）</summary>
     [Serializable]
     public class BuildProposeFailedData
     {
+        public string buildingType;     // 被拒的建筑类型（watchtower / market / hospital / altar / beacon）
         public string reason;           // 完整枚举见 §19.2 / §37.3
         public int    unlockDay;        // 仅 reason='feature_locked' 时有效
     }
@@ -937,11 +970,14 @@ namespace DrscfZ.Survival
     /// <summary>攻击/反击失败（type=tribe_war_attack_failed，unicast 发起方）。
     /// reason 枚举参见策划案 §35.10 / §19.2：cannot_attack_self / in_cooldown / already_attacking /
     /// target_already_under_attack / target_unavailable / target_not_playing / not_under_attack /
-    /// wrong_phase / feature_locked 等。</summary>
+    /// wrong_phase / feature_locked / target_offline / self_room 等。</summary>
     [Serializable]
     public class TribeWarAttackFailedData
     {
+        public string targetRoomId;   // 目标房间 id（上下文关联），服务端未下发时为空字符串
         public string reason;
+        // §35 P2 冷却：reason='in_cooldown' 时附带剩余冷却毫秒数（SurvivalRoom 透传 TribeWarManager 值）
+        public long   cooldownMs;
         // 🆕 v1.27 §36.12：reason='feature_locked' 时附带解锁所需赛季日（D7 解锁 tribe_war）
         public int    unlockDay;
     }
@@ -1017,8 +1053,11 @@ namespace DrscfZ.Survival
     [Serializable]
     public class ShowOnboardingSequenceData
     {
-        public string sessionId;  // 服务端 crypto.randomUUID()，用于客户端幂等
-        public int    priority;   // 固定 2（normal），UI 引导非关键消息
+        public string   sessionId;   // 服务端 crypto.randomUUID()，用于客户端幂等
+        public int      priority;    // 固定 2（normal），UI 引导非关键消息
+        public int      seasonDay;   // 触发时的赛季日（1-7），UI 可据此筛选气泡
+        public int      fortressDay; // 触发时的堡垒日，UI 可据此做进度提示
+        public string[] bubbleIds;   // 连播的气泡 id 列表（如 ["B1","B2","B3"]），老服务端缺失时为 null
     }
 
     // ==================== §36 全服同步 + 赛季制（Global Sync + Season，🆕 v1.27） ====================
@@ -1138,9 +1177,10 @@ namespace DrscfZ.Survival
     [Serializable]
     public class BroadcasterActionFailedData
     {
+        public string action;     // 子动作名 'efficiency_boost' / 'trigger_event' / 'upgrade_gate' / 'spin' / 'event' / ...
         public string reason;     // 失败原因
+        public long   cooldownMs; // 仅 reason='in_cooldown' 时有效（剩余冷却毫秒数）
         public int    unlockDay;  // 仅 reason='feature_locked' 时有效（§36.12 broadcaster_boost.minDay=2）
-        public string action;     // 子动作名 'efficiency_boost' / 'trigger_event'
     }
 
     // ==================== §34 Layer 3 组 C 体验引擎 ====================
@@ -1301,5 +1341,116 @@ namespace DrscfZ.Survival
     {
         public string playerId;
         public string playerName;
+    }
+
+    // ==================== 协议骨架补齐 Batch A（🆕 v1.27+） ====================
+    // 本段用于断线重连状态快照 / 统一失败消息 / §36.12 解锁事件 / §24.4 轮盘防御 /
+    // §35 P2 反击扩展等多个跨模块骨架类型。所有类型均为"协议骨架"——仅定义字段映射，
+    // 具体业务处理由各自模块的 Handler 实现。
+
+    // ---- A1. 断线重连 in-progress 状态快照 ----
+    // 服务端重连时附带当前房间进行中的各种子系统状态；缺失字段 JsonUtility 回落 null/0。
+
+    /// <summary>轮盘进行中状态（§24.4，断线重连快照）</summary>
+    [Serializable]
+    public class RouletteInProgressData
+    {
+        public string cardId;        // 当前生效卡片 id（若有）
+        public long   effectEndsAt;  // 效果结束时间（Unix ms）
+        public long   readyAt;       // 下次充能完成时间（Unix ms）
+    }
+
+    /// <summary>建造进行中状态（§37，断线重连快照）</summary>
+    [Serializable]
+    public class BuildInProgressData
+    {
+        public string buildingId;
+        public string name;
+        public float  progress;      // 0-1
+        public long   completedAt;   // Unix ms
+    }
+
+    /// <summary>探险进行中状态（§38，断线重连快照，entry 元素）</summary>
+    [Serializable]
+    public class ExpeditionInProgressData
+    {
+        public string expeditionId;
+        public string workerId;
+        public string phase;         // "outbound" / "event" / "return"
+        public long   endsAt;        // Unix ms
+    }
+
+    /// <summary>攻防战进行中状态（§35，断线重连快照）</summary>
+    [Serializable]
+    public class TribeWarInProgressData
+    {
+        public string sessionId;
+        public string state;         // "attacking" / "defending" / "idle"
+        public string targetRoomId;
+        public long   endsAt;        // Unix ms
+    }
+
+    /// <summary>断线重连房间全量状态快照（type=room_state，S→C）。
+    /// 服务端在客户端重连成功后推送一次，包含所有进行中子系统的最小必要状态。
+    /// 任一子对象缺失时 JsonUtility 回落 null；客户端按 null 判空跳过。
+    /// 4 个 daily cap 字段与 SurvivalGameStateData 同源扩展（§36.5.1 每日闯关上限）。</summary>
+    [Serializable]
+    public class RoomStateData
+    {
+        public RouletteInProgressData       roulette;
+        public BuildInProgressData          build;
+        public ExpeditionInProgressData[]   expeditions;
+        public TribeWarInProgressData       tribeWar;
+
+        // §36.5.1 每日闯关上限扩展 4 字段（服务端未启用 cap flag 时 dailyCapMax 可能为 0）
+        public int  dailyFortressDayGained;
+        public int  dailyCapMax;
+        public long dailyResetAt;              // Unix ms，下次 UTC+8 05:00
+        public bool dailyCapBlocked;
+    }
+
+    /// <summary>room_state 兼容别名（部分模块在规范/审计中称为 RoomStateInProgressData，
+    /// 为避免引用歧义并保持对齐，此处保留同结构别名类）。</summary>
+    [Serializable]
+    public class RoomStateInProgressData
+    {
+        public RouletteInProgressData       roulette;
+        public BuildInProgressData          build;
+        public ExpeditionInProgressData[]   expeditions;
+        public TribeWarInProgressData       tribeWar;
+    }
+
+    // ---- A7. §36.12 feature_unlocked ----
+    /// <summary>功能解锁通知（type=feature_unlocked，S→C）。
+    /// 具体解锁哪个功能 → featureId（见 SurvivalMessageProtocol.FeatureXxx 常量）。
+    /// 与 world_clock_tick.newlyUnlockedFeatures 的区别：后者是批量数组，本消息为单个事件，
+    /// 适合 UI 逐条播放解锁横幅；服务端可能同时下发两者，客户端做幂等。</summary>
+    [Serializable]
+    public class FeatureUnlockedData
+    {
+        public string featureId;   // 对应 §36.12 FEATURE_UNLOCK_DAY 键（如 "expedition"/"shop"）
+        public int    unlockedAt;  // 解锁时的 seasonDay（1-7）
+        public string message;     // 展示文案（服务端提供，可为空串）
+    }
+
+    // ---- A8. §24.4 轮盘效果被阻止 ----
+    /// <summary>主播轮盘效果被阻止（type=broadcaster_roulette_effect_prevented，S→C，unicast 发起方）。
+    /// preventReason 枚举：duplicate（同类效果已生效）/ conflict_with_other_buff（与其他 buff 冲突）/
+    /// game_not_running（游戏不在运行态）。</summary>
+    [Serializable]
+    public class RouletteEffectPreventedData
+    {
+        public string cardId;
+        public string preventReason;  // duplicate / conflict_with_other_buff / game_not_running
+    }
+
+    // ---- A12. §35 P2 反击/攻击扩展 ----
+    /// <summary>攻防战反击/主动攻击（type=tribe_war_retaliate，C→S 或 S→C 反击状态推送）。
+    /// damageMultiplier 由服务端依据攻击方是否有 beacon 建筑决定（1.5 有 / 1.0 无）。</summary>
+    [Serializable]
+    public class TribeWarRetaliateData
+    {
+        public string targetRoomId;
+        public float  damageMultiplier;  // 1.5 if has beacon, 1.0 otherwise
     }
 }

@@ -71,6 +71,17 @@ class SeasonManager {
 
       console.log(`[SeasonManager] Season ${oldSeasonId} ended (${oldThemeId}) → Season ${this.seasonId} started (${this.themeId})`);
 
+      // §36 赛季切换强制断开 Tribe War：复用 rooms 里任一 room 的 tribeWarMgr 引用（单例），幂等调用 stopAllSessions
+      if (rooms && rooms.size > 0) {
+        let _tribeWarMgr = null;
+        for (const room of rooms) {
+          if (room && room.tribeWarMgr) { _tribeWarMgr = room.tribeWarMgr; break; }
+        }
+        if (_tribeWarMgr && typeof _tribeWarMgr.stopAllSessions === 'function') {
+          try { _tribeWarMgr.stopAllSessions('season_reset'); } catch (e) { console.warn(`[SeasonManager] stopAllSessions error: ${e.message}`); }
+        }
+      }
+
       // 广播
       if (rooms && rooms.size > 0) {
         for (const room of rooms) {

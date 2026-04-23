@@ -16,10 +16,8 @@ const crypto = require('crypto');
 const { findGiftById, findGiftByPrice, getGift, getTierNumber } = require('./GiftConfig');
 
 // ==================== §36 全服同步 / §36.5.1 每日闯关上限 常量 ====================
-// FeatureFlags：开发期可硬编码，线上可改为读 config
-const FeatureFlags = {
-  ENABLE_DAILY_CAP: true,   // §36.5.1 每日闯关上限（默认开）
-};
+// FeatureFlags：抽出到独立模块 ./FeatureFlags.js（便于测试用例与灰度切换）
+const FeatureFlags = require('./FeatureFlags');
 const DAILY_FORTRESS_CAP_MAX = 150;                 // §36.5.1 每 dayKey 最多 +150 fortressDay
 const DAILY_RESET_HOUR_UTC8  = 5;                    // §36.5.1 UTC+8 05:00 日切
 const FORTRESS_NEWBIE_PROTECT_DAY = 10;              // §36.5 fortressDay ≤ 10 失败免罚
@@ -230,7 +228,7 @@ const RANDOM_EVENT_INTERVAL_MAX_SEC = 90;
 // PM 决策（MVP）：
 //   - §36.12 feature_locked 跳过（暂不门槛）
 //   - §35 tribeWar 远征怪攻击骨架逻辑跳过（beacon 仅存 state，TODO §35）
-//   - Altar 对 efficiency666Bonus 采用未拆分 Math.max 版（未实现 P5 拆分 → 1.15→1.25 触发值）
+//   - Altar 对 666 弹幕触发值由 1.15→1.25（§6.3 P5 已按方案 A 拆分 _abilityPillBonus / _buzz666Bonus 独立轨道相乘）
 //   - Hospital 通过 §30 _getWorkerRespawnSec 接入，公式 max(5, 30 - 10*hasLv31 - 15*hasHospital)
 //   - _roomCreatorId 暂不引入（TODO）
 //   - 每日限 1 次用 _buildVoteUsedToday bool + _enterDay 重置
@@ -595,9 +593,18 @@ class SurvivalGameEngine {
     this._playerTempBoost        = {};  // playerId → 倍率（能量电池 1.3，持续180s，per-player）
     this._playerTempBoostTimers  = {};  // playerId → setTimeout handle
 
-    // 666弹幕效果（策划案 §4.3）
-    this.efficiency666Bonus = 1.0;   // 效率加成（1.15 = +15%）
-    this.efficiency666Timer = 0;     // 剩余秒数
+    // §6.3 P5（方案 A）：能力药丸 / 666 弹幕加成拆分为两条独立轨道，相乘生效
+    //   _abilityPillBonus  : T2 礼物 ability_pill（1.5 / altar 1.6）
+    //   _buzz666Bonus      : 666 弹幕（1.15 / altar 1.25 / meteor_fragment ×2.0）
+    //   过期判定使用绝对时间戳（_xxExpireAt），避免 setTimeout 互相 clearTimeout
+    //   计算：pillMult * buzzMult（两者同时激活 → 1.5 × 1.5 = 2.25×）
+    this._abilityPillBonus    = 1.0;
+    this._abilityPillExpireAt = 0;
+    this._buzz666Bonus        = 1.0;
+    this._buzz666ExpireAt     = 0;
+    // 兼容别名：保留旧字段名以兜底任何外部/插件读取（回退值 1.0），不再参与计算
+    this.efficiency666Bonus   = 1.0;
+    this.efficiency666Timer   = 0;
 
     // 难度倍率（由 _applyDifficulty 设置）
     this._difficulty       = 'normal';
@@ -613,11 +620,12 @@ class SurvivalGameEngine {
     this._afkCheckCounter        = 0;
     this._playerSlots            = {};
 
-    // ── 矿工成长系统（策划案 §30，MVP）─────────────────────────────────
-    // TODO §30 持久化：MVP 内存存储，服务重启清零；后续接入 WeeklyRankingStore（或新 WorkerLevelStore）
-    this._lifetimeContrib    = {};   // 终身累计贡献（MVP 不持久化）
-    this._playerLevel        = {};   // 1~100
-    this._playerSkinId       = {};   // 当前激活皮肤（仅决定外观）
+    // ── 矿工成长系统（策划案 §30）─────────────────────────────────
+    // §30 持久化已接入 RoomPersistence（schemaVersion 3）：_lifetimeContrib / _playerLevel / _playerSkinId
+    //   snapshot / _applyPersistedSnapshot 负责序列化与恢复；构造函数初值仅在首次 load 前使用。
+    this._lifetimeContrib    = {};   // 终身累计贡献（跨局永续）
+    this._playerLevel        = {};   // 1~100（跨局永续）
+    this._playerSkinId       = {};   // 当前激活皮肤（跨局永续）
     this._legendReviveUsed   = {};   // 阶10 每晚1次免死标记（_enterNight 重置）
     this._playerSkinCooldown = {};   // 换肤弹幕冷却（60s）
     this._dynamicHpMult      = 1.0;  // 动态难度怪物HP倍率
@@ -673,6 +681,8 @@ class SurvivalGameEngine {
     this._peptTalkBoostUntil          = 0;   // §39.4 A1 worker_pep_talk 有效截止时间戳（Date.now() < 此值 → 采矿 +15%）
     this._shopSpotlightTimers         = {};  // {playerId: setTimeout handle} spotlight 过期句柄
     this._shopPendingIdCounter        = 0;
+    // §39.8 赛季限定 SKU 池（B9/B10）：MVP 未上架，保持空数组；loadSeason() 可注入
+    this._seasonShopPool              = [];
 
     // F8: 无效指令提示去重 (策划案 §34 F8) —— {`${playerId}:cmd5`|`${playerId}:cmd6day`: true}
     // 每位玩家每种提示类型每局最多显示一次；reset() 清空
@@ -893,6 +903,33 @@ class SurvivalGameEngine {
   }
 
   /**
+   * §33 单播消息给指定 playerId（对应 ws）。
+   * 用于 gift_silent_fail 等"仅发送者可见"的反馈，不走 broadcast。
+   * 依赖：setRoomContext 必须已注入 this.room（SurvivalRoom 维护 clients Set 与 ws._playerId）
+   * @param {string} playerId
+   * @param {object} msg  完整消息体 { type, data, ... }，roomId 由 SurvivalRoom.broadcast 风格自行附加
+   */
+  _sendToPlayer(playerId, msg) {
+    if (!playerId || !msg) return false;
+    if (!this.room || !this.room.clients) return false;
+    const roomId = this.room.roomId || '';
+    let sent = false;
+    for (const ws of this.room.clients) {
+      if (!ws || ws._playerId !== playerId) continue;
+      try {
+        if (ws.readyState === 1) {
+          const copy = Object.assign({ roomId }, msg);
+          ws.send(JSON.stringify(copy));
+          sent = true;
+        }
+      } catch (e) {
+        console.warn(`[SurvivalEngine] _sendToPlayer error pid=${playerId}: ${e.message}`);
+      }
+    }
+    return sent;
+  }
+
+  /**
    * §35 P2 追加战报，自动维持最多 10 条滑动窗口。
    * TribeWarManager._endSession 在清登记前按 attacker/defender 双向调用。
    * @param {object} report — { sessionId, startedAt, endedAt, reason, stolenFood/Coal/Ore, role, ... }
@@ -918,6 +955,15 @@ class SurvivalGameEngine {
    */
   _applyPersistedSnapshot(snap) {
     if (!snap || typeof snap !== 'object') return;
+
+    // §31 冻结状态不持久化 —— 每次恢复强制清零（防御式初始化，抵御构造函数路径变动）
+    // _frozenWorkers 使用 Map<playerId, unfreezeAt(ms)>；冰封状态跨局无意义
+    if (!(this._frozenWorkers instanceof Map)) {
+      this._frozenWorkers = new Map();
+    } else {
+      this._frozenWorkers.clear();
+    }
+
     // §36 堡垒日
     if (typeof snap.fortressDay === 'number')    this.fortressDay    = Math.max(1, snap.fortressDay | 0);
     if (typeof snap.maxFortressDay === 'number') this.maxFortressDay = Math.max(this.fortressDay, snap.maxFortressDay | 0);
@@ -941,6 +987,13 @@ class SurvivalGameEngine {
     if (Array.isArray(snap._warReports))    this._warReports    = snap._warReports.slice(-10);
     // §38.3 探险符文 24h 滑动窗口（恢复后由 _maybePickRandomEvent / 相关读取点剔除 24h 前记录）
     if (Array.isArray(snap._runeChargeLog)) this._runeChargeLog = snap._runeChargeLog.slice();
+    // §37 建造系统：跨局永续已建成建筑（未完成骨架不恢复——重启视为取消，与 §37.4 "降级瞬间骨架取消不返资源"同构）
+    if (Array.isArray(snap._buildings)) {
+      this._buildings.clear();
+      for (const bid of snap._buildings) {
+        if (BUILDING_CATALOG[bid]) this._buildings.add(bid);   // 未知 buildId 跳过（版本兼容）
+      }
+    }
 
     // §36.12 老用户豁免：合并到全局 VeteranTracker（即使 tracker 是空单例，也可从 per-room 快照恢复）
     if (this.veteranTracker && typeof this.veteranTracker.loadSnapshot === 'function') {
@@ -1093,9 +1146,13 @@ class SurvivalGameEngine {
     for (const t of Object.values(this._playerTempBoostTimers || {})) clearTimeout(t);
     this._playerTempBoostTimers = {};
 
-    // 重置666 + 点赞 + 随机事件状态
-    this.efficiency666Bonus  = 1.0;
-    this.efficiency666Timer  = 0;
+    // 重置666 + 能力药丸（§6.3 P5 拆分）+ 点赞 + 随机事件状态
+    this._abilityPillBonus    = 1.0;
+    this._abilityPillExpireAt = 0;
+    this._buzz666Bonus        = 1.0;
+    this._buzz666ExpireAt     = 0;
+    this.efficiency666Bonus   = 1.0;  // 兼容别名
+    this.efficiency666Timer   = 0;    // 兼容别名
     this.totalLikes          = 0;
     // Fix F (组 B Reviewer P1)：改用 RANDOM_EVENT_INTERVAL_MIN/MAX_SEC 常量（60-90s）
     this._nextEventTimer     = RANDOM_EVENT_INTERVAL_MIN_SEC + Math.random() * (RANDOM_EVENT_INTERVAL_MAX_SEC - RANDOM_EVENT_INTERVAL_MIN_SEC);
@@ -1550,19 +1607,22 @@ class SurvivalGameEngine {
       this._handleExpeditionRecall(playerId, playerName);
     } else if (content_trim === '666') {
       // 666弹幕：全员效率+15%（已建 altar 时 1.25），持续30秒（策划案 §4.3 / §37.2 altar）
-      // §37 altar 抬升 666 触发值：1.15 → 1.25（未拆分 P5 版，用 Math.max 合并 T2 ability_pill 的 1.5/1.6）
-      this.efficiency666Bonus = this._buildings.has('altar') ? 1.25 : 1.15;
-      // §38 meteor_fragment：若 pending，本次 666 ×2.0（单次消费）
+      // §6.3 P5（方案 A）：写入 _buzz666Bonus 独立轨道（不与 ability_pill 互相覆盖）
+      // §37 altar 抬升 666 触发值：1.15 → 1.25
+      let buzzVal = this._buildings.has('altar') ? 1.25 : 1.15;
+      // §38 meteor_fragment：若 pending，本次 666 ×2.0（单次消费，仅作用于 _buzz666 轨道）
       if (this._meteorFragmentPending) {
-        this.efficiency666Bonus = this.efficiency666Bonus * 2.0;
+        buzzVal = buzzVal * 2.0;
         this._meteorFragmentPending = false;
-        console.log(`[SurvivalEngine] meteor_fragment consumed: 666 bonus boosted to ${this.efficiency666Bonus}`);
+        console.log(`[SurvivalEngine] meteor_fragment consumed: buzz666 bonus boosted to ${buzzVal}`);
       }
-      this.efficiency666Timer = 30;
+      // 刷新（不叠加，取最新一次写入）；30s 绝对时间戳过期
+      this._buzz666Bonus    = buzzVal;
+      this._buzz666ExpireAt = Date.now() + 30000;
       this._trackContribution(playerId, 2, 'barrage');
       this._tribeWarAddEnergy(1);  // §35 攻击能量：666 弹幕 +1
       this.broadcast({ type: 'special_effect', timestamp: Date.now(), data: { effect: 'glow_all', duration: 3 } });
-      console.log(`[SurvivalEngine] 666 bonus activated by ${playerName}, efficiency +${Math.round((this.efficiency666Bonus-1)*100)}% for 30s`);
+      console.log(`[SurvivalEngine] 666 bonus activated by ${playerName}, buzz666 +${Math.round((buzzVal-1)*100)}% for 30s (pill=${this._abilityPillBonus}×pill${this._abilityPillExpireAt > Date.now() ? 'active' : 'idle'})`);
     }
   }
 
@@ -1576,9 +1636,9 @@ class SurvivalGameEngine {
     if (playerId && !this.playerNames[playerId])
       this.playerNames[playerId] = playerName || playerId;
 
-    // §33 助威模式：名额已满且未注册 → 先晋升为助威者，再进入礼物处理
-    //   PM 决策（MVP）：跳过 §36.12 seasonDay < supporter_mode.minDay 门槛，永远允许注册
-    //   TODO §36.12: add seasonDay < supporter_mode.minDay gate when §36 implemented
+    // §33 助威模式：名额已满且未注册 → 先尝试晋升为助威者，再进入礼物处理
+    //   §36.12 supporter_mode.minDay（默认 6）由 _promoteToSupporter 内部读取；未解锁时返 false，
+    //   后续 T1 fairy_wand 会在 gift 识别后走 gift_silent_fail 静默驳回（仅发送者可见）
     if (playerId
         && this.contributions[playerId] === undefined
         && !this._supporters.has(playerId)
@@ -1618,6 +1678,50 @@ class SurvivalGameEngine {
     }
     if (_matchPath === 'exact')    this._giftMatchStats.exactHit++;
     else if (_matchPath === 'fallback') this._giftMatchStats.fallbackHit++;
+
+    // ===== §33 gift_silent_fail：supporter_mode 未解锁时静默驳回 T1 仙女棒 =====
+    // 触发条件（与 _promoteToSupporter 门槛同步）：
+    //   1. 房间已满员（totalPlayers >= MAX_PLAYERS）
+    //   2. 发送者未注册为守护者（contributions[playerId] === undefined）
+    //   3. 发送者未晋升为助威者（_promoteToSupporter 因 seasonDay < unlockDay 返 false → 仍不在 _supporters）
+    //   4. 礼物 = fairy_wand（T1）——仅 T1 触发 silent_fail，T2+ 按 §33 MVP 决策仍允许生效
+    //
+    // 反馈方式：仅向发送者单播 gift_silent_fail，不扣贡献、不入积分池、不广播 survival_gift
+    if (playerId
+        && !isSupporter
+        && this.contributions[playerId] === undefined
+        && this.totalPlayers >= SurvivalGameEngine.MAX_PLAYERS
+        && gift.id === 'fairy_wand') {
+      // 以 FeatureUnlockConfig.supporter_mode.minDay 为权威 unlockDay
+      let unlockDay = 6;
+      let isUnlocked = false;
+      try {
+        const { FEATURE_UNLOCK_DAY, isFeatureUnlocked } = require('./config/FeatureUnlockConfig');
+        if (FEATURE_UNLOCK_DAY && FEATURE_UNLOCK_DAY.supporter_mode && Number.isFinite(FEATURE_UNLOCK_DAY.supporter_mode.minDay)) {
+          unlockDay = FEATURE_UNLOCK_DAY.supporter_mode.minDay;
+        }
+        // 与 _promoteToSupporter 使用同一入口，保证判定一致性（含老用户豁免 / seasonDay 读取回退链）
+        if (typeof isFeatureUnlocked === 'function' && this.room) {
+          isUnlocked = !!isFeatureUnlocked(this.room, 'supporter_mode');
+        }
+      } catch (e) { /* ignore */ }
+      if (!isUnlocked) {
+        const ok = this._sendToPlayer(playerId, {
+          type: 'gift_silent_fail',
+          timestamp: Date.now(),
+          data: {
+            giftId:    gift.id,
+            priceFen:  giftValue || 0,
+            reason:    'before_supporter_unlock',
+            unlockDay,
+          },
+        });
+        console.log(`[SurvivalEngine] gift_silent_fail: pid=${playerId} name=${playerName} giftId=${gift.id} price=${giftValue} unlockDay=${unlockDay} sent=${ok}`);
+        // 不扣贡献、不入池、不广播；直接返回
+        return;
+      }
+      // 已解锁但仍未注册（理论上 _promoteToSupporter 已在 handleGift 入口晋升）→ 继续走常规分流
+    }
 
     // ===== §33 助威者特殊礼物分支：T1 仙女棒 / T5 爱的爆炸 =====
     // 这两种礼物依赖"发送者自己有专属矿工"的假设，助威者无矿工 → 需要重路由到场上其他矿工
@@ -1694,15 +1798,16 @@ class SurvivalGameEngine {
       }
 
       case 'ability_pill': {
-        // 全员采矿效率+50%，持续30s（复用 efficiency666 系统）
-        // §37 altar 抬升 T2 触发值：1.5 → 1.6（与 666 同一独立轨道，未拆分 P5 版）
+        // 全员采矿效率+50%，持续30s（§6.3 P5 方案 A：独立轨道，与 666 相乘不互相覆盖）
+        // §37 altar 抬升 T2 触发值：1.5 → 1.6
         const pillVal = this._buildings.has('altar') ? 1.6 : 1.5;
-        this.efficiency666Bonus = Math.max(this.efficiency666Bonus, pillVal); // +50%/60%，不叠加只刷新
-        this.efficiency666Timer = 30;
+        // 刷新（不叠加，取最新一次写入）；30s 绝对时间戳过期
+        this._abilityPillBonus    = pillVal;
+        this._abilityPillExpireAt = Date.now() + 30000;
         effects.globalEfficiencyBoost = pillVal;
         effects.globalEfficiencyDuration = 30;
         needsResourceSync = true;
-        console.log(`[SurvivalEngine] ability_pill: global efficiency +${((pillVal-1)*100)|0}% for 30s by ${playerName}`);
+        console.log(`[SurvivalEngine] ability_pill: global efficiency +${((pillVal-1)*100)|0}% for 30s by ${playerName} (buzz666=${this._buzz666Bonus}×${this._buzz666ExpireAt > Date.now() ? 'active' : 'idle'})`);
         break;
       }
 
@@ -1758,9 +1863,22 @@ class SurvivalGameEngine {
         effects.giftPause = 3000;
         this.broadcast({ type: 'gift_pause', timestamp: Date.now(), data: { duration: 3000 } });
         // T6 礼物联动：城门自动升级（不扣矿石，不计每日额度），并补送者 +100 贡献
+        // §10.7 规则：gateLevel == 6 时跳过升级逻辑，但 +100 贡献无条件发放
         if (this.gateLevel < GATE_MAX_HP_BY_LEVEL.length) {
           this._upgradeGate(playerId, 'gift_t6');
+        }
+        if (playerId) {
           this.contributions[playerId] = (this.contributions[playerId] || 0) + 100;
+          // 推送明细：让客户端能识别这 +100 是 T6 升级 / 满级的额外奖励
+          this._broadcast({
+            type: 'contribution_update',
+            data: {
+              playerId,
+              delta:  100,
+              total:  this.contributions[playerId],
+              source: (this.gateLevel >= GATE_MAX_HP_BY_LEVEL.length) ? 'gift_t6_max_level_bonus' : 'gift_t6_upgrade_bonus',
+            },
+          });
         }
         needsResourceSync = true;
         break;
@@ -1916,8 +2034,8 @@ class SurvivalGameEngine {
    * 晋升为助威者（幂等；可供 handleComment/handleGift/替补流程共用入口）。
    * 返回 true 表示已注册或已是助威者；false 表示因 §36.12 门槛不满足而保留旁观者身份。
    *
-   * PM 决策（MVP v1.27）：跳过 §36.12 seasonDay < supporter_mode.minDay 门槛，永远允许注册。
-   * 同样本次不推送 gift_silent_fail（门槛未生效，silent_fail 分支永远不触发）。
+   * §36.12 supporter_mode 门槛：seasonDay < unlockDay 且非老用户 → 静默保留旁观者身份，返回 false。
+   * 此函数本身不推送任何前端可见消息；handleGift 入口会对 T1 fairy_wand 另行推送 gift_silent_fail（仅发送者）。
    */
   _promoteToSupporter(playerId, playerName) {
     if (!playerId) return false;
@@ -2465,6 +2583,11 @@ class SurvivalGameEngine {
 
     this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
 
+    // §10.6.4 Lv5 冰霜光环：夜晚开始时若 gateLevel>=5 重播一次激活状态（兼顾重连 / 新客户端）
+    if (this.gateLevel >= 5) {
+      this._broadcastFrostAuraState(true);
+    }
+
     // §16 v1.27 tick 幂等重启：从 recovery 过来时 tick 仍是轻量分支（recovery），需切换到完整分支；
     //   从 _enterDay 过来时 tick 已在跑（_startTick 内部 _clearTick 保证幂等，无副作用）。
     //   这一行保障 _decayResources / _checkDefeat / remainingTime / 666buff / ore 修门 / 助威衰减
@@ -2559,6 +2682,11 @@ class SurvivalGameEngine {
     if (!isManual) {
       this._demoteBuildings('demoted');
     }
+
+    // §38.6 失败降级 / 手动结束：进入外域的矿工直接取消探险（视同 recall，空手归来），
+    //   避免客户端残留 ExpeditionMarkerUI；与 reset() 内的 _cancelAllExpeditions 语义对齐。
+    //   注意：此时 state 仍是 'day' 或 'night'，_recallExpedition 会发 expedition_returned（空手）
+    this._cancelAllExpeditions(isManual ? 'manual' : 'demoted');
 
     // §35 Tribe War：本房间进入结算 → 立即断开参与的所有 session（攻击方/防守方均断）
     if (this.tribeWarMgr) {
@@ -2767,13 +2895,17 @@ class SurvivalGameEngine {
     if (this._tickCounter % 5 === 0) {
       this.remainingTime = Math.max(0, this.remainingTime - 1);
 
-      // 666效率加成计时器倒计时
-      if (this.efficiency666Timer > 0) {
-        this.efficiency666Timer = Math.max(0, this.efficiency666Timer - 1);
-        if (this.efficiency666Timer <= 0) {
-          this.efficiency666Bonus = 1.0;
-          console.log('[SurvivalEngine] 666 bonus expired');
-        }
+      // §6.3 P5：能力药丸 / 666 效率加成过期扫描（绝对时间戳，无 setTimeout）
+      const _nowEffCheck = Date.now();
+      if (this._abilityPillExpireAt > 0 && _nowEffCheck >= this._abilityPillExpireAt) {
+        this._abilityPillBonus    = 1.0;
+        this._abilityPillExpireAt = 0;
+        console.log('[SurvivalEngine] ability_pill bonus expired');
+      }
+      if (this._buzz666ExpireAt > 0 && _nowEffCheck >= this._buzz666ExpireAt) {
+        this._buzz666Bonus    = 1.0;
+        this._buzz666ExpireAt = 0;
+        console.log('[SurvivalEngine] buzz666 bonus expired');
       }
 
       // §33 助威者攻击加成衰减（每秒 -1；归 0 时 buff 重置）
@@ -2913,32 +3045,46 @@ class SurvivalGameEngine {
     this._ensureDailyReset();
 
     const oldFortressDay = this.fortressDay;
-    let reason = 'promoted';
-    let actualChange = true;
 
-    if (FeatureFlags.ENABLE_DAILY_CAP && this._dailyCapBlocked) {
-      // 已触顶 → 不再推进
-      reason = 'cap_blocked';
-      actualChange = false;
-    } else {
-      this.fortressDay = oldFortressDay + 1;
-      if (this.fortressDay > this.maxFortressDay) this.maxFortressDay = this.fortressDay;
-      if (FeatureFlags.ENABLE_DAILY_CAP) {
-        this._dailyFortressDayGained += 1;
-        if (this._dailyFortressDayGained >= DAILY_FORTRESS_CAP_MAX) {
-          this._dailyCapBlocked = true;
-        }
+    // §36.5.1 cap 阻断（必须先检查 _dailyFortressDayGained，避免 dedup 与早期 block 标记错位）
+    if (FeatureFlags.ENABLE_DAILY_CAP && this._dailyFortressDayGained >= DAILY_FORTRESS_CAP_MAX) {
+      // 首次触顶 → 设置 _dailyCapBlocked 并广播一次；后续同日再次调用静默
+      if (!this._dailyCapBlocked) {
+        this._dailyCapBlocked = true;
+        this.broadcast({
+          type: 'fortress_day_changed',
+          timestamp: Date.now(),
+          data: {
+            oldFortressDay,
+            newFortressDay: this.fortressDay, // 未变
+            reason: 'cap_blocked',
+            seasonDay: this.seasonMgr ? this.seasonMgr.seasonDay : 1,
+            dailyFortressDayGained: this._dailyFortressDayGained,
+            dailyCapMax: DAILY_FORTRESS_CAP_MAX,
+            dailyResetAt: this._getNextDailyResetMs(),
+            dailyCapBlocked: true,
+          },
+        });
+        console.log(`[Engine:${(this.room && this.room.roomId) || '?'}] _onRoomSuccess: cap_blocked at ${this._dailyFortressDayGained}/${DAILY_FORTRESS_CAP_MAX}`);
       }
+      // dedup：同日再次调用不再推送，fortressDay 不变
+      return;
     }
 
-    // 广播 fortress_day_changed
+    // 正常晋级
+    this.fortressDay = oldFortressDay + 1;
+    if (this.fortressDay > this.maxFortressDay) this.maxFortressDay = this.fortressDay;
+    if (FeatureFlags.ENABLE_DAILY_CAP) {
+      this._dailyFortressDayGained += 1;
+    }
+
     this.broadcast({
       type: 'fortress_day_changed',
       timestamp: Date.now(),
       data: {
         oldFortressDay,
         newFortressDay: this.fortressDay,
-        reason,
+        reason: 'promoted',
         seasonDay: this.seasonMgr ? this.seasonMgr.seasonDay : 1,
         dailyFortressDayGained: this._dailyFortressDayGained,
         dailyCapMax: DAILY_FORTRESS_CAP_MAX,
@@ -2947,7 +3093,7 @@ class SurvivalGameEngine {
       },
     });
 
-    console.log(`[Engine:${(this.room && this.room.roomId) || '?'}] _onRoomSuccess: ${oldFortressDay}→${this.fortressDay} reason=${reason} dailyGained=${this._dailyFortressDayGained}/${DAILY_FORTRESS_CAP_MAX}`);
+    console.log(`[Engine:${(this.room && this.room.roomId) || '?'}] _onRoomSuccess: ${oldFortressDay}→${this.fortressDay} reason=promoted dailyGained=${this._dailyFortressDayGained}/${DAILY_FORTRESS_CAP_MAX}`);
 
     // §36.12 老用户豁免评估：挺过一夜 → maxFortressDay 可能达到 50 → 触发豁免条件 2
     //   markSeasonAttendance 与 evaluateVeteran 都需要 creatorOpenId；若未注入则 skip
@@ -2993,25 +3139,8 @@ class SurvivalGameEngine {
     } else {
       this.fortressDay = Math.max(1, Math.floor(oldFortressDay * 0.9));
       demotionReason = 'demoted';
-      // 失败降级同时触发 dayKey 重置的补偿路径（§36.5.1 第三条路径）
-      if (FeatureFlags.ENABLE_DAILY_CAP && this._dailyCapBlocked) {
-        this._dailyCapBlocked = false;
-        this._dailyFortressDayGained = 0;
-        this.broadcast({
-          type: 'fortress_day_changed',
-          timestamp: Date.now(),
-          data: {
-            oldFortressDay: this.fortressDay,
-            newFortressDay: this.fortressDay,
-            reason: 'cap_reset',
-            seasonDay: this.seasonMgr ? this.seasonMgr.seasonDay : 1,
-            dailyFortressDayGained: 0,
-            dailyCapMax: DAILY_FORTRESS_CAP_MAX,
-            dailyResetAt: this._getNextDailyResetMs(),
-            dailyCapBlocked: false,
-          },
-        });
-      }
+      // §36.5.1.4 反作弊核心：房间失败（含降级）**不**清零 _dailyFortressDayGained / _dailyCapBlocked
+      //   —— 只有 UTC+8 05:00 dayKey 切换才 reset；否则"已花出去"的 fortressDay 不退回
     }
 
     // 策划案 §36.5 要求:两种失败路径都必须同时推 fortress_day_changed(reason='demoted'|'newbie_protected')
@@ -3087,13 +3216,12 @@ class SurvivalGameEngine {
     if (currentKey > storedKey) {
       // dayKey 翻新 → 重置
       const wasBlocked = this._dailyCapBlocked;
-      const wasGained = this._dailyFortressDayGained;
       this._dailyResetKey = currentKey;
       this._dailyFortressDayGained = 0;
       this._dailyCapBlocked = false;
 
-      // 若前一日 cap_blocked，广播一次 cap_reset（让 UI 刷新徽标）
-      if (wasBlocked || wasGained > 0) {
+      // §36.5.1.2 P52：只对昨日 blocked 的房间推送一次 cap_reset（避免 1000 房间广播洪峰）
+      if (wasBlocked) {
         this.broadcast({
           type: 'fortress_day_changed',
           timestamp: Date.now(),
@@ -3109,9 +3237,12 @@ class SurvivalGameEngine {
           },
         });
       }
-      console.log(`[Engine:${(this.room && this.room.roomId) || '?'}] Daily cap reset: dayKey ${storedKey}→${currentKey}`);
+      console.log(`[Engine:${(this.room && this.room.roomId) || '?'}] Daily cap reset: dayKey ${storedKey}→${currentKey} wasBlocked=${wasBlocked}`);
+    } else if (currentKey < storedKey) {
+      // §36.5.1.2 P58：NTP 反向时钟漂移防御 — log warning，不清零
+      console.warn(`[Engine:${(this.room && this.room.roomId) || '?'}] Daily cap backward clock skew: current=${currentKey} < stored=${storedKey}`);
     }
-    // currentKey <= storedKey → 时钟回拨，不重置（§36.5.1 NTP 后跳时钟防御）
+    // currentKey === storedKey → 同一日，no-op
   }
 
   /**
@@ -3302,6 +3433,20 @@ class SurvivalGameEngine {
 
   // ==================== 内部：工作效果 ====================
 
+  /**
+   * §6.3 P5（方案 A）：能力药丸 / 666 弹幕效率加成合并倍率。
+   * 两条轨道各自使用绝对时间戳判定过期（非 setTimeout，避免 clearTimeout 冲突）。
+   * 返回 pillMult * buzzMult —— 两者同时激活时为乘法（例：1.5 × 1.5 = 2.25×），
+   * 单方激活时另一轨回退 1.0，不互相覆盖。
+   * 兼容：旧字段 efficiency666Bonus/Timer 保留为别名，此函数为计算新唯一入口。
+   */
+  _getEfficiencyBoostMult() {
+    const now     = Date.now();
+    const pillMult = (this._abilityPillExpireAt > now) ? (this._abilityPillBonus || 1.0) : 1.0;
+    const buzzMult = (this._buzz666ExpireAt     > now) ? (this._buzz666Bonus     || 1.0) : 1.0;
+    return pillMult * buzzMult;
+  }
+
   _applyWorkEffect(commandId, playerId) {
     if (this.state !== 'day' && this.state !== 'night') return;
 
@@ -3314,7 +3459,8 @@ class SurvivalGameEngine {
     const playerBonus      = 1.0 + (this._playerEfficiencyBonus[playerId] || 0); // 仙女棒加成
     const globalBoost      = this._playerTempBoost[playerId] || 1.0;             // 能量电池 per-player 加成
     const broadcasterBoost = this.broadcasterEfficiencyMultiplier || 1.0;         // 主播紧急加速
-    const eff666Boost      = this.efficiency666Bonus || 1.0;                      // 666弹幕加成
+    // §6.3 P5（方案 A）：能力药丸 / 666 弹幕两条独立轨道相乘（同时激活 → 1.5 × 1.5 = 2.25×）
+    const eff666Boost      = this._getEfficiencyBoostMult();                      // pillMult * buzzMult
     const auroraBoost      = this._auroraEffMult || 1.0;                          // §24.4 极光 ×1.5（60s）
     // §34.3 B3 ice_ground：矿工移动速度 ×0.8，折算为工作产出 ×0.8（30s）
     // Fix G (组 B Reviewer P1)：策划案原文"移动速度 -20%"，项目无移动速度概念，采用采矿产出 ×0.8 等效。
@@ -3677,12 +3823,38 @@ class SurvivalGameEngine {
 
     console.log(`[SurvivalEngine] Gate upgraded Lv${currentLevel}→Lv${this.gateLevel} [${GATE_TIER_NAMES[this.gateLevel-1]}] (maxHp=${this.gateMaxHp}, +${hpBonus}HP, source=${source}, ore=${Math.round(this.ore)})`);
 
-    // Lv6 启动寒冰冲击波定时器
+    // §10.6.4 Lv5 冰霜光环：开播一次 gate_effect_triggered 通知客户端激活光环（active=true）
+    //   服务器不追踪怪物位置，仅广播激活状态 + 半径；客户端本地按距离做速度减半表现
+    if (currentLevel < 5 && this.gateLevel >= 5) {
+      this._broadcastFrostAuraState(true);
+    }
+
+    // §10.6.5 Lv6 启动寒冰冲击波定时器
     if (this.gateLevel === GATE_MAX_HP_BY_LEVEL.length && !this._frostPulseTimer) {
       this._startFrostPulseTimer();
     }
 
     this._broadcastResourceUpdate();
+  }
+
+  /**
+   * §10.6.4 Lv5 冰霜光环状态广播
+   * 参数 active=true 时广播激活（同时携带 radius）；active=false 主要作降级复位用
+   * 注：服务器不追踪怪物位置，radius 语义由客户端呈现（视觉 + 本地减速计算）
+   */
+  _broadcastFrostAuraState(active) {
+    const gateIdx = Math.max(0, (this.gateLevel || 1) - 1);
+    const radius  = GATE_FROST_RADIUS[gateIdx] || 0;
+    this._broadcast({
+      type: 'gate_effect_triggered',
+      data: {
+        effect: 'frost_aura',
+        active: !!active,
+        radius,
+        slowMult: 0.7,
+        gatePos: { x: GATE_POS.x, y: 0, z: GATE_POS.z },
+      },
+    });
   }
 
   /**
@@ -3747,6 +3919,33 @@ class SurvivalGameEngine {
 
     let waveIndex = 0;
 
+    // §37.2 watchtower 10s 预告：若建有瞭望塔，每个 wave 在实际 spawn 前 10s 广播 monster_wave_incoming
+    //   firstAttackAt ≈ spawnsAt + 3500（怪物走路 3s + _attackCooldown 0.5s，与 §8.4 对齐）
+    const PREVIEW_LEAD_MS = 10000;
+    const FIRST_ATTACK_OFFSET_MS = 3500;
+    const schedulePreview = (spawnDelayMs, wIdx) => {
+      if (!this._buildings.has('watchtower')) return;
+      const previewDelay = spawnDelayMs - PREVIEW_LEAD_MS;
+      if (previewDelay <= 0) return;        // 来不及预告（首波/短间隔），跳过
+      const previewTimer = setTimeout(() => {
+        if (this.state !== 'night') return;
+        const spawnsAt = Date.now() + PREVIEW_LEAD_MS;
+        this.broadcast({
+          type: 'monster_wave_incoming',
+          timestamp: Date.now(),
+          data: {
+            waveIndex:     wIdx,
+            spawnsAt,
+            firstAttackAt: spawnsAt + FIRST_ATTACK_OFFSET_MS,
+          },
+        });
+      }, previewDelay);
+      this._waveTimers.push(previewTimer);
+    };
+
+    // 首波预告
+    schedulePreview(effectiveBeginning, 0);
+
     // 首波延迟
     const firstTimer = setTimeout(() => {
       this._spawnWave(cfg, day, waveIndex++);
@@ -3765,6 +3964,35 @@ class SurvivalGameEngine {
       }, effectiveRefreshMs);
 
       this._waveTimers.push(repeatTimer);
+
+      // 后续波次预告：每次"下一波 spawn 前 10s"广播 monster_wave_incoming。
+      //   对齐：首波触发后 (refreshMs - 10s) 弹第一条预告，之后按 refreshMs 周期。
+      if (this._buildings.has('watchtower') && effectiveRefreshMs > PREVIEW_LEAD_MS) {
+        const alignDelay = effectiveRefreshMs - PREVIEW_LEAD_MS;
+        const emitPreview = () => {
+          if (this.state !== 'night') return false;
+          if (waveIndex >= cfg.maxCount) return false;
+          const spawnsAt = Date.now() + PREVIEW_LEAD_MS;
+          this.broadcast({
+            type: 'monster_wave_incoming',
+            timestamp: Date.now(),
+            data: {
+              waveIndex:     waveIndex,  // 下一个将要生成的波次索引
+              spawnsAt,
+              firstAttackAt: spawnsAt + FIRST_ATTACK_OFFSET_MS,
+            },
+          });
+          return true;
+        };
+        const alignTimer = setTimeout(() => {
+          if (!emitPreview()) return;
+          const previewRepeat = setInterval(() => {
+            if (!emitPreview()) { clearInterval(previewRepeat); return; }
+          }, effectiveRefreshMs);
+          this._waveTimers.push(previewRepeat);
+        }, alignDelay);
+        this._waveTimers.push(alignTimer);
+      }
     }, effectiveBeginning);
 
     this._waveTimers.push(firstTimer);
@@ -5104,10 +5332,10 @@ class SurvivalGameEngine {
     this._broadcast({ type: 'build_completed', data: { buildId } });
     console.log(`[Building] completed: ${buildId} → _buildings=[${[...this._buildings].join(',')}]`);
 
-    // TODO §37.2 watchtower：下次 wave spawn 前 10s 广播 monster_wave_incoming
-    // （建议挂载点：_initActiveMonsters(day) 或 wave spawn 处检查 _buildings.has('watchtower') 并安排 10s 预告）
+    // §37.2 watchtower：已在 _scheduleNightWaves 统一挂钩（每 wave 前 10s 广播 monster_wave_incoming）。
+    //   夜晚建成时当晚已进入的调度不回溯重排；从下一夜起所有 wave 自动获得预告。
     if (buildId === 'watchtower') {
-      console.log(`[Building] watchtower built — TODO: wave spawn 10s early warning hook not yet wired`);
+      console.log(`[Building] watchtower built — monster_wave_incoming preview will fire from next night onward (current night schedule not retro-active).`);
     }
   }
 
@@ -6457,6 +6685,29 @@ class SurvivalGameEngine {
   // ==================== 内部：工具 ====================
 
   /**
+   * §39.3 统一贡献入账入口（对外 / 新代码使用，内部转 `_trackContribution`）
+   *
+   * 原子同步更新三个字段（策划案 §39.3 不变式）：
+   *   contributions[p]     += amount  （本局，A 类购买消费）
+   *   _lifetimeContrib[p]  += amount  （终身水位，不消费，用于等级/皮肤/老玩家豁免守门）
+   *   _contribBalance[p]   += amount  （可消费余额，B 类购买消费）
+   *
+   * `_lifetimeContrib` 与 `_contribBalance` 同帧累加（由 _trackContribution 内部统一处理，
+   * 含 §30.8 新玩家追赶 ×3 与 §24.4 double_contrib ×2 倍率）。
+   *
+   * 此方法是**新代码约定入口**，便于：
+   *   - 审计时搜 `_addContribution` 即可枚举所有"加贡献"路径
+   *   - 未来若需要拆分 barrage/gift/combat 三路分别处理，这里是单点改动位置
+   *
+   * @param {string} playerId
+   * @param {number} amount — 基础数额（源于礼物 contribution / cmd 1 / 攻击 score 等）
+   * @param {string} [source] — 'barrage' | 'gift' | 'combat' | undefined
+   */
+  _addContribution(playerId, amount, source) {
+    this._trackContribution(playerId, amount, source);
+  }
+
+  /**
    * 追踪贡献值（本局排行榜用） + 同步累加 `_lifetimeContrib`（等级用） + 触发 `_checkLevelUp`。
    * @param playerId
    * @param amount
@@ -7371,14 +7622,29 @@ class SurvivalGameEngine {
   }
 
   /**
-   * 取消所有在外探险（reset / 失败降级 / 攻防战打断时调用），无资源回馈
+   * 取消所有在外探险（reset / 失败降级 / 攻防战打断时调用），无资源回馈。
+   *   为了前端 ExpeditionMarkerUI 能正确关闭，对每条 in-flight expedition 广播一次
+   *   expedition_returned { outcome.type='empty' }；reset / manual 也一视同仁。
    */
   _cancelAllExpeditions(reason) {
     const count = this._expeditions.size;
-    for (const exp of this._expeditions.values()) {
+    for (const [expId, exp] of [...this._expeditions.entries()]) {
       if (exp.outboundTimer) clearTimeout(exp.outboundTimer);
       if (exp.eventTimer)    clearTimeout(exp.eventTimer);
       if (exp.returnTimer)   clearTimeout(exp.returnTimer);
+      // 仅当 reason 属于"需通知客户端收尾"一类时才广播；reset 场景下客户端已接收 room reset 消息不需要这条
+      if (reason !== 'reset') {
+        try {
+          this._broadcast({
+            type: 'expedition_returned',
+            data: {
+              playerId:    exp.playerId,
+              expeditionId: expId,
+              outcome: { type: 'empty', resources: null, contributions: 0, died: false },
+            },
+          });
+        } catch (e) { /* ignore */ }
+      }
     }
     this._expeditions.clear();
     if (count > 0) {
@@ -7929,6 +8195,79 @@ class SurvivalGameEngine {
     }
 
     console.log(`[Shop] equip: ${this._getPlayerName(playerId)} slot=${slot} itemId=${itemId}`);
+  }
+
+  /**
+   * handleShopInventory: 查询当前玩家商店库存 + 装备 + 余额（C→S shop_inventory）
+   *
+   * 对应 S→C shop_inventory_data：
+   *   {
+   *     playerId,
+   *     owned: string[]                       // _playerShopInventory[playerId]
+   *     equipped: { title?, frame?, entrance?, barrage? }
+   *     contribBalance: number                // _contribBalance[playerId]
+   *     lifetimeContrib: number               // _lifetimeContrib[playerId]
+   *   }
+   *
+   * 主要用于：客户端 ShopUI 背包 Tab 主动刷新（player_joined 时会自动推一次，
+   * 此 handler 用于"用户点击刷新"或 ShopUI 再次打开时的显式查询）。
+   */
+  handleShopInventory(playerId) {
+    if (!playerId) return;
+    const owned    = this._playerShopInventory[playerId] || [];
+    const equipped = this._playerShopEquipped[playerId]  || {};
+    const balance  = this._contribBalance[playerId]      || 0;
+    const lifetime = this._lifetimeContrib[playerId]     || 0;
+    this._broadcast({
+      type: 'shop_inventory_data',
+      data: {
+        playerId,
+        owned: Array.isArray(owned) ? owned.slice() : [],
+        equipped: {
+          title:    equipped.title    || '',
+          frame:    equipped.frame    || '',
+          entrance: equipped.entrance || '',
+          barrage:  equipped.barrage  || '',
+        },
+        contribBalance:  Math.round(balance),
+        lifetimeContrib: Math.round(lifetime),
+      },
+    });
+  }
+
+  /**
+   * §39.8 加载赛季限定 SKU 配置（当前 MVP 未上架 B9/B10；若需启用，调此方法注入 _seasonShopPool）
+   *
+   * 文件路径约定：`Server/src/season_shop/{seasonId}.json`
+   * 文件格式：`{ season: 'season_1', items: [ { id, name, slot, price, lifetimeContribMin }, ... ] }`
+   *
+   * 调用时机由 SurvivalRoom / SeasonManager 决定（MVP 未挂载；留接口便于后续主版上线）。
+   *
+   * @param {string} seasonId 例如 'season_1'
+   * @returns {number} 加载的 SKU 数量（失败返 0）
+   */
+  loadSeason(seasonId) {
+    if (!seasonId) return 0;
+    try {
+      const path = require('path');
+      const fs   = require('fs');
+      const file = path.join(__dirname, 'season_shop', `${seasonId}.json`);
+      if (!fs.existsSync(file)) {
+        console.warn(`[Shop] loadSeason: file not found ${file}`);
+        this._seasonShopPool = [];
+        return 0;
+      }
+      const raw = fs.readFileSync(file, 'utf8');
+      const obj = JSON.parse(raw);
+      const items = Array.isArray(obj.items) ? obj.items : [];
+      this._seasonShopPool = items;
+      console.log(`[Shop] loadSeason: ${seasonId} loaded ${items.length} SKUs`);
+      return items.length;
+    } catch (e) {
+      console.warn(`[Shop] loadSeason failed: ${e.message}`);
+      this._seasonShopPool = [];
+      return 0;
+    }
   }
 
   /**

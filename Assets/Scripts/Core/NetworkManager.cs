@@ -79,8 +79,18 @@ namespace DrscfZ.Core
         /// <summary>是否已通过抖音token初始化获取到roomId</summary>
         public bool IsDouyinInitialized { get; private set; }
 
-        /// <summary>GM模式：无token时直接连接服务器，跳过抖音init</summary>
-        public bool IsGMMode { get; private set; }
+        /// <summary>显式 GM 模式标识：命令行带 -gm / -gm=1 / --gm 时为 true（强显式，覆盖 token 判定）</summary>
+        private bool _explicitGMMode;
+
+        /// <summary>GM 模式判定（分层）：
+        ///   1) _explicitGMMode == true  → GM 模式（强显式）
+        ///   2) 否则若 douyinToken 为空   → GM 模式（兜底，本地开发/无伴侣启动）
+        ///   3) 否则                    → 真实抖音直播模式
+        /// join_room / UI / SurvivalGameManager 都以此属性为准。</summary>
+        public bool IsGMMode => _explicitGMMode || string.IsNullOrEmpty(douyinToken);
+
+        /// <summary>供外部只读访问是否显式 GM（便于调试日志/服务端区分"显式 GM" vs "兜底 GM"）</summary>
+        public bool IsExplicitGMMode => _explicitGMMode;
 
         /// <summary>服务器断线标志（供UI层检查）</summary>
         public bool IsServerTimeout { get; private set; }
@@ -91,6 +101,10 @@ namespace DrscfZ.Core
         public event Action<string> OnConnectFailed;
         /// <summary>心跳超时事件（服务器断线）</summary>
         public event Action OnHeartbeatTimeout;
+        /// <summary>连接错误（抖音 init 失败 / WebSocket 建立失败等），UI 层据此弹重连对话框</summary>
+        public event Action<string> OnConnectError;
+        /// <summary>需要重连（Token 初始化失败 / 多次断线），UI 层据此弹重连确认</summary>
+        public event Action<string> OnReconnectRequired;
 
         private ClientWebSocket _ws;
         private CancellationTokenSource _cts;
@@ -123,6 +137,11 @@ namespace DrscfZ.Core
             // 解析命令行参数中的抖音token
             // 直播伴侣启动exe时传入: -token=xxx
             ParseCommandLineToken();
+
+            // 启动模式汇总日志（审计要求）：显式 GM / 是否有 token / 最终生效模式
+            bool hasToken = !string.IsNullOrEmpty(douyinToken);
+            Debug.Log($"[DrscfZ-Net] Startup flags: explicitGM={_explicitGMMode}, hasToken={hasToken}, finalMode={(IsGMMode ? "GM" : "DOUYIN")}");
+            Debug.Log($"[DrscfZ-Net] IsGMMode={IsGMMode}, ExplicitGM={_explicitGMMode}");
         }
 
         private void Update()
@@ -193,18 +212,18 @@ namespace DrscfZ.Core
             _reconnectCount = 0;
             ConnectError = null;
 
-            if (string.IsNullOrEmpty(douyinToken))
+            // IsGMMode 已改为派生属性，这里不再赋值；_explicitGMMode / douyinToken 决定模式。
+            if (IsGMMode)
             {
-                // 无token → GM模式，直接连接服务器（跳过抖音init）
-                IsGMMode = true;
+                // GM 模式（显式 -gm 或兜底无 token）：跳过抖音 init，直接连接服务器
                 if (string.IsNullOrEmpty(roomId)) roomId = "default";
-                Debug.Log($"[Net] GM模式：无抖音token，直接连接服务器 roomId={roomId}");
+                string gmReason = _explicitGMMode ? "显式 -gm" : "无抖音token（兜底）";
+                Debug.Log($"[Net] GM模式：{gmReason}，直接连接服务器 roomId={roomId}");
                 await ConnectAsync();
                 return;
             }
 
-            // 正常模式：用token调init接口获取roomId
-            IsGMMode = false;
+            // 真实抖音模式：用token调init接口获取roomId
             if (!IsDouyinInitialized)
             {
                 Debug.Log($"[Net] Douyin token detected, calling init API...");
@@ -213,7 +232,14 @@ namespace DrscfZ.Core
                 {
                     ConnectError = "直播间初始化失败，请重新从直播伴侣启动！";
                     Debug.LogError($"[Net] {ConnectError}");
-                    _actionQueue.Enqueue(() => OnConnectFailed?.Invoke(ConnectError));
+                    // 三条通道同时触发：保留原 OnConnectFailed 向下兼容；
+                    // OnConnectError 给通用错误 UI；OnReconnectRequired 让 UI 弹重连对话框
+                    _actionQueue.Enqueue(() =>
+                    {
+                        OnConnectFailed?.Invoke(ConnectError);
+                        OnConnectError?.Invoke(ConnectError);
+                        OnReconnectRequired?.Invoke(ConnectError);
+                    });
                     return;
                 }
             }
@@ -275,11 +301,15 @@ namespace DrscfZ.Core
                 _heartbeatTimeoutFired = false;
                 IsServerTimeout = false;
 
-                // 连接后立即发送 join_room（告知服务器要加入哪个房间）
-                var joinMsg = $"{{\"type\":\"join_room\",\"data\":{{\"roomId\":\"{CurrentRoomId}\"}},\"timestamp\":{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}";
+                // 连接后立即发送 join_room（告知服务器要加入哪个房间 + 当前模式）
+                // 服务端据 isGMMode 字段区分 GM 模式（显式或兜底）与真实抖音模式，用于权限/路由分流
+                // 🆕 GM 模式默认 playerId="gm_host" / playerName="GM主播"；真实抖音模式留空由服务端从 roomInfo 补全
+                string playerId = IsGMMode ? "gm_host" : "";
+                string playerName = IsGMMode ? "GM主播" : "";
+                string joinMsg = $"{{\"type\":\"join_room\",\"data\":{{\"roomId\":\"{EscapeJsonString(CurrentRoomId)}\",\"isGMMode\":{(IsGMMode ? "true" : "false")},\"explicitGMMode\":{(_explicitGMMode ? "true" : "false")},\"playerId\":\"{EscapeJsonString(playerId)}\",\"playerName\":\"{EscapeJsonString(playerName)}\"}},\"timestamp\":{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}";
                 var joinBytes = Encoding.UTF8.GetBytes(joinMsg);
                 await _ws.SendAsync(new ArraySegment<byte>(joinBytes), WebSocketMessageType.Text, true, _cts.Token);
-                Debug.Log($"[Net] Joined room: {CurrentRoomId}");
+                Debug.Log($"[Net] Joined room: {CurrentRoomId}, isGMMode={IsGMMode}, explicitGM={_explicitGMMode}");
 
                 _actionQueue.Enqueue(() => OnConnected?.Invoke());
                 _ = ReceiveLoop();
@@ -289,6 +319,10 @@ namespace DrscfZ.Core
             {
                 Debug.LogWarning($"[Net] Connect failed: {e.Message}");
                 IsConnected = false;
+                string err = $"WebSocket 连接失败: {e.Message}";
+                ConnectError = err;
+                // 向 UI 层派发可弹窗的错误（重试仍交给 TryReconnect 处理）
+                _actionQueue.Enqueue(() => OnConnectError?.Invoke(err));
                 TryReconnect();
             }
         }
@@ -410,7 +444,10 @@ namespace DrscfZ.Core
             _reconnectCount++;
             if (_reconnectCount > maxReconnectAttempts)
             {
-                Debug.LogError($"[Net] Max reconnect attempts reached.");
+                string msg = $"达到最大重连次数 ({maxReconnectAttempts})，需手动重连";
+                Debug.LogError($"[Net] {msg}");
+                // UI 层据此弹"重新连接"对话框（具体面板交由其他 Agent 实现）
+                _actionQueue.Enqueue(() => OnReconnectRequired?.Invoke(msg));
                 return;
             }
             Debug.LogWarning($"[Net] Reconnecting in {reconnectDelay}s... ({_reconnectCount}/{maxReconnectAttempts})");
@@ -436,9 +473,11 @@ namespace DrscfZ.Core
         // - 无token时（本地开发）降级到default房间，服务器会转发数据到default房间
 
         /// <summary>
-        /// 解析命令行参数中的 -token=xxx
-        /// 直播伴侣启动exe时会以命令行参数传入token
-        /// 支持两种格式: -token=xxx 或 -token xxx
+        /// 解析命令行参数：
+        ///   - `-token=xxx` / `-token xxx`：抖音直播伴侣启动时传入的 token
+        ///   - `-gm` / `-gm=1` / `--gm`：显式 GM 模式（覆盖 token 判定）
+        /// 直播伴侣启动 exe 时会以命令行参数传入 token；开发本地调试用 -gm 强制 GM。
+        /// 不使用 `return` 提前退出，因为 token 和 gm 可能同时出现（token 测试 + GM 强覆盖）。
         /// </summary>
         private void ParseCommandLineToken()
         {
@@ -447,25 +486,62 @@ namespace DrscfZ.Core
             {
                 string arg = args[i];
 
-                // 支持格式: -token=xxx 或 -token xxx
+                // --- Token 解析 ---
                 if (arg.StartsWith("-token=", StringComparison.OrdinalIgnoreCase))
                 {
                     douyinToken = arg.Substring(7);
-                    Debug.Log($"[Net] Douyin token from command line: {douyinToken.Substring(0, Math.Min(8, douyinToken.Length))}...");
-                    return;
+                    Debug.Log($"[Net] Douyin token from command line: {SafeTokenPrefix(douyinToken)}...");
+                    continue;
                 }
                 if (arg.Equals("-token", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
                 {
                     douyinToken = args[i + 1];
-                    Debug.Log($"[Net] Douyin token from command line: {douyinToken.Substring(0, Math.Min(8, douyinToken.Length))}...");
-                    return;
+                    Debug.Log($"[Net] Douyin token from command line: {SafeTokenPrefix(douyinToken)}...");
+                    i++; // 跳过已消费的值
+                    continue;
+                }
+
+                // --- 显式 GM 模式解析 ---
+                // 支持: -gm / -gm=1 / -gm=true / --gm / --gm=1
+                // -gm=0 / -gm=false 时视为显式关闭 GM（便于开发调试）
+                if (arg.Equals("-gm", StringComparison.OrdinalIgnoreCase)
+                    || arg.Equals("--gm", StringComparison.OrdinalIgnoreCase))
+                {
+                    _explicitGMMode = true;
+                    Debug.Log("[Net] Explicit GM mode enabled via -gm");
+                    continue;
+                }
+                if (arg.StartsWith("-gm=", StringComparison.OrdinalIgnoreCase)
+                    || arg.StartsWith("--gm=", StringComparison.OrdinalIgnoreCase))
+                {
+                    int eq = arg.IndexOf('=');
+                    string val = eq >= 0 ? arg.Substring(eq + 1).Trim().ToLowerInvariant() : "";
+                    bool on = val == "1" || val == "true" || val == "yes" || val == "on";
+                    _explicitGMMode = on;
+                    Debug.Log($"[Net] Explicit GM mode set via {arg}: {_explicitGMMode}");
+                    continue;
                 }
             }
 
-            if (string.IsNullOrEmpty(douyinToken))
+            if (string.IsNullOrEmpty(douyinToken) && !_explicitGMMode)
             {
-                Debug.Log("[Net] No Douyin token in command line args, will use default room");
+                Debug.Log("[Net] No Douyin token / no -gm flag, will fall back to GM mode with default room");
             }
+        }
+
+        /// <summary>日志用截断 token，避免把完整 token 写进日志</summary>
+        private static string SafeTokenPrefix(string token)
+        {
+            if (string.IsNullOrEmpty(token)) return "";
+            return token.Substring(0, Math.Min(8, token.Length));
+        }
+
+        /// <summary>最小化 JSON 字符串转义（只处理最常见的 \ 和 "），roomId/playerName 够用。
+        /// 服务端 JSON.parse 严格遵循 RFC 8259，控制字符罕见于我们的字段，故不做完整表。</summary>
+        private static string EscapeJsonString(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            return s.Replace("\\", "\\\\").Replace("\"", "\\\"");
         }
 
         /// <summary>

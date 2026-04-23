@@ -107,11 +107,21 @@ class RoomManager {
    * WebSocket客户端连接 → 加入房间
    * @param {WebSocket} ws - WebSocket连接
    * @param {string} roomId - 房间ID
+   * @param {object} [joinData] - join_room 数据（isGMMode/playerId/playerName 等）；URL 直连时为 null
    */
-  handleClientConnect(ws, roomId) {
+  handleClientConnect(ws, roomId, joinData = null) {
     const room = this.getOrCreateRoom(roomId);
     ws._roomId = roomId; // 在ws对象上标记roomId，方便后续查找
-    room.addClient(ws);
+    // 给 ws 一个短 id 用于日志（非安全标识，仅便于审计回溯）
+    if (!ws._wsId) {
+      ws._wsId = 'ws_' + Math.random().toString(36).slice(2, 8);
+    }
+    if (joinData && typeof joinData === 'object') {
+      room.handleJoinRoom(ws, joinData);
+    } else {
+      // 无 joinData（URL 直连 / 兼容路径）：不主张模式，走 addClient 默认 first-client 兜底
+      room.addClient(ws);
+    }
     return room;
   }
 

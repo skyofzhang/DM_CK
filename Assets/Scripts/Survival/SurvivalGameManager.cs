@@ -68,10 +68,16 @@ namespace DrscfZ.Survival
         public event Action<LiveRankingData>     OnLiveRankingReceived;     // 实时贡献榜（游戏中防抖推送）
         public event Action<StreamerRankingData> OnStreamerRankingReceived; // 主播排行榜（服务器推送）
 
-        // §16 / §4.2 最近一次 phase_changed 的 variant 缓存（"normal" | "recovery"）
+        // §16 / §4.2 最近一次 phase_changed 的 variant 缓存（"normal" | "recovery" | "peace_night*"）
         // HUD 推荐规则 R10-8 / PeaceNightOverlay / BroadcasterDecisionHUD 查询此字段过滤恢复期白天
         private string _lastPhaseVariant = "normal";
         public string LastPhaseVariant => _lastPhaseVariant;
+        /// <summary>§4.2 当前 phase variant 别名（等同 LastPhaseVariant），UI 层推荐查询此属性。</summary>
+        public string CurrentPhaseVariant => _lastPhaseVariant;
+        /// <summary>§4.2 variant 变化事件：仅当 variant 字符串真正改变时触发一次；
+        /// DayNightCycleManager / PeaceNightOverlay / BroadcasterDecisionHUD 等可直接订阅，
+        /// 免去自己比较 OnPhaseChanged 去重。</summary>
+        public event Action<string> OnPhaseVariantChanged;
 
         // 助威模式 §33
         public event Action<SupporterJoinedData>   OnSupporterJoined;
@@ -101,12 +107,16 @@ namespace DrscfZ.Survival
         public event Action<BuildVoteUpdateData>          OnBuildVoteUpdate;
         public event Action<BuildVoteEndedData>           OnBuildVoteEnded;
         public event Action<BuildStartedData>             OnBuildStarted;
+        public event Action<BuildProgressData>            OnBuildProgress;  // 🆕 Batch I 补齐
         public event Action<BuildCompletedData>           OnBuildCompleted;
         public event Action<BuildDemolishedData>          OnBuildDemolished;
         public event Action<BuildProposeFailedData>       OnBuildProposeFailed;
         public event Action<BuildCancelledData>           OnBuildCancelled;
         public event Action<BuildingDemolishedBatchData>  OnBuildingDemolishedBatch;
         public event Action<MonsterWaveIncomingData>      OnMonsterWaveIncoming;
+
+        // §34 Batch D Agent 协议补齐：单人贡献更新（Batch I 补齐事件声明）
+        public event Action<ContributionUpdateData>       OnContributionUpdate;
 
         // §39 商店系统
         public event Action<ShopListData>                   OnShopListData;
@@ -151,6 +161,10 @@ namespace DrscfZ.Survival
         // §24.5 主播决策中心 HUD（🆕 v1.27）：resource_update 事件转发，供 HUD 触发推荐重算
         public event Action<ResourceUpdateData> OnResourceUpdate;
 
+        // §10 城门等级特性触发事件（🆕 v1.22）：CityGateSystem / VFX 层订阅 → 播放光环 / 冲击波视觉。
+        // 本事件仅做信号转发；具体视觉由订阅者（CityGateSystem / MonsterWaveSpawner）按 effect 字段分流。
+        public event Action<GateEffectTriggeredData> OnGateEffectTriggered;
+
         // §34 Layer 3 组 C 体验引擎（🆕 v1.27）：GloryMoment / CoopMilestone / GiftImpact
         public event Action<GloryMomentData>   OnGloryMoment;
         public event Action<CoopMilestoneData> OnCoopMilestone;
@@ -184,6 +198,14 @@ namespace DrscfZ.Survival
         // 🆕 Fix C (组 B Reviewer P0) §34B B3：RandomEvent 事件总线
         //   订阅者：WorkerManager（morale_boost 矿工气泡）/ 其他 UI（aurora_flash / airdrop 等）。
         public event Action<RandomEventData> OnRandomEvent;
+
+        // ----- 协议骨架补齐 Batch A（🆕 v1.27+） -----
+        // 断线重连房间快照 / §36.12 功能解锁单事件 / §24.4 轮盘效果被阻止 / §35 P2 反击状态
+        // 各订阅者：UI 层读取后按自身业务决定如何处理（本管理器不实现具体业务逻辑）。
+        public event Action<RoomStateData>                 OnRoomState;
+        public event Action<FeatureUnlockedData>           OnFeatureUnlocked;
+        public event Action<RouletteEffectPreventedData>   OnRouletteEffectPrevented;
+        public event Action<TribeWarRetaliateData>         OnTribeWarRetaliate;
 
         /// <summary>§36.12 seasonDay 从 N→N+1 递增的那一秒新解锁的功能 id 列表（由 world_clock_tick 触发）。
         /// 参数是该 tick 携带的 newlyUnlockedFeatures 字段内容，UI 层据此逐条播放解锁横幅。</summary>
@@ -315,7 +337,11 @@ namespace DrscfZ.Survival
                 case "phase_changed":
                     var pc = JsonUtility.FromJson<PhaseChangedData>(dataJson);
                     // 🆕 §4.2 缓存 variant（旧消息字段缺失时 JsonUtility 会保留默认 "normal"；空字符串兜底）
-                    _lastPhaseVariant = string.IsNullOrEmpty(pc.variant) ? "normal" : pc.variant;
+                    string newVariant = string.IsNullOrEmpty(pc.variant) ? "normal" : pc.variant;
+                    bool variantChanged = newVariant != _lastPhaseVariant;
+                    _lastPhaseVariant = newVariant;
+                    if (variantChanged)
+                        OnPhaseVariantChanged?.Invoke(newVariant);
 
                     // 🆕 §16 永续模式：Settlement 态收到 variant=recovery → 回 Running
                     //   服务端 8s 结算 UI 自动关闭后推送 phase_changed{variant:recovery}（§23.3 T=11s）
@@ -609,6 +635,10 @@ namespace DrscfZ.Survival
                     var bst = JsonUtility.FromJson<BuildStartedData>(dataJson);
                     if (bst != null) HandleBuildStarted(bst);
                     break;
+                case "build_progress":
+                    var bpr = JsonUtility.FromJson<BuildProgressData>(dataJson);
+                    if (bpr != null) HandleBuildProgress(bpr);
+                    break;
                 case "build_completed":
                     var bcp = JsonUtility.FromJson<BuildCompletedData>(dataJson);
                     if (bcp != null) HandleBuildCompleted(bcp);
@@ -828,6 +858,61 @@ namespace DrscfZ.Survival
                     var fwm = JsonUtility.FromJson<FairyWandMaxedData>(dataJson);
                     if (fwm != null) OnFairyWandMaxed?.Invoke(fwm);
                     break;
+
+                // §34 Batch D：单人贡献增量（Batch I 补齐透传）
+                case "contribution_update":
+                    var cu = JsonUtility.FromJson<ContributionUpdateData>(dataJson);
+                    if (cu != null)
+                    {
+                        OnContributionUpdate?.Invoke(cu);
+                    }
+                    break;
+
+                // ----- 协议骨架补齐 Batch A（🆕 v1.27+） -----
+                // 以下 case 负责消息→事件透传 + 最小用户可见反馈（Debug.Log + 弹幕栏提示），
+                // 具体业务（面板刷新 / 徽标等）由 UI 订阅者按自身逻辑实现。
+                case "room_state":
+                    var rst = JsonUtility.FromJson<RoomStateData>(dataJson);
+                    if (rst != null)
+                    {
+                        Debug.Log($"[SGM] room_state 收到断线重连快照 (dailyGained={rst.dailyFortressDayGained}/{rst.dailyCapMax})");
+                        OnRoomState?.Invoke(rst);
+                    }
+                    break;
+                case "feature_unlocked":
+                    var fu = JsonUtility.FromJson<FeatureUnlockedData>(dataJson);
+                    if (fu != null)
+                    {
+                        Debug.Log($"[SGM] feature_unlocked: {fu.featureId} @ seasonDay={fu.unlockedAt}");
+                        string msg = string.IsNullOrEmpty(fu.message) ? $"新功能解锁：{fu.featureId}" : fu.message;
+                        OnPlayerActivityMessage?.Invoke(msg);
+                        OnFeatureUnlocked?.Invoke(fu);
+                    }
+                    break;
+                case "broadcaster_roulette_effect_prevented":
+                    var rep = JsonUtility.FromJson<RouletteEffectPreventedData>(dataJson);
+                    if (rep != null)
+                    {
+                        Debug.Log($"[SGM] roulette_effect_prevented: {rep.cardId} reason={rep.preventReason}");
+                        string zh = rep.preventReason switch
+                        {
+                            "duplicate"               => "同类效果已生效",
+                            "conflict_with_other_buff" => "与其他 Buff 冲突",
+                            "game_not_running"        => "当前不在游戏中",
+                            _                         => "效果被阻止"
+                        };
+                        OnPlayerActivityMessage?.Invoke($"【轮盘】{rep.cardId} · {zh}");
+                        OnRouletteEffectPrevented?.Invoke(rep);
+                    }
+                    break;
+                case "tribe_war_retaliate":
+                    var twR = JsonUtility.FromJson<TribeWarRetaliateData>(dataJson);
+                    if (twR != null)
+                    {
+                        Debug.Log($"[SGM] tribe_war_retaliate target={twR.targetRoomId} dmgMul={twR.damageMultiplier}");
+                        OnTribeWarRetaliate?.Invoke(twR);
+                    }
+                    break;
             }
         }
 
@@ -942,7 +1027,10 @@ namespace DrscfZ.Survival
                     {
                         // 🆕 §16 / §4.2：从 survival_game_state 同步 variant，供 HUD 差异化 UI 识别恢复期
                         //   dataVariant 在上方已从 data.variant 规范化，此处复用
+                        bool svVariantChanged = dataVariant != _lastPhaseVariant;
                         _lastPhaseVariant = dataVariant;
+                        if (svVariantChanged)
+                            OnPhaseVariantChanged?.Invoke(dataVariant);
                         dayNightManager?.HandlePhaseChanged(new PhaseChangedData
                         {
                             phase = data.state,
@@ -1554,12 +1642,15 @@ namespace DrscfZ.Survival
 
         private void HandleNightCleared(string type, string dataJson)
         {
-            // 夜晚提前结束（Boss被击败），服务器会随后发phase_changed切换到白天
+            // 🆕 §2 永续无胜利：Boss被击败只是本夜阶段结束，非胜利；使用中性音效
+            // 服务器会随后发phase_changed切换到白天
             UI.AnnouncementUI.Instance?.ShowAnnouncement(
                 "夜晚已清扫!", "极地守护者们干得漂亮！",
                 new Color(0.4f, 0.9f, 1f), 3f);
             SurvivalCameraController.OnNightCleared();
-            Systems.AudioManager.Instance?.PlaySFX("victory");
+            // 改用 sfx_day_start（阶段结束切白天的中性提示音，已在 AudioConstants）
+            // 若需单独音效可后续替换为 sfx_night_cleared
+            Systems.AudioManager.Instance?.PlaySFX(AudioConstants.SFX_DAY_START);
             Debug.Log("[SurvivalGM] 夜晚提前结束！BOSS已被击败。");
         }
 
@@ -1726,6 +1817,9 @@ namespace DrscfZ.Survival
         {
             var d = JsonUtility.FromJson<GateEffectTriggeredData>(dataJson);
             if (d == null || string.IsNullOrEmpty(d.effect)) return;
+
+            // §10.7 对外广播事件：CityGateSystem / VFX 层订阅，按 effect 分流播视觉/音效
+            OnGateEffectTriggered?.Invoke(d);
 
             switch (d.effect)
             {
@@ -2105,6 +2199,12 @@ namespace DrscfZ.Survival
             UI.HorizontalMarqueeUI.Instance?.AddMessage("建造", null, $"{name} 开工");
             OnPlayerActivityMessage?.Invoke($"{name} 开工");
             Debug.Log($"[SGM] build_started: {data.buildId} completesAt={data.completesAt}");
+        }
+
+        /// <summary>§37 建造进度心跳：仅透传事件，UI（BuildingStatusPanelUI）自己订阅刷新百分比。</summary>
+        private void HandleBuildProgress(BuildProgressData data)
+        {
+            OnBuildProgress?.Invoke(data);
         }
 
         private void HandleBuildCompleted(BuildCompletedData data)

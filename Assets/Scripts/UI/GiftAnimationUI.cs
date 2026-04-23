@@ -1,4 +1,4 @@
-﻿using System.Collections;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
@@ -392,6 +392,12 @@ namespace DrscfZ.UI
                 txtRT.offsetMin = Vector2.zero;
                 txtRT.offsetMax = Vector2.zero;
                 var txt = txtGo.AddComponent<TextMeshProUGUI>();
+                // AUTO-INJECT: 统一 Alibaba 字体
+                if (txt.font == null) {
+                    var __f = Resources.Load<TMPro.TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF");
+                    if (__f == null) __f = Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
+                    if (__f != null) txt.font = __f;
+                }
                 txt.text = "";  // 隐藏，等待真实视频素材
                 txt.fontSize = 36;
                 txt.alignment = TextAlignmentOptions.Center;

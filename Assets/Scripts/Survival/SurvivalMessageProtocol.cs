@@ -178,5 +178,12 @@ namespace DrscfZ.Survival
         // B1 StatusLineBanner / B5 OreRepairFloatingText / B8 fairy_wand 视觉系统 / B9 PersonalContribUI
         public const string WorkCommandResponse = "work_command_response";  // S→C：B9 work_command 单播响应（playerStats）
         public const string FairyWandMaxed      = "fairy_wand_maxed";        // S→C：B8 仙女棒满级（+100% fairyWandBonus）
+
+        // ----- 协议骨架补齐 Batch A（🆕 v1.27+） -----
+        // 各模块统一错误/解锁/重连快照消息，具体业务处理由各自 Handler 实现。
+        public const string RoomState                          = "room_state";                             // S→C：断线重连房间全量状态快照（§36/§37/§38/§35/§24.4）
+        public const string FeatureUnlocked                    = "feature_unlocked";                       // S→C：§36.12 功能解锁单条事件（与 world_clock_tick.newlyUnlockedFeatures 互补）
+        public const string TribeWarRetaliate                  = "tribe_war_retaliate";                    // C→S（反击请求）/ S→C（反击状态推送）：§35 P2 反击通道
+        public const string BroadcasterRouletteEffectPrevented = "broadcaster_roulette_effect_prevented";  // S→C：§24.4 轮盘效果被阻止（unicast 发起方）
     }
 }

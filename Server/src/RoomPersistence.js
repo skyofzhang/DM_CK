@@ -74,6 +74,11 @@ class RoomPersistence {
       _warReports: engine._warReports || [],
       // §38.3 探险符文 24h 滑动窗口（跨重启永续）
       _runeChargeLog: engine._runeChargeLog || [],
+
+      // §37 建造系统：已建成建筑集合（跨重启永续；未完成骨架不持久化，重启视为取消，与 §37.4 规范对齐）
+      _buildings: (engine._buildings && typeof engine._buildings[Symbol.iterator] === 'function')
+        ? [...engine._buildings]
+        : [],
     };
 
     try {

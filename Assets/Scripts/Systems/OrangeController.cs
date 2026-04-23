@@ -1,4 +1,5 @@
-﻿using System;
+﻿// DEPRECATED 2026-04-23: 旧角力游戏遗留，待清理。无 Survival 引用。
+using System;
 using UnityEngine;
 
 namespace DrscfZ.Systems

@@ -63,3 +63,7 @@ extract_webp_frames.mjs
 # Large binary assets (videos) - track with description only
 # Assets/Art/VIPEntry/*.webm  # Kept: needed for VIP entry system
 # Assets/Resources/GiftAnimations/*.webm  # Kept: needed for gift animations
+
+# Claude agent scratch
+.claude/worktrees/
+.claude/scripts/

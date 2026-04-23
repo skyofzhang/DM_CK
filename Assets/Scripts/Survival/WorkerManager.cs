@@ -745,6 +745,9 @@ namespace DrscfZ.Survival
             // 取消当前正在执行的工作/移动协程，避免探险期间仍在移动
             worker.ResetWorker();
 
+            // Batch I 补齐：先进入 Expedition 状态（停协程 + 头顶"探"气泡），再 SetActive 隐身
+            worker.EnterExpedition();
+
             // MVP 简化：直接隐藏 GameObject；TODO 未来使用 WorkerVisual.FadeOut(0.3f) 做 Alpha 渐变
             worker.gameObject.SetActive(false);
 
@@ -778,6 +781,9 @@ namespace DrscfZ.Survival
             // 恢复显示（若 HandleExpeditionStarted 曾 SetActive(false)）
             if (!worker.gameObject.activeSelf)
                 worker.gameObject.SetActive(true);
+
+            // Batch I 补齐：先退出 Expedition 状态，避免残留 _bubble="探" 气泡
+            worker.ExitExpedition();
 
             // outcome.died=true → 立即切 Dead 状态（30s 复活由 §2.2 既有路径）
             if (data.outcome != null && data.outcome.died)

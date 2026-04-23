@@ -7,7 +7,7 @@
  *   3. 接收 SurvivalGameEngine 的能量增量 + 夜晚入口事件，驱动 session 的能量累积与远征怪释放
  *
  * PM 决策（MVP，P1 9d 范围）：
- *   - 无赛季切换强制断开（§36 未实现）
+ *   - 赛季切换强制断开：stopAllSessions('season_reset') 由 SeasonManager.advanceDay 触发
  *   - _roomCreatorId 鉴权放开（统一到 SurvivalRoom 层的 isRoomCreator 校验；MVP 阶段跳过）
  *   - P2 60s 手动停止冷却：_manualStopCooldowns Map 仅内存（重启即清，符合"冷却不跨重启"语义）
  *   - P2 战报持久化：engine._warReports 10 条滑动窗口 → RoomPersistence schemaVersion 3
@@ -338,6 +338,30 @@ class TribeWarManager {
     this._attackerToSession.clear();
     this._defenderToSession.clear();
     console.log('[TribeWarManager] Shutdown');
+  }
+
+  /**
+   * §36 赛季切换强制断开：清空所有 session 并广播 tribe_war_attack_ended（reason='season_reset' 或调用方传入）。
+   * 幂等：已结束的 session 不重复广播；调用后 _manualStopCooldowns 也一并清空（赛季初不继承冷却）。
+   * @param {string} [reason='season_reset'] 结束原因
+   * @returns {number} 已中断的 session 数量
+   */
+  stopAllSessions(reason) {
+    const r = reason || 'season_reset';
+    const sessions = [...this._sessions.values()];
+    let count = 0;
+    for (const s of sessions) {
+      try {
+        this._endSession(s, r);
+        count += 1;
+      } catch (e) { console.warn(`[TribeWarManager] stopAllSessions error: ${e.message}`); }
+    }
+    // 赛季切换同时清冷却（避免跨赛季继承 60s 冷却）
+    this._manualStopCooldowns.clear();
+    if (count > 0) {
+      console.log(`[TribeWarManager] stopAllSessions: ${count} session(s) terminated (reason=${r})`);
+    }
+    return count;
   }
 }
 

@@ -85,22 +85,23 @@ namespace DrscfZ.UI
             if (_featuresText != null)
                 _featuresText.text = newFeatureDesc ?? "";
 
+            // §17.16 A 类 modal
             if (_panel != null)
-                _panel.SetActive(true);
+                ModalRegistry.TryOpenModalA(_panel);
         }
 
         /// <summary>外部主动关闭（例如等级变化导致按钮失效时）</summary>
         public void Hide()
         {
             if (_panel != null)
-                _panel.SetActive(false);
+                ModalRegistry.CloseModalA(_panel);
             _onConfirm = null;
         }
 
         private void OnConfirm()
         {
             if (_panel != null)
-                _panel.SetActive(false);
+                ModalRegistry.CloseModalA(_panel);
             var cb = _onConfirm;
             _onConfirm = null;
             cb?.Invoke();
@@ -109,7 +110,7 @@ namespace DrscfZ.UI
         private void OnCancel()
         {
             if (_panel != null)
-                _panel.SetActive(false);
+                ModalRegistry.CloseModalA(_panel);
             _onConfirm = null;
         }
     }

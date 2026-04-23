@@ -2,6 +2,8 @@ using UnityEngine;
 using System;
 using System.Collections;
 using DrscfZ.UI;
+using DrscfZ.Core;
+using DrscfZ.Systems;
 
 namespace DrscfZ.Survival
 {
@@ -53,6 +55,10 @@ namespace DrscfZ.Survival
         private Color[]    _originalColors;
         private bool       _isFlashing;
 
+        // ── §10.7 Lv5/Lv6 占位视觉（美术资源到位后替换）──────────────────────────
+        private GameObject _frostAuraRing;     // Lv5 常驻冰雾环（frost_aura 激活时可见）
+        private bool       _frostAuraActive;
+
         private void Awake()
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
@@ -68,6 +74,179 @@ namespace DrscfZ.Survival
                 else
                     _originalColors[i] = Color.white;
             }
+        }
+
+        private void Start()
+        {
+            // §10.7 订阅 SurvivalGameManager.OnGateEffectTriggered，按 effect 分流播视觉
+            //   thorns 仍由 SurvivalGameManager 统一处理伤害飘字；本类仅负责 frost_aura / frost_pulse 视觉占位
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm != null) sgm.OnGateEffectTriggered += HandleGateEffect;
+
+            // §29 警报音效：订阅自身 OnHpChanged + ResourceSystem.OnResourceChanged
+            OnHpChanged += OnHpChangedForAlarm;
+            var res = ResourceSystem.Instance;
+            if (res != null) res.OnResourceChanged += OnResourceChangedForAlarm;
+        }
+
+        private void OnDestroy()
+        {
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm != null) sgm.OnGateEffectTriggered -= HandleGateEffect;
+
+            OnHpChanged -= OnHpChangedForAlarm;
+            var res = ResourceSystem.Instance;
+            if (res != null) res.OnResourceChanged -= OnResourceChangedForAlarm;
+            // 停掉潜在残留的循环警报
+            var audio = AudioManager.Instance;
+            if (audio != null)
+            {
+                audio.StopLoopSFX(AudioConstants.SFX_GATE_ALARM);
+                audio.StopLoopSFX(AudioConstants.SFX_COLD_ALARM);
+            }
+
+            if (Instance == this) Instance = null;
+        }
+
+        // ── §29 警报音效 ──────────────────────────────────────────────────────────
+        //   HP ≤ 30% 触发 sfx_gate_alarm；恢复 > 30% 停止；滞回边际 3% 避免抖动
+        //   温度 ≤ -80 触发 sfx_cold_alarm；回升 > -80 停止
+        private bool _gateAlarmOn;
+        private bool _coldAlarmOn;
+        private const float HP_ALARM_ON_RATIO  = 0.30f;
+        private const float HP_ALARM_OFF_RATIO = 0.33f;
+        private const float COLD_ALARM_ON_TEMP  = -80f;
+        private const float COLD_ALARM_OFF_TEMP = -78f;
+
+        private void OnHpChangedForAlarm(int cur, int max)
+        {
+            var audio = AudioManager.Instance;
+            if (audio == null || max <= 0) return;
+            float ratio = (float)cur / max;
+
+            if (!_gateAlarmOn && ratio <= HP_ALARM_ON_RATIO && cur > 0)
+            {
+                audio.StartLoopSFX(AudioConstants.SFX_GATE_ALARM, 0.6f);
+                _gateAlarmOn = true;
+            }
+            else if (_gateAlarmOn && (ratio >= HP_ALARM_OFF_RATIO || cur <= 0))
+            {
+                audio.StopLoopSFX(AudioConstants.SFX_GATE_ALARM);
+                _gateAlarmOn = false;
+            }
+        }
+
+        private void OnResourceChangedForAlarm(int food, int coal, int ore, float temp)
+        {
+            var audio = AudioManager.Instance;
+            if (audio == null) return;
+
+            if (!_coldAlarmOn && temp <= COLD_ALARM_ON_TEMP)
+            {
+                audio.StartLoopSFX(AudioConstants.SFX_COLD_ALARM, 0.55f);
+                _coldAlarmOn = true;
+            }
+            else if (_coldAlarmOn && temp >= COLD_ALARM_OFF_TEMP)
+            {
+                audio.StopLoopSFX(AudioConstants.SFX_COLD_ALARM);
+                _coldAlarmOn = false;
+            }
+        }
+
+        // ── §10.7 Lv5/Lv6 视觉占位 ────────────────────────────────────────────────
+
+        /// <summary>按 effect 分流播视觉。
+        ///  - frost_aura：Lv5 城门周围常驻冰雾环（激活/失活靠服务端 active 字段）
+        ///  - frost_pulse：Lv6 冲击波展开动画（radius 0→radius/alpha 1→0，2s）
+        ///  - thorns：不在此处处理（SurvivalGameManager.HandleGateEffectTriggered 已做全体飘字）
+        /// 注：GateEffectTriggeredData 没有 active 字段（服务端仅在激活时发事件），
+        ///     以 effect=='frost_aura' 视为"激活一次常驻环"；后续 Lv 变低或 gate_upgraded 切 level 时自动关闭。</summary>
+        private void HandleGateEffect(GateEffectTriggeredData d)
+        {
+            if (d == null || string.IsNullOrEmpty(d.effect)) return;
+            switch (d.effect)
+            {
+                case "frost_aura":
+                    EnableFrostAuraRing(true);
+                    break;
+                case "frost_pulse":
+                    float r = d.radius > 0 ? d.radius : 8f;
+                    StartCoroutine(PlayFrostPulse(r));
+                    break;
+            }
+        }
+
+        /// <summary>§10.7 Lv5 frost_aura 占位：在城门下方生成一个淡蓝色扁平 Cylinder（占位，美术后续替换）。
+        /// active=false 时销毁。</summary>
+        private void EnableFrostAuraRing(bool active)
+        {
+            if (active == _frostAuraActive && (_frostAuraRing != null) == active) return;
+            _frostAuraActive = active;
+            if (!active)
+            {
+                if (_frostAuraRing != null) Destroy(_frostAuraRing);
+                _frostAuraRing = null;
+                return;
+            }
+            if (_frostAuraRing != null) return;
+
+            // 占位：Cylinder 扁平化，冰蓝色
+            _frostAuraRing = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            _frostAuraRing.name = "FrostAuraRing_Placeholder";
+            var col = _frostAuraRing.GetComponent<Collider>();
+            if (col != null) Destroy(col);
+            _frostAuraRing.transform.SetParent(transform, false);
+            _frostAuraRing.transform.localPosition = new Vector3(0f, 0.05f, 0f);
+            _frostAuraRing.transform.localScale    = new Vector3(12f, 0.05f, 12f); // 扁平圆盘
+            var r = _frostAuraRing.GetComponent<Renderer>();
+            if (r != null)
+            {
+                // URP Lit 支持 _BaseColor；兼容 Standard 写 _Color
+                var m = r.material;
+                var c = new Color(0.5f, 0.8f, 1f, 0.35f);
+                if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", c);
+                if (m.HasProperty("_Color"))     m.SetColor("_Color", c);
+                r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                r.receiveShadows    = false;
+            }
+            Debug.Log("[CityGate] frost_aura 占位环已激活（美术资源后续替换）");
+        }
+
+        /// <summary>§10.7 Lv6 frost_pulse 占位：展开式 Cube scale 0→radius，alpha 1→0，2s。</summary>
+        private IEnumerator PlayFrostPulse(float radius)
+        {
+            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            go.name = "FrostPulse_Placeholder";
+            var col = go.GetComponent<Collider>();
+            if (col != null) Destroy(col);
+            go.transform.SetParent(transform, false);
+            go.transform.localPosition = new Vector3(0f, 0.5f, 0f);
+            var renderer = go.GetComponent<Renderer>();
+            Material mat = renderer != null ? renderer.material : null;
+            if (renderer != null)
+            {
+                renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                renderer.receiveShadows    = false;
+            }
+
+            const float DURATION = 2f;
+            float t = 0f;
+            while (t < DURATION)
+            {
+                t += Time.deltaTime;
+                float ratio = Mathf.Clamp01(t / DURATION);
+                float size  = Mathf.Lerp(0f, radius * 2f, ratio);
+                go.transform.localScale = new Vector3(size, 0.2f, size);
+                if (mat != null)
+                {
+                    float a = Mathf.Lerp(1f, 0f, ratio);
+                    var c = new Color(0.6f, 0.9f, 1f, a);
+                    if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", c);
+                    if (mat.HasProperty("_Color"))     mat.SetColor("_Color", c);
+                }
+                yield return null;
+            }
+            Destroy(go);
         }
 
         public void Initialize(int maxHp = -1)
@@ -172,6 +351,8 @@ namespace DrscfZ.Survival
                 if (_gateModels[i] != null)
                     _gateModels[i].SetActive(i == level - 1);
             }
+            // §10.7 frost_aura 常驻环仅 Lv5+ 生效；降级或回 Lv1-4 时清理
+            if (level < 5) EnableFrostAuraRing(false);
             StartCoroutine(PlayUpgradeFX());
         }
 

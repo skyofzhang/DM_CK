@@ -4,6 +4,16 @@
  * 7种礼物按策划案 §5.1 定义（最终确定版）
  * douyin_id 字段全部保留 'TBD'，等待后台礼物ID对齐后填入
  * price_fen 单位：分（1分 = 0.01元 = 0.1抖币）
+ *
+ * ⚠️ 上线前合规硬门槛（重要）：
+ *   - douyin_id 全部为占位 'TBD'；上线前必须通过抖音平台
+ *     GetDouyinGiftIdList 接口取得实际 douyin_id 回填
+ *   - 当前 findGiftByPrice() 按 price_fen 匹配作为 fallback
+ *     （仅在 gift_num=1 可靠；多件礼物合并推送可能匹配失败）
+ *   - 同价礼物（若未来存在）无法仅凭价格区分，将返回第一个匹配项
+ *   - 对接文档：
+ *     https://developer.open-douyin.com/docs/resource/zh-CN/interaction/develop-guide/live/server-push
+ *   - 真实 id 回填后，findGiftByPrice 可作为审计兜底，主路径切到 findGiftById
  */
 
 /*

@@ -1,4 +1,10 @@
 /**
+ * [ARCHIVED 2026-04-22] 旧角力游戏遗留代码，已由 SurvivalRoom.js 替代。
+ * 当前所有 index.js / RoomManager.js 路径只 require('./SurvivalRoom')，
+ * 保留此文件仅作历史参考；请勿在新代码中 require 此 .bak 文件。
+ *
+ * --- 原文件头部注释 ---
+ *
  * Room - 独立游戏房间
  * 每个主播直播间对应一个Room，拥有独立的GameEngine + PlayerManager + BarrageSimulator
  *

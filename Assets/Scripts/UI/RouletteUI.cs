@@ -235,9 +235,9 @@ namespace DrscfZ.UI
                 Debug.LogWarning($"[RouletteUI] displayedCards 长度异常：{(data.displayedCards == null ? -1 : data.displayedCards.Length)}");
             }
 
-            // 切换到 Spinning，显示面板
+            // 切换到 Spinning，显示面板（§17.16 走 ModalRegistry A 类互斥）
             SetSpinButtonState(State.Spinning);
-            if (_panel != null) _panel.SetActive(true);
+            if (_panel != null) ModalRegistry.TryOpenModalA(_panel);
 
             if (_rollCoroutine != null) StopCoroutine(_rollCoroutine);
             _rollCoroutine = StartCoroutine(Roll(data));
@@ -247,8 +247,8 @@ namespace DrscfZ.UI
         private void OnRouletteEffectEnded(RouletteEffectEndedData data)
         {
             if (data == null) return;
-            // 面板可能已关闭（如 time_freeze 8s 内玩家手动关面板），这里只是兜底
-            if (_panel != null) _panel.SetActive(false);
+            // 面板可能已关闭（如 time_freeze 8s 内玩家手动关面板），这里只是兜底（§17.16 走 ModalRegistry）
+            if (_panel != null) ModalRegistry.CloseModalA(_panel);
 
             // 回到 Charging（服务端清零重新计时，readyAt 随后会推 RouletteReady）
             _currentResult = null;
@@ -392,8 +392,8 @@ namespace DrscfZ.UI
                 Debug.Log($"[RouletteUI] 发送 broadcaster_roulette_apply (cardId={_currentResult?.cardId})");
             }
 
-            // 关闭面板，回到充能阶段（服务端随后会推 RouletteReady 启动新一轮计时）
-            if (_panel != null) _panel.SetActive(false);
+            // 关闭面板，回到充能阶段（服务端随后会推 RouletteReady 启动新一轮计时）；§17.16 走 ModalRegistry
+            if (_panel != null) ModalRegistry.CloseModalA(_panel);
             SetSpinButtonState(State.Charging);
 
             // aurora 的客户端视觉加强（60s 全员金光）——复用现有 API

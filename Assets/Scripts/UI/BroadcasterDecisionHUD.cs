@@ -526,6 +526,12 @@ namespace DrscfZ.UI
             iconRT.offsetMin = Vector2.zero;
             iconRT.offsetMax = Vector2.zero;
             var iconTMP = iconGO.AddComponent<TextMeshProUGUI>();
+            // AUTO-INJECT: 统一 Alibaba 字体
+            if (iconTMP.font == null) {
+                var __f = Resources.Load<TMPro.TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF");
+                if (__f == null) __f = Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
+                if (__f != null) iconTMP.font = __f;
+            }
             iconTMP.fontSize = 28f;
             iconTMP.color = Color.white;
             iconTMP.alignment = TextAlignmentOptions.Center;
@@ -541,6 +547,12 @@ namespace DrscfZ.UI
             msgRT.offsetMin = new Vector2(4f, 0f);
             msgRT.offsetMax = new Vector2(-4f, 0f);
             var msgTMP = msgGO.AddComponent<TextMeshProUGUI>();
+            // AUTO-INJECT: 统一 Alibaba 字体
+            if (msgTMP.font == null) {
+                var __f = Resources.Load<TMPro.TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF");
+                if (__f == null) __f = Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
+                if (__f != null) msgTMP.font = __f;
+            }
             msgTMP.fontSize = 20f;
             msgTMP.color = Color.white;
             msgTMP.alignment = TextAlignmentOptions.MidlineLeft;
@@ -569,6 +581,12 @@ namespace DrscfZ.UI
             lblRT.offsetMin = Vector2.zero;
             lblRT.offsetMax = Vector2.zero;
             var lblTMP = btnLblGO.AddComponent<TextMeshProUGUI>();
+            // AUTO-INJECT: 统一 Alibaba 字体
+            if (lblTMP.font == null) {
+                var __f = Resources.Load<TMPro.TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF");
+                if (__f == null) __f = Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
+                if (__f != null) lblTMP.font = __f;
+            }
             lblTMP.text = "前往";
             lblTMP.fontSize = 18f;
             lblTMP.color = Color.white;
