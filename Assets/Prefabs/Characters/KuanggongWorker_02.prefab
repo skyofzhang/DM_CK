@@ -1177,7 +1177,7 @@ MonoBehaviour:
   m_text: "\u73A9\u5BB6\u540D"
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: d5d6f1b528d87d14ea4926d9f4a46001, type: 2}
-  m_sharedMaterial: {fileID: 5097231867500617639, guid: e81712df36a86b147908578675801ee5, type: 2}
+  m_sharedMaterial: {fileID: 5097231867500617639, guid: d5d6f1b528d87d14ea4926d9f4a46001, type: 2}
   m_fontSharedMaterials: []
   m_fontMaterial: {fileID: 0}
   m_fontMaterials: []

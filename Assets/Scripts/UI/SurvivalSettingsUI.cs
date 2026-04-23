@@ -136,8 +136,9 @@ namespace DrscfZ.UI
         private void SyncFromAudioManager()
         {
             var am = AudioManager.Instance;
-            float bgmVol = am != null ? am.BGMVolume : PlayerPrefs.GetFloat("BGMVolume", 0.8f);
-            float sfxVol = am != null ? am.SFXVolume : PlayerPrefs.GetFloat("SFXVolume", 1.0f);
+            // §28 PlayerPrefs key 与 AudioManager 保持一致（"AudioBGMVolume"/"AudioSFXVolume"）
+            float bgmVol = am != null ? am.BGMVolume : PlayerPrefs.GetFloat("AudioBGMVolume", 0.6f);
+            float sfxVol = am != null ? am.SFXVolume : PlayerPrefs.GetFloat("AudioSFXVolume", 0.8f);
             bool  bgmOn  = am != null ? am.BGMEnabled : true;
             bool  sfxOn  = am != null ? am.SFXEnabled : true;
 
@@ -182,7 +183,8 @@ namespace DrscfZ.UI
             }
             else
             {
-                PlayerPrefs.SetFloat("BGMVolume", value);
+                // §28 对齐 AudioManager 键名
+                PlayerPrefs.SetFloat("AudioBGMVolume", value);
                 if (_bgmSource != null) _bgmSource.volume = value;
             }
 
@@ -199,7 +201,8 @@ namespace DrscfZ.UI
             }
             else
             {
-                PlayerPrefs.SetFloat("SFXVolume", value);
+                // §28 对齐 AudioManager 键名
+                PlayerPrefs.SetFloat("AudioSFXVolume", value);
                 if (_sfxSource != null) _sfxSource.volume = value;
             }
 
