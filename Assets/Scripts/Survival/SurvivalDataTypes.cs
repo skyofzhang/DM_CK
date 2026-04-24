@@ -1439,6 +1439,19 @@ namespace DrscfZ.Survival
     [Serializable]
     public class RoomStateData
     {
+        // 🆕 audit-r3 P1-Reviewer：服务端 _broadcastRoomState payload 的 10 主字段（断线重连快照）
+        public int    fortressDay;                 // 当前堡垒日
+        public int    maxFortressDay;              // 历史最大堡垒日
+        public int    totalCycles;                 // 总循环次数（_enterSettlement 计数）
+        public string streamerKingTitle;           // "堡垒之王" 或 null
+        public int    currentSeasonId;             // 当前赛季 id
+        public string lastThemeId;                 // 上个赛季主题（防连抽记忆）
+        public string themeId;                     // 本赛季主题 id
+        public string phase;                       // "day"/"night"/"recovery"/"idle"/... 与 SurvivalGameStateData.state 同源
+        public string variant;                     // "normal"/"recovery"/... 与 PhaseChangedData.variant 同源
+        public long   lifetimeContribTotal;        // 全房间终身贡献总和（用 long 以防溢出）
+
+        // 进行中状态（§24.4 轮盘 / §37 建造 / §38 探险 / §35 攻防战）
         public RouletteInProgressData       roulette;
         public BuildInProgressData          build;
         public ExpeditionInProgressData[]   expeditions;
@@ -1454,6 +1467,8 @@ namespace DrscfZ.Survival
         //   'gate_breached' | 'food_depleted' | 'temp_freeze' | 'all_dead' | 'survived' | 'none'
         //   断线重连时 UI 可据此识别上次降级原因并回放 toast/动画；服务端不下发时 JsonUtility 回落 null/""。
         public string fortressDayChangeReason;
+
+        public long   timestamp;                   // Unix ms，协议统一时间戳
     }
 
     /// <summary>room_state 兼容别名（部分模块在规范/审计中称为 RoomStateInProgressData，
