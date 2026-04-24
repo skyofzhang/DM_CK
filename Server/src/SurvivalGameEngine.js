@@ -1602,9 +1602,19 @@ class SurvivalGameEngine {
       if (!playerId) return;
       this._handleExpeditionSend(playerId, playerName);
     } else if (content_trim === '召回') {
-      // §38 召回指令：仅主播可用，立即拉回在外探险矿工（空手而归）
+      // §38 召回指令：仅主播可用（弹幕路径默认召回一名在外矿工）
       if (!playerId) return;
-      this._handleExpeditionRecall(playerId, playerName);
+      const creatorId = (this.room && this.room.roomCreatorOpenId) || '';
+      if (creatorId && playerId !== creatorId) {
+        this._broadcast({
+          type: 'expedition_failed',
+          data: { playerId, reason: 'supporter_not_allowed', unlockDay: 0 },
+        });
+        return;
+      }
+      const firstExp = this._expeditions.size > 0 ? this._expeditions.values().next().value : null;
+      if (!firstExp || !firstExp.playerId) return;
+      this._handleExpeditionRecall(firstExp.playerId, playerName);
     } else if (content_trim === '666') {
       // 666弹幕：全员效率+15%（已建 altar 时 1.25），持续30秒（策划案 §4.3 / §37.2 altar）
       // §6.3 P5（方案 A）：写入 _buzz666Bonus 独立轨道（不与 ability_pill 互相覆盖）
@@ -6451,7 +6461,6 @@ class SurvivalGameEngine {
    * @param {object} data { difficulty: 'easy'|'normal'|'hard'|'nightmare', applyAt: 'next_night'|'next_season' }
    */
   handleChangeDifficulty(playerId, data) {
-    // TODO: _roomCreatorId 鉴权未注入 → 放开（与 §24.4/§37/§39 一致）
     //   if (this.room && this.room.roomCreatorOpenId && playerId !== this.room.roomCreatorOpenId) {
     //     this._broadcast({ type: 'change_difficulty_failed', data: { reason: 'not_room_creator' } });
     //     return;
@@ -7207,12 +7216,15 @@ class SurvivalGameEngine {
   _handleExpeditionSend(playerId, playerName) {
     const failReason = this._startExpedition(playerId, Date.now());
     if (failReason) {
+      const unlockDay = failReason === 'feature_locked'
+        ? ((((require('./config/FeatureUnlockConfig').FEATURE_UNLOCK_DAY || {}).expedition || {}).minDay) || 0)
+        : 0;
       this._broadcast({
         type: 'expedition_failed',
         data: {
           playerId,
           reason: failReason,
-          unlockDay: 0, // MVP §36.12 不做解锁门槛，默认 0
+          unlockDay,
         },
       });
       console.log(`[SurvivalEngine] expedition_failed: ${playerName} (${playerId}) reason=${failReason}`);
@@ -7220,12 +7232,10 @@ class SurvivalGameEngine {
   }
 
   /**
-   * 弹幕入口：`召回` — 仅主播（MVP 放开给任意玩家，TODO _roomCreatorId 校验）
-   * 扫描该玩家名下（PM 决策 MVP 简化：召回第一个匹配的）活跃 expedition，立即回城空手
+   * 召回入口：按目标 playerId 执行召回。
+   * 调用方负责主播鉴权（弹幕入口和 WS 入口均在外层限制）。
    */
   _handleExpeditionRecall(playerId, playerName) {
-    // TODO: _roomCreatorId 未注入 → 放开；等主播鉴权接入后限制非主播拒绝
-    // if (this._roomCreatorId && playerId !== this._roomCreatorId) return;
     this._recallExpedition(playerId);
   }
 
@@ -7234,8 +7244,15 @@ class SurvivalGameEngine {
    * @returns {string|null} 失败原因字符串（'wrong_phase'/'max_concurrent'/...），成功返回 null
    */
   _startExpedition(playerId, nowMs) {
-    // §36.12 feature_locked 检查（MVP 不做，TODO）
-    // if (!this.room?.isVeteran && this.room?.seasonDay < FEATURE_UNLOCK_DAY.expedition.minDay) return 'feature_locked';
+    // §36.12 feature_locked 检查：统一覆盖弹幕路径与 WS 指令路径
+    try {
+      const { isFeatureUnlocked } = require('./config/FeatureUnlockConfig');
+      if (typeof isFeatureUnlocked === 'function' && this.room && !isFeatureUnlocked(this.room, 'expedition')) {
+        return 'feature_locked';
+      }
+    } catch (_) {
+      // FeatureUnlockConfig 异常时不阻塞核心流程
+    }
 
     // 状态必须为白天（§38.5 wrong_phase；不含 recovery，MVP 无此状态）
     if (this.state !== 'day') return 'wrong_phase';

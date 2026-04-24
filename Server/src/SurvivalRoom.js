@@ -655,18 +655,48 @@ class SurvivalRoom {
       case 'expedition_command': {
         // §36.12 expedition 门槛（seasonDay ≥ 5）
         if (!this._checkFeatureOrFail('expedition', 'expedition_failed', {})) break;
+
         // { playerId, action: 'send' | 'recall' }
-        const pid    = (data && data.playerId) || ws._playerId || '';
-        const action = (data && data.action)   || '';
-        this.survivalEngine.handleExpeditionCommand(pid, action);
+        const action = (data && data.action) || '';
+
+        if (action === 'send') {
+          // send 仅允许本人发起，忽略 data.playerId，防止伪造他人身份
+          const pid = ws._playerId || '';
+          if (!pid) break;
+          this.survivalEngine.handleExpeditionCommand(pid, 'send');
+          break;
+        }
+
+        if (action === 'recall') {
+          // recall 仅主播可用（§38.5）
+          if (!this._isRoomCreator(ws)) {
+            try {
+              ws.send(JSON.stringify({
+                type: 'expedition_failed',
+                timestamp: Date.now(),
+                data: { playerId: ws._playerId || '', reason: 'supporter_not_allowed', unlockDay: 0 },
+              }));
+            } catch (e) { /* ignore */ }
+            break;
+          }
+          const targetPid = (data && data.playerId) || '';
+          if (!targetPid) break;
+          this.survivalEngine.handleExpeditionCommand(targetPid, 'recall');
+          this._gmAudit(ws, 'expedition_recall', { targetPlayerId: targetPid });
+          break;
+        }
+
         break;
       }
       case 'expedition_event_vote': {
+        // 仅主播可发（§38.5）
+        if (!this._requireBroadcaster(ws, 'expedition_event_vote')) break;
         // { expeditionId, choice: 'accept' | 'cancel' }
-        const pid   = (data && data.playerId)     || ws._playerId || '';
-        const expId = (data && data.expeditionId) || '';
-        const choice= (data && data.choice)       || '';
+        const pid    = ws._playerId || '';
+        const expId  = (data && data.expeditionId) || '';
+        const choice = (data && data.choice) || '';
         this.survivalEngine.handleExpeditionEventVote(pid, expId, choice);
+        this._gmAudit(ws, 'expedition_event_vote', { expeditionId: expId, choice });
         break;
       }
 
