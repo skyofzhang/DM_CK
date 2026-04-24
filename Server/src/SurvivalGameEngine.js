@@ -595,6 +595,13 @@ class SurvivalGameEngine {
     this._playerTempBoost        = {};  // playerId → 倍率（能量电池 1.3，持续180s，per-player）
     this._playerTempBoostTimers  = {};  // playerId → setTimeout handle
 
+    // audit-r6 P1-E6：§30.7 T4/T5/T6 限时皮肤（G01/G02/G03）过期时间戳
+    //   playerId → { skinId: 'G01'|'G02'|'G03', expireAt: ms }
+    //   _tick 每秒 + _enterDay/_enterNight 入口扫描过期，广播 gift_skin_expired 并删除
+    //   注：客户端按 skinId 叠加视觉 + 任何被动属性（如 +2 炉温 / +30% ATK / +20% 采矿），
+    //   本版服务端仅负责协议广播，不做数值叠加（PM 后续决定是否加服务端被动）
+    this._giftSkinExpiryMs       = {};
+
     // §6.3 P5（方案 A）：能力药丸 / 666 弹幕加成拆分为两条独立轨道，相乘生效
     //   _abilityPillBonus  : T2 礼物 ability_pill（1.5 / altar 1.6）
     //   _buzz666Bonus      : 666 弹幕（1.15 / altar 1.25 / meteor_fragment ×2.0）
@@ -1236,6 +1243,9 @@ class SurvivalGameEngine {
     // 清除所有临时 boost 定时器
     for (const t of Object.values(this._playerTempBoostTimers || {})) clearTimeout(t);
     this._playerTempBoostTimers = {};
+
+    // audit-r6 P1-E6 §30.7：reset 清空限时皮肤状态（不广播 expired，client 自然在新局重置 UI）
+    this._giftSkinExpiryMs = {};
 
     // 重置666 + 能力药丸（§6.3 P5 拆分）+ 点赞 + 随机事件状态
     this._abilityPillBonus    = 1.0;
@@ -1978,6 +1988,8 @@ class SurvivalGameEngine {
       }
 
       case 'energy_battery': {
+        // audit-r6 P1-E6 §30.7：G01 限时皮肤（覆盖阶段皮肤，持续到下一次昼夜切换结束）
+        if (playerId) this._applyGiftSkin(playerId, 'G01');
         // 炉温+30℃（共享资源），发送者效率+30%（持续180秒，仅影响自己矿工，刷新计时）
         this.furnaceTemp = Math.min(this.maxTemp, this.furnaceTemp + 30);
         this._playerTempBoost[playerId] = 1.3;
@@ -2007,6 +2019,8 @@ class SurvivalGameEngine {
       }
 
       case 'mystery_airdrop': {
+        // audit-r6 P1-E6 §30.7：G03 限时皮肤（覆盖阶段皮肤，持续到下一次昼夜切换结束）
+        if (playerId) this._applyGiftSkin(playerId, 'G03');
         // 超级补给：食物+500、煤炭+200、矿石+100、城门+300HP；触发 GIFT_PAUSE 3000ms
         this.food    = Math.min(2000, this.food    + 500);
         this.coal    = Math.min(1500, this.coal    + 200);
@@ -2041,6 +2055,8 @@ class SurvivalGameEngine {
       }
 
       case 'love_explosion': {
+        // audit-r6 P1-E6 §30.7：G02 限时皮肤（覆盖阶段皮肤，持续到下一次昼夜切换结束）
+        if (playerId) this._applyGiftSkin(playerId, 'G02');
         // 爱的爆炸：全体怪物AOE伤害200、所有矿工HP全满恢复、城门+200HP
         // §34.4 E3b legend 里程碑（10000）：AOE 伤害 ×_milestoneGlobalMult（+20%）
         const aoeDmg = Math.round(200 * (this._milestoneGlobalMult || 1.0));
@@ -2624,6 +2640,8 @@ class SurvivalGameEngine {
   // ==================== 内部：阶段切换 ====================
 
   _enterDay(day) {
+    // audit-r6 P1-E6 §30.7：昼夜切换到来 → 扫描限时皮肤过期（旧 phase 已结束，expireAt 到期）
+    this._scanGiftSkinExpiry();
     this._clearNightWaves();
     this._activeMonsters.clear();
     this.state         = 'day';
@@ -2728,6 +2746,8 @@ class SurvivalGameEngine {
   }
 
   _enterNight(day) {
+    // audit-r6 P1-E6 §30.7：昼夜切换到来 → 扫描限时皮肤过期（旧 phase 已结束，expireAt 到期）
+    this._scanGiftSkinExpiry();
     this.state         = 'night';
     this.currentDay    = day;
 
@@ -3166,6 +3186,9 @@ class SurvivalGameEngine {
     // 每5tick = 1秒
     if (this._tickCounter % 5 === 0) {
       this.remainingTime = Math.max(0, this.remainingTime - 1);
+
+      // audit-r6 P1-E6 §30.7：限时皮肤过期扫描（G01/G02/G03）
+      this._scanGiftSkinExpiry();
 
       // §6.3 P5：能力药丸 / 666 效率加成过期扫描（绝对时间戳，无 setTimeout）
       const _nowEffCheck = Date.now();
@@ -4338,9 +4361,57 @@ class SurvivalGameEngine {
     // 首波预告
     schedulePreview(effectiveBeginning, 0);
 
+    // audit-r6 P0-E1 §36.10 WaitingPhase 参数（仅 Boss/最后一波前插入，保护 nightDuration=120s）
+    //   MVP 策略：每夜的最后一波（视作 Boss 波）前强制插入 15s WaitingPhase 窗口。
+    //   - 15s 可收缩（原策划案要求 30s），避免与 nightDuration=120 冲突（留 ≥15s 夜尾打 Boss）
+    //   - 仅在 night 剩余时间 ≥ WAITING_PHASE_SEC + 10s 时才插入，否则直接 spawn，避免吞掉 Boss 出场时间
+    //   - 非 Boss 波（中间波）暂不插入（nightDuration 仅 120s 容纳不下多次 15s 窗口）
+    const WAITING_PHASE_SEC = 15;
+    const _engineRef = this;
+    /**
+     * 带 WaitingPhase 的 Boss 波 spawn 调度
+     * @param {number} wIdx 即将 spawn 的 waveIndex
+     * @param {Function} doSpawn () => this._spawnWave(cfg, day, wIdx)
+     */
+    const spawnWithWaitingPhase = (wIdx, doSpawn) => {
+      if (_engineRef.state !== 'night') return;
+      // 夜晚剩余时间不足 → 直接 spawn，不插入 WaitingPhase
+      if ((_engineRef.remainingTime || 0) < WAITING_PHASE_SEC + 10) {
+        doSpawn();
+        return;
+      }
+      // 广播 waiting_phase_started
+      _engineRef.broadcast({
+        type: 'waiting_phase_started',
+        timestamp: Date.now(),
+        data: {
+          waveIdx:        wIdx,
+          countdownSec:   WAITING_PHASE_SEC,
+          allowVoteTypes: [],
+        },
+      });
+      console.log(`[SurvivalEngine] waiting_phase_started: day=${day} waveIdx=${wIdx} countdown=${WAITING_PHASE_SEC}s (Boss wave)`);
+      const waitTimer = setTimeout(() => {
+        _engineRef.broadcast({
+          type: 'waiting_phase_ended',
+          timestamp: Date.now(),
+          data: { waveIdx: wIdx },
+        });
+        if (_engineRef.state !== 'night') return;
+        doSpawn();
+      }, WAITING_PHASE_SEC * 1000);
+      _engineRef._waveTimers.push(waitTimer);
+    };
+
     // 首波延迟
     const firstTimer = setTimeout(() => {
-      this._spawnWave(cfg, day, waveIndex++);
+      // audit-r6 P0-E1：首波若同时是最后一波（maxCount===1）→ 视为 Boss 波，插 WaitingPhase
+      if (cfg.maxCount === 1) {
+        const bossIdx = waveIndex++;
+        spawnWithWaitingPhase(bossIdx, () => this._spawnWave(cfg, day, bossIdx));
+      } else {
+        this._spawnWave(cfg, day, waveIndex++);
+      }
 
       // 后续波次
       const repeatTimer = setInterval(() => {
@@ -4352,7 +4423,14 @@ class SurvivalGameEngine {
           clearInterval(repeatTimer);
           return;
         }
-        this._spawnWave(cfg, day, waveIndex++);
+        const wIdx = waveIndex++;
+        // audit-r6 P0-E1 §36.10：Boss 波（最后一波）前插 15s WaitingPhase
+        //   判定：wIdx === cfg.maxCount - 1（即将 spawn 的这一波是最后一波）
+        if (wIdx === cfg.maxCount - 1) {
+          spawnWithWaitingPhase(wIdx, () => this._spawnWave(cfg, day, wIdx));
+        } else {
+          this._spawnWave(cfg, day, wIdx);
+        }
       }, effectiveRefreshMs);
 
       this._waveTimers.push(repeatTimer);
@@ -5531,6 +5609,20 @@ class SurvivalGameEngine {
   // ==================== §37 建造系统（Building System，MVP）====================
 
   /**
+   * audit-r6 P1-E1/E2：赛季末 5 分钟守门
+   * 策划案 §36.8 / §37 / §38：seasonDay===7 && 夜晚剩余 ≤ 300s 视为 season_ending，
+   *   对 build_propose / expedition_command / broadcaster 特权拒绝。
+   * 注：仅 night 相位统计 remainingTime；day 相位时保守返回 false（dayDuration=120，不会短于 300）。
+   * @returns {boolean} 是否处于赛季末 5 分钟窗口
+   */
+  _isSeasonEnding() {
+    if (!this.seasonMgr || this.seasonMgr.seasonDay !== 7) return false;
+    if (this.state !== 'night') return false;
+    // remainingTime：_enterNight 置为 nightDuration，每秒递减；≤300 即赛季末 5 分钟
+    return typeof this.remainingTime === 'number' && this.remainingTime <= 300;
+  }
+
+  /**
    * 发起建造投票（C→S build_propose）
    * 前置：state==='day' + 无活跃投票 + 非助威者 + 未当日用完 + buildId 合法且未建成 + 资源充足
    * 候选生成：buildId 必入 options[0]；剩余 2 张从"未建造 + 资源够"随机抽；不足补"已建造可重建"；退化 [buildId]
@@ -5551,6 +5643,11 @@ class SurvivalGameEngine {
     // 1) 仅白天受理（策划案 §37.3 / §10.5 口径统一，不含 recovery）
     if (this.state !== 'day') {
       return failPropose('wrong_phase');
+    }
+    // audit-r6 P1-E1：§36.8 / §37 赛季末 5 分钟（seasonDay===7 && 夜晚剩余 ≤ 300s）拒绝
+    //   注：day 相位 _isSeasonEnding 必然 false（只看 night），但保留调用以后期收紧口径兼容
+    if (this._isSeasonEnding()) {
+      return failPropose('season_ending');
     }
     // 2) 已有活跃投票
     if (this._buildVote !== null) {
@@ -7063,6 +7160,65 @@ class SurvivalGameEngine {
     if (healed > 0) this._broadcastWorkerHp();
   }
 
+  // ==================== audit-r6 P1-E6 §30.7 限时皮肤（G01/G02/G03）====================
+
+  /**
+   * 计算"下一次昼夜切换结束"时刻（当前 phase 结束时间）
+   * - day:   now + remainingTime × 1000
+   * - night: now + remainingTime × 1000
+   * - 其他: 返回 now + 60_000（兜底 1 分钟，避免永远不过期）
+   * @returns {number} 绝对时间戳 ms
+   */
+  _computeGiftSkinExpireAt() {
+    const now = Date.now();
+    if (this.state === 'day' || this.state === 'night') {
+      const remainSec = Math.max(0, Number(this.remainingTime) || 0);
+      return now + remainSec * 1000;
+    }
+    return now + 60_000;
+  }
+
+  /**
+   * 应用限时皮肤（G01/G02/G03）并广播 gift_skin_applied
+   * @param {string} playerId
+   * @param {'G01'|'G02'|'G03'} skinId
+   */
+  _applyGiftSkin(playerId, skinId) {
+    if (!playerId || !skinId) return;
+    const expireAt = this._computeGiftSkinExpireAt();
+    this._giftSkinExpiryMs[playerId] = { skinId, expireAt };
+    this._broadcast({
+      type: 'gift_skin_applied',
+      timestamp: Date.now(),
+      data: { playerId, skinId, expireAt },
+    });
+    console.log(`[SurvivalEngine] gift_skin_applied: playerId=${playerId} skinId=${skinId} expireAt=${expireAt}`);
+  }
+
+  /**
+   * 扫描并清理过期限时皮肤（_tick 每秒 + _enterDay/_enterNight 入口调用）
+   * 过期条目：广播 gift_skin_expired + delete
+   */
+  _scanGiftSkinExpiry() {
+    if (!this._giftSkinExpiryMs) return;
+    const now = Date.now();
+    const ids = Object.keys(this._giftSkinExpiryMs);
+    if (ids.length === 0) return;
+    for (const pid of ids) {
+      const rec = this._giftSkinExpiryMs[pid];
+      if (!rec) { delete this._giftSkinExpiryMs[pid]; continue; }
+      if (now >= rec.expireAt) {
+        delete this._giftSkinExpiryMs[pid];
+        this._broadcast({
+          type: 'gift_skin_expired',
+          timestamp: now,
+          data: { playerId: pid, skinId: rec.skinId },
+        });
+        console.log(`[SurvivalEngine] gift_skin_expired: playerId=${pid} skinId=${rec.skinId}`);
+      }
+    }
+  }
+
   // ==================== §34.4 E8 参与感唤回 ====================
 
   /**
@@ -7113,10 +7269,13 @@ class SurvivalGameEngine {
    * @param {object} data { difficulty: 'easy'|'normal'|'hard'|'nightmare', applyAt: 'next_night'|'next_season' }
    */
   handleChangeDifficulty(playerId, data) {
-    //   if (this.room && this.room.roomCreatorOpenId && playerId !== this.room.roomCreatorOpenId) {
-    //     this._broadcast({ type: 'change_difficulty_failed', data: { reason: 'not_room_creator' } });
-    //     return;
-    //   }
+    // audit-r6 P1-E5：内层 broadcaster guard 双保险（外层 SurvivalRoom._requireBroadcaster 已保护，
+    //   内层回保为防其他调用路径绕过）。reason 用 not_broadcaster 对齐其他 failed 分支。
+    if (this.room && this.room.roomCreatorOpenId && playerId !== this.room.roomCreatorOpenId) {
+      const failMsg = { type: 'change_difficulty_failed', data: { reason: 'not_broadcaster' } };
+      if (!playerId || !this._sendToPlayer(playerId, failMsg)) this._broadcast(failMsg);
+      return;
+    }
     const diff    = (data && data.difficulty) || '';
     const applyAt = (data && data.applyAt)    || '';
     // Fix 7: §34D E9 —— `nightmare` preset 策划案未定具体参数,_softApplyDifficulty 会静默回退 hard,
@@ -7967,6 +8126,10 @@ class SurvivalGameEngine {
     // 状态必须为白天（§38.5 wrong_phase；不含 recovery，MVP 无此状态）
     if (this.state !== 'day') return 'wrong_phase';
 
+    // audit-r6 P1-E2：§36.8 / §38 赛季末 5 分钟（seasonDay===7 && 夜晚剩余 ≤ 300s）拒绝
+    //   注：day 相位 _isSeasonEnding 必然 false（只看 night），此处作为未来收紧兼容保留
+    if (this._isSeasonEnding()) return 'season_ending';
+
     // §33 助威者不能发 send（避免无限消耗守护者名额）
     if (this._supporters.has(playerId)) return 'supporter_not_allowed';
 
@@ -8616,6 +8779,10 @@ class SurvivalGameEngine {
           category: seasonItem.category || 'B',
           price: seasonItem.price || 0,
           slot: seasonItem.slot || null,
+          // audit-r6 P1-E3：保留赛季限定 SKU 守门字段
+          minSeasonDay:       seasonItem.minSeasonDay       || 0,
+          lifetimeContribMin: seasonItem.lifetimeContribMin || 0,
+          _fromSeasonPool: true,
         };
       }
     }
@@ -8623,6 +8790,20 @@ class SurvivalGameEngine {
     if (cfg.category !== 'B') return;          // 静默忽略（A 类无双确认）
     if (cfg.price < 1000) return;              // 静默忽略（<1000 直接购买）
     // MVP PM 决策：_roomCreatorId 鉴权放开，任何玩家都可发起 prepare
+
+    // audit-r6 P1-E3：§39.8 赛季限定 SKU（B9/B10）双守门
+    //   1. seasonDay < minSeasonDay → not_unlocked_yet { unlockDay }
+    //   2. _lifetimeContrib[playerId] < lifetimeContribMin → not_unlocked_yet { minLifetimeContrib }
+    if (cfg._fromSeasonPool) {
+      const curSeasonDay = this.seasonMgr ? (this.seasonMgr.seasonDay || 1) : 1;
+      if (cfg.minSeasonDay > 0 && curSeasonDay < cfg.minSeasonDay) {
+        return this._shopFailPurchase('not_unlocked_yet', itemId, { unlockDay: cfg.minSeasonDay }, playerId);
+      }
+      const lc = (this._lifetimeContrib && this._lifetimeContrib[playerId]) || 0;
+      if (cfg.lifetimeContribMin > 0 && lc < cfg.lifetimeContribMin) {
+        return this._shopFailPurchase('not_unlocked_yet', itemId, { minLifetimeContrib: cfg.lifetimeContribMin }, playerId);
+      }
+    }
 
     // 校验余额（余额不足直接 shop_purchase_failed，不进 pending 池）
     // P0-A8：失败消息单播给发起方
@@ -8685,6 +8866,9 @@ class SurvivalGameEngine {
           price: seasonItem.price || 0,
           slot: seasonItem.slot || null,
           effect: seasonItem.effect || '',
+          // audit-r6 P1-E3：保留赛季限定 SKU 守门字段
+          minSeasonDay:       seasonItem.minSeasonDay       || 0,
+          lifetimeContribMin: seasonItem.lifetimeContribMin || 0,
           _fromSeasonPool: true,
         };
       }
@@ -8694,6 +8878,18 @@ class SurvivalGameEngine {
     // 2) phase 校验
     if (!this._shopIsPhaseAllowed(itemId)) {
       return this._shopFailPurchase('wrong_phase', itemId, null, playerId);
+    }
+
+    // audit-r6 P1-E3：§39.8 赛季限定 SKU（B9/B10）双守门（seasonDay + lifetimeContrib）
+    if (cfg._fromSeasonPool) {
+      const curSeasonDay = this.seasonMgr ? (this.seasonMgr.seasonDay || 1) : 1;
+      if (cfg.minSeasonDay > 0 && curSeasonDay < cfg.minSeasonDay) {
+        return this._shopFailPurchase('not_unlocked_yet', itemId, { unlockDay: cfg.minSeasonDay }, playerId);
+      }
+      const lc = (this._lifetimeContrib && this._lifetimeContrib[playerId]) || 0;
+      if (cfg.lifetimeContribMin > 0 && lc < cfg.lifetimeContribMin) {
+        return this._shopFailPurchase('not_unlocked_yet', itemId, { minLifetimeContrib: cfg.lifetimeContribMin }, playerId);
+      }
     }
 
     // audit-r4 §39.12 season_locked：B 类在赛季末 5min（seasonDay===7 夜晚剩余时间 ≤ 300s）拒购

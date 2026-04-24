@@ -183,10 +183,17 @@ class RoomPersistence {
     if (!obj || typeof obj !== 'object') return obj;
     const fromVersion = Number(obj.schemaVersion) || 1;
 
-    // v1 → v2：_contribBalance 默认 = _lifetimeContrib 拷贝
+    // v1 → v2：_contribBalance 默认 = _lifetimeContrib 拷贝 + 补默认 _playerShopInventory / _playerShopEquipped
     if (fromVersion < 2) {
       if (!obj._contribBalance || typeof obj._contribBalance !== 'object') {
         obj._contribBalance = Object.assign({}, obj._lifetimeContrib || {});
+      }
+      // audit-r6 P1-E4: §36.8.1 v1→v2 补 shop inventory/equipped 默认
+      if (!obj._playerShopInventory || typeof obj._playerShopInventory !== 'object') {
+        obj._playerShopInventory = {};
+      }
+      if (!obj._playerShopEquipped || typeof obj._playerShopEquipped !== 'object') {
+        obj._playerShopEquipped = {};
       }
     }
 
