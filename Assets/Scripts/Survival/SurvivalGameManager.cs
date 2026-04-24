@@ -71,6 +71,9 @@ namespace DrscfZ.Survival
         public event Action<LiveRankingData>     OnLiveRankingReceived;     // 实时贡献榜（游戏中防抖推送）
         public event Action<StreamerRankingData> OnStreamerRankingReceived; // 主播排行榜（服务器推送）
 
+        // audit-r10 §29：记住上次 live_ranking Top1 的 playerId，用于检测"新王产生"播 RankUp SFX。
+        private string _lastTop1PlayerId = null;
+
         // §16 / §4.2 最近一次 phase_changed 的 variant 缓存（"normal" | "recovery" | "peace_night*"）
         // HUD 推荐规则 R10-8 / PeaceNightOverlay / BroadcasterDecisionHUD 查询此字段过滤恢复期白天
         private string _lastPhaseVariant = "normal";
@@ -599,7 +602,12 @@ namespace DrscfZ.Survival
                 // ----- 实时贡献榜（游戏进行中，贡献变化后服务器防抖推送）-----
                 case "live_ranking":
                     var lr = JsonUtility.FromJson<LiveRankingData>(dataJson);
-                    if (lr != null) OnLiveRankingReceived?.Invoke(lr);
+                    if (lr != null)
+                    {
+                        // audit-r10 §29：本玩家自身排名变化 → rank_up/down SFX（仅 top10 内变化时）
+                        TryPlayRankChangeSfx(lr);
+                        OnLiveRankingReceived?.Invoke(lr);
+                    }
                     break;
 
                 // ----- 助威模式 §33 -----
@@ -1288,6 +1296,8 @@ namespace DrscfZ.Survival
                 float dur = data.duration > 0 ? data.duration / 1000f : 30f;
                 workerManager?.ActivateAllWorkersGlow(dur);
                 ShowAnnouncementBanner("【加速】主播加速！全体效率翻倍！", dur);
+                // audit-r10 §29：主播 ⚡加速 SFX
+                Systems.AudioManager.Instance?.PlaySFX(Core.AudioConstants.SFX_BROADCASTER_BOOST);
                 Debug.Log($"[SGM] broadcaster_effect: efficiency_boost ({dur}s)");
             }
             else if (data.action == "trigger_event")
@@ -1422,6 +1432,20 @@ namespace DrscfZ.Survival
 
             // 礼物视觉特效由 GiftAnimationUI 统一通过 OnGiftReceived 事件处理（WebM视频，无需手动调用）
 
+            // audit-r10 §29：按 tier 播对应 SFX（T6 与 T5 共用 clip，策划案设计债）
+            string sfxId = gift.giftTier switch
+            {
+                1 => Core.AudioConstants.SFX_GIFT_T1,
+                2 => Core.AudioConstants.SFX_GIFT_T2,
+                3 => Core.AudioConstants.SFX_GIFT_T3,
+                4 => Core.AudioConstants.SFX_GIFT_T4,
+                5 => Core.AudioConstants.SFX_GIFT_T5,
+                6 => Core.AudioConstants.SFX_GIFT_T6,
+                _ => null
+            };
+            if (!string.IsNullOrEmpty(sfxId))
+                Systems.AudioManager.Instance?.PlaySFX(sfxId);
+
             // T5 神秘空投 → 顶部金色飘字
             if (gift.giftTier >= 5)
                 UI.TopFloatingTextUI.Instance?.ShowGold($"{gift.playerName} 神秘空投！");
@@ -1429,6 +1453,22 @@ namespace DrscfZ.Survival
             // 触发相机震屏（T3+ 礼物有重量感）
             if (gift.giftTier >= 3)
                 SurvivalCameraController.Shake(gift.giftTier * 0.05f, 0.4f);
+        }
+
+        /// <summary>
+        /// audit-r10 §29：排名变化 SFX 轻量触发（只做一件事：检测 Top1 是否易主）。
+        /// 不做 Top1→Top2 或 per-player 比较，避免播放过密；目的是给直播间一个"新王上位"的声音反馈。
+        /// </summary>
+        private void TryPlayRankChangeSfx(LiveRankingData data)
+        {
+            if (data?.rankings == null || data.rankings.Length == 0) return;
+            string currentTop1 = data.rankings[0]?.playerId;
+            if (string.IsNullOrEmpty(currentTop1)) return;
+            if (_lastTop1PlayerId != null && _lastTop1PlayerId != currentTop1)
+            {
+                Systems.AudioManager.Instance?.PlaySFX(Core.AudioConstants.SFX_RANK_UP);
+            }
+            _lastTop1PlayerId = currentTop1;
         }
 
         private void HandlePlayerJoined(SurvivalPlayerJoinedData data)

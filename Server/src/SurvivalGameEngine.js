@@ -1353,10 +1353,9 @@ class SurvivalGameEngine {
     this._buildVoteUsedToday  = false;
 
     // §39 商店系统重置：
-    //   跨局永续（MVP 仅内存，重启清零）：_contribBalance / _playerShopInventory / _playerShopEquipped
+    //   跨局永续（已接入 RoomPersistence schemaVersion 2，r7 落地）：_contribBalance / _playerShopInventory / _playerShopEquipped
     //   每局重置：_shopLastEquipAt / _shopSpotlightActive / _shopSpotlightUsedThisGame /
     //              _shopEmergencyAlertUsedWave / _shopPendingPurchases / _peptTalkBoostUntil
-    // TODO §39.10 持久化：接入 RoomPersistence schemaVersion 1→2，`_contribBalance[p]` 初值迁移为 `_lifetimeContrib[p]`
     this._shopLastEquipAt            = {};
     this._shopSpotlightActive        = {};
     this._shopSpotlightUsedThisGame  = {};

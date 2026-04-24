@@ -101,17 +101,12 @@ namespace DrscfZ.Core
         /// <summary>T5礼物音效（神秘空投，8s序列，音量1.0，最高优先级）</summary>
         public const string SFX_GIFT_T5 = "sfx_gift_t5_airdrop";
 
-        // ---- GiftNotificationUI 内部使用的别名常量（映射到同一AudioClip）----
-        // T2 – 出现
-        public const string SFX_GIFT_T2_APPEAR   = "sfx_gift_t2_appear";
-        // T3 – 飞入落地 / 爆炸（两个阶段共用同一clip，后续可替换为独立素材）
-        public const string SFX_GIFT_T3_LAND     = "sfx_gift_t3_land";
-        public const string SFX_GIFT_T3_EXPLODE  = "sfx_gift_t3_explode";
-        // T4 – 充能
-        public const string SFX_GIFT_T4_CHARGE   = "sfx_gift_t4_charge";
-        // T5 – 落地 / 史诗序列
-        public const string SFX_GIFT_T5_LAND     = "sfx_gift_t5_land";
-        public const string SFX_GIFT_T5_EPIC     = "sfx_gift_t5_epic";
+        /// <summary>T6礼物音效（爱的爆炸，与 T5 共用同一 clip — 策划案 §29 设计债，保留常量便于未来独立化）</summary>
+        public const string SFX_GIFT_T6 = "sfx_gift_t5_airdrop";
+
+        // audit-r10 清理：GiftNotificationUI 已删除（见 §28.3），对应 6 个别名常量
+        // SFX_GIFT_T2_APPEAR / T3_LAND / T3_EXPLODE / T4_CHARGE / T5_LAND / T5_EPIC
+        // 及其 mp3 资源 (从未交付) 全部移除，统一走 SFX_GIFT_T1-T6 主轨。
 
         // ============================================================
         // SFX — 昼夜切换
@@ -156,19 +151,19 @@ namespace DrscfZ.Core
         /// <summary>胜利</summary>
         public const string SFX_VICTORY = "victory";
 
-        /// <summary>击退</summary>
+        /// <summary>[Legacy 角力游戏遗留] 击退 — 当前项目未使用，保留兼容</summary>
         public const string SFX_PUSHBACK = "pushback";
 
         /// <summary>UI点击音效</summary>
         public const string SFX_UI_CLICK = "ui_click";
 
-        /// <summary>单位出生</summary>
+        /// <summary>单位出生（Worker 派遣到工位时播放）</summary>
         public const string SFX_UNIT_SPAWN = "unit_spawn";
 
-        /// <summary>推进中</summary>
+        /// <summary>[Legacy 角力游戏遗留] 推进中 — 当前项目未使用，保留兼容</summary>
         public const string SFX_PUSHING = "pushing";
 
-        /// <summary>强力推进</summary>
+        /// <summary>[Legacy 角力游戏遗留] 强力推进 — 当前项目未使用，保留兼容</summary>
         public const string SFX_PUSH_FORCE = "push_force";
 
         /// <summary>升级</summary>

@@ -187,6 +187,9 @@ namespace DrscfZ.UI
             // 保险：显示时再订阅一次（Awake 顺序若早于 NetworkManager 初始化时会跳过，此处兜底）
             TrySubscribeNet();
 
+            // audit-r10 §29：结算面板出现 SFX（翻页声）
+            DrscfZ.Systems.AudioManager.Instance?.PlaySFX(DrscfZ.Core.AudioConstants.SFX_UI_SETTLEMENT);
+
             // audit-r6 P1-F8：§17.16 登记 A 类 priority=80（最高）；其他 A 类（GateUpgradeConfirm 75 / Roulette 70 / BuildVote 60）自动被抢占
             if (!_modalRegistered)
             {

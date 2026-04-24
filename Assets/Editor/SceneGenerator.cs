@@ -2258,12 +2258,11 @@ namespace DrscfZ.Editor
                 AssetDatabase.DeleteAsset(sdfPath);
             }
 
-            // 查找中文 TTF 字体（按优先级）
+            // audit-r10：字体统一 Alibaba-3-85-Bold（用户规范）；AlibabaPuHuiTi-2-75-SemiBold 是 ChineseFont SDF 的历史源，保留兼容。
+            // 其他旧 TTF（DingTalk / 优设标题黑 / AlimamaFangYuanTi / PingFang / PerfectDOS / Globerx / LiberationSans）audit-r10 已从 Resources/ 删除。
             string[] fontPaths = {
-                "Assets/Resources/AlibabaPuHuiTi-2-75-SemiBold.ttf",
-                "Assets/Resources/DingTalk JinBuTi.ttf",
-                "Assets/Resources/优设标题黑.ttf",
-                "Assets/Resources/AlimamaFangYuanTiVF-Thin.ttf",
+                "Assets/Resources/Fonts/AlibabaPuHuiTi-3-85-Bold.otf",       // 当前主字体
+                "Assets/Resources/AlibabaPuHuiTi-2-75-SemiBold.ttf",          // ChineseFont SDF 历史源（保留兼容）
             };
 
             Font sourceFont = null;

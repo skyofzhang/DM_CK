@@ -208,18 +208,30 @@ namespace DrscfZ.UI
             }
         }
 
+        // §17.16 Modal 互斥：AnnouncementUI 视作 B 类 modal（非阻塞公告，与同级 B 类排队）。
+        // id 固定 "announcement"：同时只一个公告在屏，新公告覆盖旧公告（StopCoroutine + 重新入队）。
+        private const string ModalId = "announcement";
+
         /// <summary>
         /// 显示公告（自动隐藏）
         /// </summary>
         public void ShowAnnouncement(string main, string sub, Color color, float duration)
         {
             if (_currentAnnouncement != null)
+            {
                 StopCoroutine(_currentAnnouncement);
+                // 覆盖旧公告：先释放旧 Modal slot，避免孤儿占位。
+                ModalRegistry.ReleaseB(ModalId);
+            }
+            ModalRegistry.RequestB(ModalId);
             _currentAnnouncement = StartCoroutine(AnnouncementRoutine(main, sub, color, duration));
         }
 
         private IEnumerator AnnouncementRoutine(string main, string sub, Color color, float duration)
         {
+            // audit-r10 §29：公告出现播 UI toast SFX（轻微"嗒"声）
+            DrscfZ.Systems.AudioManager.Instance?.PlaySFX(DrscfZ.Core.AudioConstants.SFX_UI_TOAST);
+
             // 确保字体正确加载（解决乱码问题）
             var preferred = LoadBestFont();
             if (preferred != null)
@@ -275,6 +287,7 @@ namespace DrscfZ.UI
 
             HideVisual();
             _currentAnnouncement = null;
+            ModalRegistry.ReleaseB(ModalId);
         }
 
         /// <summary>隐藏视觉，但保持 GameObject 激活（不影响事件订阅）</summary>
@@ -286,6 +299,12 @@ namespace DrscfZ.UI
                 canvasGroup.blocksRaycasts = false;
                 canvasGroup.interactable = false;
             }
+        }
+
+        private void OnDestroy()
+        {
+            // 场景切换 / 对象销毁时兜底释放 Modal slot，防止残留占位。
+            ModalRegistry.ReleaseB(ModalId);
         }
     }
 }
