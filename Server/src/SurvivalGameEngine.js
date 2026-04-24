@@ -29,21 +29,35 @@ const FORTRESS_NEWBIE_PROTECT_DAY = 10;              // §36.5 fortressDay ≤ 1
 //   boss:   { hp, atk }                      — Boss（每天都有，Day1以后出现）
 //   legacy: { monsterId, baseCount, maxCount, beginning, refreshTime } — 波次调度
 // baseCount: 每批生成数量（千军万马感）；maxCount: 单夜上限；beginning: 首波延迟(s)；refreshTime: 批次间隔(s)
+// audit-r8 §34 F4: Boss HP 对数封顶（策划案 L4958-4981）——
+// 原线性曲线 Day10=20000 / Day30=90000 / Day50=250000 对 1-50 人观众存在"打不死 → 观众流失"失衡；
+// 改为对数增长 + Day 30 封顶 20000（+30s/5s 弱点窗口放大 "6" ×5 / T5 AOE ×3 才能收尾）。
+// Boss ATK 保持原值（仅 HP 改动，避免把 B 队压力过度衰减）。
 const WAVE_CONFIGS = [
-  { day: 1,  normal: { hp: 150,  atk: 3,  spd: 2.0, count: 12, waves: 3 }, elite: null,                      boss: { hp: 1000,  atk: 10  }, monsterId: 'X_guai01', baseCount: 8,  maxCount: 25,  beginning: 3, refreshTime: 10 },
-  { day: 2,  normal: { hp: 200,  atk: 4,  spd: 2.2, count: 20, waves: 4 }, elite: { hp: 500,   atk: 8,  count: 1  }, boss: { hp: 2000,  atk: 15  }, monsterId: 'X_guai01', baseCount: 10, maxCount: 35,  beginning: 3, refreshTime: 9  },
-  { day: 3,  normal: { hp: 250,  atk: 5,  spd: 2.5, count: 30, waves: 5 }, elite: { hp: 600,   atk: 10, count: 2  }, boss: { hp: 3000,  atk: 18  }, monsterId: 'X_guai01', baseCount: 12, maxCount: 45,  beginning: 3, refreshTime: 8  },
-  { day: 4,  normal: { hp: 325,  atk: 6,  spd: 2.7, count: 18, waves: 4 }, elite: { hp: 800,   atk: 13, count: 2  }, boss: { hp: 4500,  atk: 22  }, monsterId: 'X_guai01', baseCount: 14, maxCount: 55,  beginning: 2, refreshTime: 8  },
-  { day: 5,  normal: { hp: 400,  atk: 7,  spd: 3.0, count: 22, waves: 4 }, elite: { hp: 1000,  atk: 16, count: 3  }, boss: { hp: 6500,  atk: 27  }, monsterId: 'X_guai01', baseCount: 16, maxCount: 65,  beginning: 2, refreshTime: 7  },
-  { day: 6,  normal: { hp: 500,  atk: 9,  spd: 3.2, count: 28, waves: 5 }, elite: { hp: 1300,  atk: 20, count: 4  }, boss: { hp: 9000,  atk: 33  }, monsterId: 'X_guai01', baseCount: 18, maxCount: 75,  beginning: 2, refreshTime: 7  },
-  { day: 7,  normal: { hp: 600,  atk: 12, spd: 3.5, count: 35, waves: 5 }, elite: { hp: 1750,  atk: 26, count: 5  }, boss: { hp: 14000, atk: 42  }, monsterId: 'X_guai01', baseCount: 20, maxCount: 80,  beginning: 2, refreshTime: 6  },
-  { day: 10, normal: { hp: 750,  atk: 15, spd: 3.8, count: 40, waves: 6 }, elite: { hp: 2200,  atk: 32, count: 6  }, boss: { hp: 20000, atk: 55  }, monsterId: 'X_guai01', baseCount: 25, maxCount: 100, beginning: 2, refreshTime: 6  },
-  { day: 15, normal: { hp: 950,  atk: 20, spd: 4.0, count: 50, waves: 7 }, elite: { hp: 3000,  atk: 40, count: 8  }, boss: { hp: 35000, atk: 70  }, monsterId: 'X_guai01', baseCount: 30, maxCount: 120, beginning: 2, refreshTime: 5  },
-  { day: 20, normal: { hp: 1200, atk: 25, spd: 4.2, count: 60, waves: 8 }, elite: { hp: 4000,  atk: 50, count: 10 }, boss: { hp: 55000, atk: 90  }, monsterId: 'X_guai01', baseCount: 40, maxCount: 150, beginning: 2, refreshTime: 5  },
-  { day: 30, normal: { hp: 1600, atk: 32, spd: 4.5, count: 70, waves: 9 }, elite: { hp: 6000,  atk: 65, count: 12 }, boss: { hp: 90000, atk: 120 }, monsterId: 'X_guai01', baseCount: 50, maxCount: 200, beginning: 2, refreshTime: 4  },
-  { day: 40, normal: { hp: 2200, atk: 40, spd: 4.8, count: 80, waves:10 }, elite: { hp: 9000,  atk: 85, count: 15 }, boss: { hp: 150000,atk: 160 }, monsterId: 'X_guai01', baseCount: 60, maxCount: 250, beginning: 2, refreshTime: 4  },
-  { day: 50, normal: { hp: 3000, atk: 50, spd: 5.0, count: 90, waves:10 }, elite: { hp: 12000, atk: 110,count: 18 }, boss: { hp: 250000,atk: 200 }, monsterId: 'X_guai01', baseCount: 80, maxCount: 300, beginning: 2, refreshTime: 3  },
+  { day: 1,  normal: { hp: 150,  atk: 3,  spd: 2.0, count: 12, waves: 3 }, elite: null,                      boss: { hp: 800,  atk: 10  }, monsterId: 'X_guai01', baseCount: 8,  maxCount: 25,  beginning: 3, refreshTime: 10 },
+  { day: 2,  normal: { hp: 200,  atk: 4,  spd: 2.2, count: 20, waves: 4 }, elite: { hp: 500,   atk: 8,  count: 1  }, boss: { hp: 1500,  atk: 15  }, monsterId: 'X_guai01', baseCount: 10, maxCount: 35,  beginning: 3, refreshTime: 9  },
+  { day: 3,  normal: { hp: 250,  atk: 5,  spd: 2.5, count: 30, waves: 5 }, elite: { hp: 600,   atk: 10, count: 2  }, boss: { hp: 2500,  atk: 18  }, monsterId: 'X_guai01', baseCount: 12, maxCount: 45,  beginning: 3, refreshTime: 8  },
+  { day: 4,  normal: { hp: 325,  atk: 6,  spd: 2.7, count: 18, waves: 4 }, elite: { hp: 800,   atk: 13, count: 2  }, boss: { hp: 3500,  atk: 22  }, monsterId: 'X_guai01', baseCount: 14, maxCount: 55,  beginning: 2, refreshTime: 8  },
+  { day: 5,  normal: { hp: 400,  atk: 7,  spd: 3.0, count: 22, waves: 4 }, elite: { hp: 1000,  atk: 16, count: 3  }, boss: { hp: 5000,  atk: 27  }, monsterId: 'X_guai01', baseCount: 16, maxCount: 65,  beginning: 2, refreshTime: 7  },
+  { day: 6,  normal: { hp: 500,  atk: 9,  spd: 3.2, count: 28, waves: 5 }, elite: { hp: 1300,  atk: 20, count: 4  }, boss: { hp: 6000,  atk: 33  }, monsterId: 'X_guai01', baseCount: 18, maxCount: 75,  beginning: 2, refreshTime: 7  },
+  { day: 7,  normal: { hp: 600,  atk: 12, spd: 3.5, count: 35, waves: 5 }, elite: { hp: 1750,  atk: 26, count: 5  }, boss: { hp: 7000, atk: 42  }, monsterId: 'X_guai01', baseCount: 20, maxCount: 80,  beginning: 2, refreshTime: 6  },
+  { day: 10, normal: { hp: 750,  atk: 15, spd: 3.8, count: 40, waves: 6 }, elite: { hp: 2200,  atk: 32, count: 6  }, boss: { hp: 8000, atk: 55  }, monsterId: 'X_guai01', baseCount: 25, maxCount: 100, beginning: 2, refreshTime: 6  },
+  { day: 15, normal: { hp: 950,  atk: 20, spd: 4.0, count: 50, waves: 7 }, elite: { hp: 3000,  atk: 40, count: 8  }, boss: { hp: 11000, atk: 70  }, monsterId: 'X_guai01', baseCount: 30, maxCount: 120, beginning: 2, refreshTime: 5  },
+  { day: 20, normal: { hp: 1200, atk: 25, spd: 4.2, count: 60, waves: 8 }, elite: { hp: 4000,  atk: 50, count: 10 }, boss: { hp: 14000, atk: 90  }, monsterId: 'X_guai01', baseCount: 40, maxCount: 150, beginning: 2, refreshTime: 5  },
+  { day: 30, normal: { hp: 1600, atk: 32, spd: 4.5, count: 70, waves: 9 }, elite: { hp: 6000,  atk: 65, count: 12 }, boss: { hp: 20000, atk: 120 }, monsterId: 'X_guai01', baseCount: 50, maxCount: 200, beginning: 2, refreshTime: 4  },
+  { day: 40, normal: { hp: 2200, atk: 40, spd: 4.8, count: 80, waves:10 }, elite: { hp: 9000,  atk: 85, count: 15 }, boss: { hp: 20000,atk: 160 }, monsterId: 'X_guai01', baseCount: 60, maxCount: 250, beginning: 2, refreshTime: 4  },
+  { day: 50, normal: { hp: 3000, atk: 50, spd: 5.0, count: 90, waves:10 }, elite: { hp: 12000, atk: 110,count: 18 }, boss: { hp: 20000,atk: 200 }, monsterId: 'X_guai01', baseCount: 80, maxCount: 300, beginning: 2, refreshTime: 3  },
 ];
+
+// audit-r8 §34 F4: Boss 弱点窗口（策划案 L4967-4971）
+//   - 每 30s 暴露 5s 弱点期
+//   - 弱点期：弹幕 "6" 伤害 ×5 / T5 love_explosion AOE ×3（原 200 → 600）
+//   - 弱点启动/结束分别广播 boss_weakness_started / boss_weakness_ended
+//   - 状态 _bossWeaknessNextAt / _bossWeaknessEndAt 在 _enterNight 启动、_enterDay/Boss 死亡时清零
+const BOSS_WEAKNESS_INTERVAL_MS  = 30_000;   // 下次弱点的间隔（从上一次启动起计）
+const BOSS_WEAKNESS_DURATION_MS  = 5_000;    // 弱点持续
+const BOSS_WEAKNESS_DAMAGE_MULT  = 5.0;      // 弹幕"6"对 Boss 伤害倍率
+const BOSS_WEAKNESS_T5_MULT      = 3.0;      // T5 love_explosion 对 Boss 额外倍率
 
 function getWaveConfig(day) {
   let cfg = WAVE_CONFIGS[0];
@@ -712,6 +726,16 @@ class SurvivalGameEngine {
     // F8: 无效指令提示去重 (策划案 §34 F8) —— {`${playerId}:cmd5`|`${playerId}:cmd6day`: true}
     // 每位玩家每种提示类型每局最多显示一次；reset() 清空
     this._shopInvalidCmdHintSent      = {};
+    // audit-r8 §34 F8：切换为单播 invalid_command_hint 协议，沿用同一 Map 作去重键
+    //   （旧键 `${pid}:cmd5` / `${pid}:cmd6day` 与新协议字段 type 语义保持一致）
+
+    // audit-r8 §34 F4: Boss 弱点窗口调度状态（构造期置 0，由 _enterNight 首次激活）
+    //   _bossWeaknessNextAt: 下一次启动弱点的绝对时间（Date.now() ms）；0 = 未启用（idle / 白天 / Boss 已死）
+    //   _bossWeaknessEndAt : 当前弱点结束时间；0 = 无活跃弱点
+    //   _bossWeaknessBroadcastedEnd : 避免 ended 广播重复（每个 weakness 周期只发一次）
+    this._bossWeaknessNextAt          = 0;
+    this._bossWeaknessEndAt           = 0;
+    this._bossWeaknessBroadcastedEnd  = true;
 
     // 点赞统计
     this.totalLikes = 0;
@@ -1160,7 +1184,8 @@ class SurvivalGameEngine {
     const presets = {
       // F5: 困难初始资源统一 200/120/50 (策划案 §34 F5) —— 困难通过消耗速率和怪物强度区分，不通过资源起始量
       // F3: 困难 70 → 40 天 (策划案 §34 F3) —— 抖音直播 4h40min 不现实；Day 40 WAVE_CONFIGS 已有配置
-      easy:   { hpMult: 0.6, cntMult: 0.6, decayMult: 0.7, coalBurnTicks: 10, initFood: 160, initCoal: 96,  initOre: 40,  initGateHp: 800,  totalDays: 30, poolNightBase: 300, dayDuration: 120, nightDuration: 120 },
+      // audit-r8 §34 F5：Easy 初始资源也统一 200/120/50（对齐策划案"所有难度统一"口径）；难度差异通过 decayMult/hpMult/cntMult 表达，非资源起始量
+      easy:   { hpMult: 0.6, cntMult: 0.6, decayMult: 0.7, coalBurnTicks: 10, initFood: 200, initCoal: 120, initOre: 50,  initGateHp: 800,  totalDays: 30, poolNightBase: 300, dayDuration: 120, nightDuration: 120 },
       normal: { hpMult: 1.0, cntMult: 1.0, decayMult: 1.0, coalBurnTicks: 7,  initFood: 200, initCoal: 120, initOre: 50,  initGateHp: 1000, totalDays: 50, poolNightBase: 500, dayDuration: 120, nightDuration: 120 },
       // §34 F5 audit-r4：困难初始资源统一 200/120/50（与 normal 持平）；城门 HP 仍 1500，怪物 hp/cnt/decay 倍率维持，通过消耗速率和强度区分而非资源起始量
       hard:   { hpMult: 1.5, cntMult: 1.5, decayMult: 1.5, coalBurnTicks: 5,  initFood: 200, initCoal: 120, initOre: 50,  initGateHp: 1500, totalDays: 40, poolNightBase: 800, dayDuration: 120, nightDuration: 120 },
@@ -1616,18 +1641,27 @@ class SurvivalGameEngine {
 
     const cmd = parseInt(content_trim);
 
-    // F8: 无效指令提示 (策划案 §34 F8) —— 防止观众刷"5"或白天"6"时沉默以为游戏坏了
-    // 每位玩家每种提示类型每局最多一次；匿名（无 playerId）静默丢弃
+    // F8: 无效指令提示 (策划案 §34 F8, L5012-5023) —— 防止观众刷"5"或白天"6"时沉默以为游戏坏了
+    // audit-r8: 从 broadcast bobao 改为 _sendToPlayer(invalid_command_hint) 单播
+    //   - 单播：仅该观众看到自己发错 "5" 的提示，避免 bobao 刷满整个直播间
+    //   - 去重：每位玩家每种提示类型每局最多一次；匿名（无 playerId）静默丢弃
+    //   - 消息类型：invalid_command_hint（新协议）
     if (playerId) {
       if (content_trim === '5') {
         const key = `${playerId}:cmd5`;
         if (!this._shopInvalidCmdHintSent[key]) {
           this._shopInvalidCmdHintSent[key] = true;
-          this.broadcast({
-            type: 'bobao',
+          const msg = {
+            type: 'invalid_command_hint',
             timestamp: Date.now(),
-            data: { message: `${playerName || playerId}：指令 5 不存在，发 1-4 采集资源或发 6 攻击怪物` },
-          });
+            data: {
+              type: 'invalid_cmd_5',
+              msg:  '指令 5 不存在，发 1-4 采集资源或发 6 攻击怪物',
+              ttl:  4000,
+            },
+          };
+          // 优先单播；未找到 ws 时兜底广播（观众尚未绑定 ws 的冷启动场景）
+          if (!this._sendToPlayer(playerId, msg)) this._broadcast(msg);
         }
         return;
       }
@@ -1635,11 +1669,16 @@ class SurvivalGameEngine {
         const key = `${playerId}:cmd6day`;
         if (!this._shopInvalidCmdHintSent[key]) {
           this._shopInvalidCmdHintSent[key] = true;
-          this.broadcast({
-            type: 'bobao',
+          const msg = {
+            type: 'invalid_command_hint',
             timestamp: Date.now(),
-            data: { message: `${playerName || playerId}：白天是采集时间！发 1-4 分配矿工` },
-          });
+            data: {
+              type: 'wrong_phase_6',
+              msg:  '白天是采集时间！发 1-4 分配矿工',
+              ttl:  4000,
+            },
+          };
+          if (!this._sendToPlayer(playerId, msg)) this._broadcast(msg);
         }
         return;
       }
@@ -2072,12 +2111,18 @@ class SurvivalGameEngine {
         // 爱的爆炸：全体怪物AOE伤害200、所有矿工HP全满恢复、城门+200HP
         // §34.4 E3b legend 里程碑（10000）：AOE 伤害 ×_milestoneGlobalMult（+20%）
         const aoeDmg = Math.round(200 * (this._milestoneGlobalMult || 1.0));
+        // audit-r8 §34 F4: Boss 弱点窗口激活时 T5 AOE 对 Boss 额外 ×3（普通怪保持原值）
+        const bossWeaknessActive = this._bossWeaknessEndAt > 0 && Date.now() < this._bossWeaknessEndAt;
         const killed = [];
         for (const [mid, m] of this._activeMonsters) {
-          m.currentHp -= aoeDmg;
+          // Boss 在弱点期 → 本次 AOE 额外 ×3；普通/精英仍用 aoeDmg
+          const perMonsterDmg = (m.type === 'boss' && bossWeaknessActive)
+            ? Math.round(aoeDmg * BOSS_WEAKNESS_T5_MULT)
+            : aoeDmg;
+          m.currentHp -= perMonsterDmg;
           // §34.3 B2：AOE 伤害每击累加到发起者（按怪物剩余 HP 截断上限，避免"伤害"大于实际 HP）
           if (playerId) {
-            const dealt = Math.min(aoeDmg, Math.max(0, aoeDmg + m.currentHp)); // pre-damage HP 与 aoeDmg 取 min
+            const dealt = Math.min(perMonsterDmg, Math.max(0, perMonsterDmg + m.currentHp)); // pre-damage HP 与 perMonsterDmg 取 min
             this._damageLeaderboard[playerId] = (this._damageLeaderboard[playerId] || 0) + dealt;
           }
           if (m.currentHp <= 0) killed.push(mid);
@@ -2090,6 +2135,12 @@ class SurvivalGameEngine {
           this._broadcast({ type: 'monster_died', data: { monsterId: mid, monsterType: m.type, killerId: playerId } });
           // §31 guard/summoner 死亡后置钩子
           this._postMonsterDeathHooks(mid, m.type, m.variant);
+          // audit-r8 §34 F4 WARNING 防御：Boss 被 T5 AOE 击杀时清零弱点字段（避免 _tick 残留 started/ended 广播）
+          if (m && m.type === 'boss') {
+            this._bossWeaknessNextAt = 0;
+            this._bossWeaknessEndAt = 0;
+            this._bossWeaknessBroadcastedEnd = true;
+          }
         }
         effects.aoeDamage     = aoeDmg;
         effects.monstersKilled = killed.length;
@@ -2658,6 +2709,13 @@ class SurvivalGameEngine {
     this._activeMonsters.clear();
     this.state         = 'day';
 
+    // audit-r8 §34 F4: 入白天 → 清零 Boss 弱点窗口（白天无 Boss，不应触发 weakness tick）
+    //   不发 boss_weakness_ended（客户端 phase_changed=day 自行隐藏 UI），
+    //   避免与 night_cleared/boss_killed 路径的 ended 广播互相覆盖。
+    this._bossWeaknessNextAt         = 0;
+    this._bossWeaknessEndAt          = 0;
+    this._bossWeaknessBroadcastedEnd = true;
+
     // §34.3 B10a：初始化本日贡献统计（仅白天）
     this._dayStats = { contributions: {}, totalDay: 0 };
     // 进入白天 → 重置上次广播的 day_preview 编号，允许新白天再次预告
@@ -2787,6 +2845,14 @@ class SurvivalGameEngine {
     // §30.3 阶10 传奇免死每晚 1 次 → 重置标记
     this._legendReviveUsed = {};
     this._updateDynamicDifficulty();
+
+    // audit-r8 §34 F4: 重置 Boss 弱点窗口调度
+    //   首次 "30s 后" 启动弱点；_enterDay / _endNight / Boss 死亡路径清零
+    //   注：此刻 Boss 尚未 spawn（_initActiveMonsters 在下方），_tick 会在首个 30s 后才检测到 Boss 是否在场
+    //   和平夜 _peaceNightSkipSpawn=true 时弱点调度仍保持激活，但 _tick 里 findAliveBoss 找不到 → no-op
+    this._bossWeaknessNextAt          = Date.now() + BOSS_WEAKNESS_INTERVAL_MS;
+    this._bossWeaknessEndAt           = 0;
+    this._bossWeaknessBroadcastedEnd  = true;  // 初始视为"已结束"，避免首 tick 误发 ended
 
     // §31 每晚开始清零卫兵计数 + 清除上一晚的冻结状态（夜切换视为完全解冻，避免跨夜残留）
     this._guardsAlive = 0;
@@ -3002,21 +3068,58 @@ class SurvivalGameEngine {
 
     const rankings = this._buildRankings();
 
-    // ===== 积分池分配（§12.3 / §16.6）=====
+    // ===== 积分池分配（§12.3 / §16.6 / audit-r8 §34 F6）=====
     // 🆕 v1.26 固定 0.3（无胜利分支）；剩余流入下一周期（上限=本局积分池 50%）
     const payoutRate  = 0.3;
     const payoutTotal = Math.floor(this.scorePool * payoutRate);
     const rawCarryover = this.scorePool - payoutTotal;
     this._carryoverPool = Math.min(rawCarryover, Math.floor(this.scorePool * 0.5));
 
-    // 排名权重（Top10：20/16/12/10/8/7/6/5/4/3，共91份）
+    // audit-r8 §34 F6: 双档分配（策划案 L4995-5000）
+    //   - Top 10 瓜分 70%（现有权重 20/16/12/10/8/7/6/5/4/3 共 91 份）
+    //   - 剩余 30% 按贡献比例分配给 contribution ≥ 100 的参与者（不含 Top10）
+    //     门槛过滤 AFK 白嫖；若无合格参与者 → 30% 池并入 carryover 流入下一周期
+    //   - 因 _buildRankings 只返回 Top10 → 从 this.contributions 全量重算 tail
+    const TOP10_SHARE_RATIO   = 0.70;
+    const TAIL_MIN_CONTRIB    = 100;
+    const top10Pool = Math.floor(payoutTotal * TOP10_SHARE_RATIO);
+    const tailPool  = payoutTotal - top10Pool; // 保持总和等于 payoutTotal，避免浮点截断流失
+
+    // ---- Top 10: 70% × 权重 ----
     const weights     = [20, 16, 12, 10, 8, 7, 6, 5, 4, 3];
-    const totalWeight = weights.slice(0, rankings.length).reduce((s, w) => s + w, 0) || 1;
+    const top10Count  = Math.min(rankings.length, weights.length);
+    const totalWeight = weights.slice(0, top10Count).reduce((s, w) => s + w, 0) || 1;
+    const top10Ids    = new Set(rankings.map(r => r.playerId));
     rankings.forEach((r, i) => {
-      r.payout = Math.floor(payoutTotal * (weights[i] || 1) / totalWeight);
+      r.payout = (i < top10Count) ? Math.floor(top10Pool * weights[i] / totalWeight) : 0;
     });
 
-    console.log(`[SurvivalEngine] ScorePool=${Math.round(this.scorePool)}, payout=${payoutTotal}(${(payoutRate*100)|0}%), carryover=${this._carryoverPool}`);
+    // ---- Tail 30%: 从 this.contributions 全量取 Top10 之外 + contribution ≥ 100 ----
+    //   {playerId → share} 单独广播字段 contributionRewards，客户端可另行展示
+    const tailEligibleList = Object.entries(this.contributions)
+      .filter(([pid, c]) => !top10Ids.has(pid) && (c || 0) >= TAIL_MIN_CONTRIB);
+    const tailTotalContrib = tailEligibleList.reduce((s, [, c]) => s + (c || 0), 0);
+    const contributionRewards = {};
+    let tailAssigned = 0;
+    if (tailEligibleList.length > 0 && tailTotalContrib > 0) {
+      tailEligibleList.forEach(([pid, c]) => {
+        const share = Math.floor(tailPool * (c || 0) / tailTotalContrib);
+        if (share > 0) {
+          contributionRewards[pid] = share;
+          tailAssigned += share;
+        }
+      });
+    }
+    // tail 剩余残差（整除舍去）+ 无合格参与者时整个 tailPool → 并入 carryover
+    const tailRemainder = tailPool - tailAssigned;
+    if (tailRemainder > 0) {
+      this._carryoverPool = Math.min(
+        this._carryoverPool + tailRemainder,
+        Math.floor(this.scorePool * 0.5)
+      );
+    }
+
+    console.log(`[SurvivalEngine] ScorePool=${Math.round(this.scorePool)}, payout=${payoutTotal}(${(payoutRate*100)|0}%), top10=${top10Pool}(${top10Count}p), tail=${tailPool}(${tailEligibleList.length}p, assigned=${tailAssigned}), carryover=${this._carryoverPool}`);
 
     // §36.5 堡垒日降级（manual 跳过）：新手保护 / 10% demote 公式 + room_failed 广播
     //   注意：先调 _onRoomFail（会修改 this.fortressDay）再读 fortressDayAfter
@@ -3030,6 +3133,7 @@ class SurvivalGameEngine {
     const newbieProtected  = fortressDayBefore <= FORTRESS_NEWBIE_PROTECT_DAY;
 
     // §16.6 data 字段（key 顺序严格按策划案表；移除 result，新增 fortressDay*/newbieProtected）
+    // audit-r8 §34 F6: 新增 contributionRewards / top10Pool / tailPool / tailEligibleCount
     const data = {
       reason,
       dayssurvived:      this.currentDay,
@@ -3043,6 +3147,11 @@ class SurvivalGameEngine {
       distributed:       payoutTotal,
       carryover:         this._carryoverPool,
       payoutRate,
+      // audit-r8 §34 F6 双档分配披露
+      top10Pool,                               // Top10 瓜分总额
+      tailPool,                                // 剩余 30% 池总额
+      tailEligibleCount: tailEligibleList.length, // 参与 tail 分配的人数
+      contributionRewards,                     // { playerId → share }（仅非 Top10 且 ≥100 贡献者）
     };
 
     // Fix A (组 B Reviewer P0)：settlement_highlights 必须 **先** 于 survival_game_ended 广播。
@@ -3220,6 +3329,43 @@ class SurvivalGameEngine {
         this._supporterAtkBuffTimer = Math.max(0, this._supporterAtkBuffTimer - 1);
         if (this._supporterAtkBuffTimer <= 0) {
           this._supporterAtkBuff = 0;
+        }
+      }
+
+      // audit-r8 §34 F4: Boss 弱点窗口调度（夜晚 + Boss 存活 才触发）
+      //   - 距 _bossWeaknessNextAt 到点 → 广播 boss_weakness_started，设 endAt
+      //   - 距 _bossWeaknessEndAt 超过 → 广播 boss_weakness_ended 一次（防重）
+      if (this.state === 'night' && this._bossWeaknessNextAt > 0) {
+        const nowMs  = Date.now();
+        const boss   = this._findAliveBoss();
+        if (boss) {
+          // 触发新一轮弱点
+          if (nowMs >= this._bossWeaknessNextAt && nowMs >= this._bossWeaknessEndAt) {
+            this._bossWeaknessEndAt          = nowMs + BOSS_WEAKNESS_DURATION_MS;
+            this._bossWeaknessNextAt         = nowMs + BOSS_WEAKNESS_INTERVAL_MS;
+            this._bossWeaknessBroadcastedEnd = false;
+            this._broadcast({
+              type: 'boss_weakness_started',
+              timestamp: nowMs,
+              data: {
+                bossId:      boss.id,
+                durationMs:  BOSS_WEAKNESS_DURATION_MS,
+                damageMult:  BOSS_WEAKNESS_DAMAGE_MULT,
+                t5Mult:      BOSS_WEAKNESS_T5_MULT,
+              },
+            });
+            console.log(`[SurvivalEngine] boss_weakness_started: bossId=${boss.id} duration=${BOSS_WEAKNESS_DURATION_MS}ms`);
+          }
+          // 弱点结束 → 单次广播 ended
+          if (this._bossWeaknessEndAt > 0 && nowMs >= this._bossWeaknessEndAt && !this._bossWeaknessBroadcastedEnd) {
+            this._bossWeaknessBroadcastedEnd = true;
+            this._broadcast({
+              type: 'boss_weakness_ended',
+              timestamp: nowMs,
+              data: { bossId: boss.id },
+            });
+            console.log(`[SurvivalEngine] boss_weakness_ended: bossId=${boss.id}`);
+          }
         }
       }
 
@@ -4002,6 +4148,17 @@ class SurvivalGameEngine {
   /**
    * 处理玩家攻击指令（夜晚限定）
    */
+  /**
+   * audit-r8 §34 F4: 找当前存活的 Boss（用于弱点窗口调度）
+   * @returns {object | null} Boss monster 对象，或 null
+   */
+  _findAliveBoss() {
+    for (const m of this._activeMonsters.values()) {
+      if (m && m.type === 'boss' && m.currentHp > 0) return m;
+    }
+    return null;
+  }
+
   _handleAttack(secOpenId, nickname) {
     const monsters = [...this._activeMonsters.values()];
     if (monsters.length === 0) return;
@@ -4032,6 +4189,12 @@ class SurvivalGameEngine {
     // §34.4 E6 hunters：玩家对 Boss 伤害 × 2（仅夜晚且 modifier=hunters）
     if (target.type === 'boss' && this._currentNightModifier && this._currentNightModifier.id === 'hunters') {
       damage *= MODIFIER_HUNTERS_BOSS_DMG_MULT;
+    }
+
+    // audit-r8 §34 F4: Boss 弱点窗口激活时 "6" 对 Boss 伤害 ×5（弹幕收尾口径）
+    //   弱点窗口由 _tick 广播 boss_weakness_started；此处仅读 _bossWeaknessEndAt 截止时间
+    if (target.type === 'boss' && this._bossWeaknessEndAt > 0 && Date.now() < this._bossWeaknessEndAt) {
+      damage *= BOSS_WEAKNESS_DAMAGE_MULT;
     }
 
     target.currentHp -= damage;
@@ -4110,6 +4273,11 @@ class SurvivalGameEngine {
 
       // Boss 击杀 → 提前结束当夜
       if (target.type === 'boss') {
+        // audit-r8 §34 F4: Boss 死亡 → 清零弱点调度，避免 _tick 在 Boss 已死后继续触发 started
+        this._bossWeaknessNextAt         = 0;
+        this._bossWeaknessEndAt          = 0;
+        this._bossWeaknessBroadcastedEnd = true;
+
         this._broadcast({
           type: 'night_cleared',
           data: { reason: 'boss_killed' }

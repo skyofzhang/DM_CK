@@ -214,6 +214,11 @@ namespace DrscfZ.Survival
         public event Action<GiftSkinAppliedData>           OnGiftSkinApplied;           // §30.7 T4/T5/T6 限时皮肤激活
         public event Action<GiftSkinExpiredData>           OnGiftSkinExpired;           // §30.7 限时皮肤到期
 
+        // audit-r8 客户端补齐（§34 F 层）
+        public event Action<BossWeaknessStartedData> OnBossWeaknessStarted; // §34 F4 Boss 露出弱点 5s
+        public event Action<BossWeaknessEndedData>   OnBossWeaknessEnded;   // §34 F4 Boss 弱点结束
+        public event Action<InvalidCommandHintData>  OnInvalidCommandHint;  // §34 F8 无效指令单播提示
+
         /// <summary>§34 B9 最近一次收到的 playerStats（供 UI 查询，初始为 null）。
         /// 收到第一条 work_command_response.playerStats 后 PersonalContribUI 常驻显示。</summary>
         public PlayerStatsData LastPlayerStats { get; private set; }
@@ -1062,6 +1067,36 @@ namespace DrscfZ.Survival
                             WorkerManager.Instance.HandleGiftSkinExpired(gse.playerId);
                     }
                     break;
+
+                // audit-r8 §34 F4 Boss 露出弱点
+                case SurvivalMessageProtocol.BossWeaknessStarted:
+                    var bws = JsonUtility.FromJson<BossWeaknessStartedData>(dataJson);
+                    if (bws != null)
+                    {
+                        Debug.Log($"[SGM] boss_weakness_started bossId={bws.bossId} durMs={bws.durationMs} dmgMult={bws.damageMult} t5Mult={bws.t5Mult}");
+                        OnBossWeaknessStarted?.Invoke(bws);
+                    }
+                    break;
+
+                // audit-r8 §34 F4 Boss 弱点结束
+                case SurvivalMessageProtocol.BossWeaknessEnded:
+                    var bwe = JsonUtility.FromJson<BossWeaknessEndedData>(dataJson);
+                    if (bwe != null)
+                    {
+                        Debug.Log($"[SGM] boss_weakness_ended bossId={bwe.bossId}");
+                        OnBossWeaknessEnded?.Invoke(bwe);
+                    }
+                    break;
+
+                // audit-r8 §34 F8 无效指令提示（单播）
+                case SurvivalMessageProtocol.InvalidCommandHint:
+                    var ich = JsonUtility.FromJson<InvalidCommandHintData>(dataJson);
+                    if (ich != null)
+                    {
+                        Debug.Log($"[SGM] invalid_command_hint type={ich.type} msg={ich.msg} ttl={ich.ttl}");
+                        OnInvalidCommandHint?.Invoke(ich);
+                    }
+                    break;
             }
         }
 
@@ -1809,7 +1844,8 @@ namespace DrscfZ.Survival
             if (data == null) return;
 
             // 🆕 v1.22 §10 主路径：新签名含 tierName/features/hpBonus
-            int hpBonus = data.hpBonus > 0 ? data.hpBonus : 20; // 缺省兜底
+            // audit-r8：Lv6 回满时服务端计算 gateMaxHp-gateHp，可能 =0（城门满血升级）；不用 20 兜底避免错误加血
+            int hpBonus = data.hpBonus >= 0 ? data.hpBonus : 0;
             cityGateSystem?.HandleUpgrade(data.newLevel, data.newMaxHp, hpBonus, data.tierName, data.newFeatures);
 
             string tierLabel = string.IsNullOrEmpty(data.tierName) ? "" : $"「{data.tierName}」";

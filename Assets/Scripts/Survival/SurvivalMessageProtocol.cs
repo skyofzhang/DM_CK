@@ -203,7 +203,12 @@ namespace DrscfZ.Survival
         public const string ChangeDifficultyFailed   = "change_difficulty_failed";   // S→C：§34.4 E9 切换难度失败（not_broadcaster/wrong_phase/unknown_difficulty/season_frozen）
         public const string ChangeDifficultyAccepted = "change_difficulty_accepted"; // S→C：§34.4 E9 切换难度排队成功
         public const string DailyTierDecay           = "daily_tier_decay";           // S→C：§30.4 每日不活跃玩家等级衰减 ×0.95
-        public const string GiftSkinApplied          = "gift_skin_applied";          // S→C：§30.7 T4/T5/T6 限时皮肤激活（G01/G02/G03）
+        public const string GiftSkinApplied          = "gift_skin_applied";          // S→C：§30.7 T4/T5/T6 限时皮肤激活(G01/G02/G03)
         public const string GiftSkinExpired          = "gift_skin_expired";          // S→C：§30.7 限时皮肤到期（昼夜切换结束）
+
+        // ----- audit-r8 客户端补齐（🆕 v1.27+） -----
+        public const string BossWeaknessStarted = "boss_weakness_started"; // S→C：§34 F4 Boss 露出弹幕弱点 5s（发起 6 倍伤害 / T5 AOE 3 倍）
+        public const string BossWeaknessEnded   = "boss_weakness_ended";   // S→C：§34 F4 Boss 弱点期结束
+        public const string InvalidCommandHint  = "invalid_command_hint";  // S→C：§34 F8 指令无效单播提示（invalid_cmd_5 / wrong_phase_6）
     }
 }

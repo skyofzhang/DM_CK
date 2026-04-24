@@ -1707,4 +1707,37 @@ namespace DrscfZ.Survival
         public string playerId;
         public string skinId;    // "G01" | "G02" | "G03"（客户端可用于跑马灯 / 日志文案细节）
     }
+
+    // ==================== audit-r8 §34 F 层补齐 ====================
+
+    /// <summary>§34 F4 Boss 露出弱点（type=boss_weakness_started，S→C，广播）。
+    /// 触发条件：玩家对数 HP 轰击命中关键节点，Boss 露出破绽 5s。
+    /// 期间：弹幕 "6" 伤害 ×5，T5 AOE 伤害 ×3；服务端倒计时结束后自动 ended 广播。</summary>
+    [Serializable]
+    public class BossWeaknessStartedData
+    {
+        public string bossId;
+        public int    durationMs;   // 默认 5000
+        public float  damageMult;   // 弹幕 6 倍率，默认 5.0
+        public float  t5Mult;       // T5 AOE 倍率，默认 3.0
+    }
+
+    /// <summary>§34 F4 Boss 弱点结束（type=boss_weakness_ended，S→C，广播）。
+    /// 由服务端 durationMs 到期触发；客户端收到后立即隐藏弱点 UI。</summary>
+    [Serializable]
+    public class BossWeaknessEndedData
+    {
+        public string bossId;
+    }
+
+    /// <summary>§34 F8 指令无效提示（type=invalid_command_hint，S→C，单播）。
+    /// - invalid_cmd_5：玩家发送未配置的弹幕指令（如 7/8/9 数字超范围）
+    /// - wrong_phase_6：玩家在错误阶段发送指令（如白天发 6 攻击、夜晚发 1 采集食物）</summary>
+    [Serializable]
+    public class InvalidCommandHintData
+    {
+        public string type;  // "invalid_cmd_5" | "wrong_phase_6"
+        public string msg;   // 中文提示文本，服务端本地化后单播
+        public int    ttl;   // 毫秒，默认 4000
+    }
 }
