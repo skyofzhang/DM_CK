@@ -29,7 +29,7 @@ public class FixStreakInfoText
         }
 
         // Load Chinese font
-        var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+        var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
         if (font != null) tmp.font = font;
 
         tmp.text = "";

@@ -15,7 +15,7 @@ public class SetupRankingTabs
         var panel = canvas.transform.Find("SurvivalRankingPanel");
         if (panel == null) { Debug.LogError("SurvivalRankingPanel not found"); return; }
 
-        var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+        var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
 
         // ── 删除旧的 tab 按钮（如果存在）──
         var oldTab1 = panel.Find("TabContribution");

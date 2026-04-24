@@ -35,7 +35,7 @@ public static class FixResourceRankRows
         }
 
         // 字体
-        var font    = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+        var font    = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
         var fontMat = Resources.Load<Material>("Fonts/ChineseFont SDF - Outline");
 
         // 创建/复用行，收集 TMP 引用

@@ -21,7 +21,7 @@ public class SetupDifficultyUI
         var contentBox = bgOverlay.Find("ContentBox");
         if (contentBox == null) { Debug.LogError("ContentBox not found"); return; }
 
-        var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+        var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
 
         // ── 加载素材 ──
         var panelBgSprite = AssetDatabase.LoadAssetAtPath<Sprite>("Assets/Art/UI/Difficulty/difficulty_panel_bg.png");

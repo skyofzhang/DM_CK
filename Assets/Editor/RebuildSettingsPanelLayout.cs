@@ -22,7 +22,7 @@ public class RebuildSettingsPanelLayout
         var panelTr = canvas.transform.Find("SurvivalSettingsPanel");
         if (panelTr == null) { Debug.LogError("[Rebuild] SurvivalSettingsPanel 未找到"); return; }
 
-        var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+        var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
         if (font == null) Debug.LogWarning("[Rebuild] ChineseFont SDF 未找到，部分字体可能乱码");
 
         // ── 1. 修复 BGMRow ──

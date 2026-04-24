@@ -22,7 +22,7 @@ public class SyncConnectPanelStyle
         }
         if (cp == null) { Debug.LogError("ConnectPanel not found"); return; }
 
-        var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+        var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
         var outlineMat = AssetDatabase.LoadAssetAtPath<Material>("Assets/Resources/Fonts/ChineseFont SDF - Outline.mat");
 
         // ── 1. 背景：使用与 LoadingScreen 相同的冬日背景图 ──

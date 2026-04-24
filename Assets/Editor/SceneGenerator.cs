@@ -2509,11 +2509,13 @@ namespace DrscfZ.Editor
                 mainText.outlineColor = new Color32(20, 10, 0, 230);
                 mainText.richText = true;
 
-                // 使用 LiberationSans（有数字）+ 中文fallback
-                var latinFont = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(
-                    "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF.asset");
+                // audit-r6 P1 (字体规范)：改用 Alibaba 主 + ChineseFont fallback（替代 LiberationSans）
+                var latinFont = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF")
+                               ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+                // 老 LiberationSans 保留硬盘 AssetDatabase fallback（若 Alibaba/ChineseFont 缺失仍可兜底）
                 if (latinFont == null)
-                    latinFont = Resources.Load<TMP_FontAsset>("Fonts & Materials/LiberationSans SDF");
+                    latinFont = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(
+                        "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF.asset");
                 var cjkFont = GetOrCreateChineseFontAsset();
                 if (latinFont != null)
                 {

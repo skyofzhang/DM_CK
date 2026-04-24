@@ -23,7 +23,7 @@ public class AddRankingHeader
         var oldHeader = panel.Find("HeaderRow");
         if (oldHeader != null) Object.DestroyImmediate(oldHeader.gameObject);
 
-        var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+        var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
 
         // 创建 HeaderRow — 放在 RowContainer 上方
         // RowContainer: anchorMin=(0,0.1) anchorMax=(1,0.85)

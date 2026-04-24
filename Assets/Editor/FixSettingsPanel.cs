@@ -18,7 +18,7 @@ public class FixSettingsPanel
         var panelTr = canvas.transform.Find("SurvivalSettingsPanel");
         if (panelTr == null) { Debug.LogError("[Fix] SurvivalSettingsPanel 未找到"); return; }
 
-        var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+        var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
         if (font == null) Debug.LogWarning("[Fix] ChineseFont SDF 未找到");
 
         // ── 1. 面板尺寸：放大到 780×620，居中 ──

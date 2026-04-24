@@ -220,12 +220,16 @@ namespace DrscfZ.EditorTools
             // (propName, featureId, placeholderLabel, placeholderPosY) — placeholder 仅在字段未绑定时使用
             var mapping = new (string propName, string featureId, string label, float posY)[]
             {
-                ("_boostBtn",       "broadcaster_boost",  "加", 60f),
-                ("_eventBtn",       "broadcaster_boost",  "浪", -60f),
-                ("_rouletteButton", "roulette",           "盘", 180f),
-                ("_shopTabButton",  "shop",               "购", -180f),
-                ("_tribeWarButton", "tribe_war",          "战", -300f),
-                ("_btnUpgradeGate", "gate_upgrade_basic", "升", 300f),
+                ("_boostBtn",            "broadcaster_boost",  "加", 60f),
+                ("_eventBtn",            "broadcaster_boost",  "浪", -60f),
+                ("_rouletteButton",      "roulette",           "盘", 180f),
+                ("_shopTabButton",       "shop",               "购", -180f),
+                ("_tribeWarButton",      "tribe_war",          "战", -300f),
+                ("_btnUpgradeGate",      "gate_upgrade_basic", "升", 300f),
+                // audit-r6 P0-F3: §36.12 补齐 3 个缺失的 feature 入口
+                ("_buildingButton",      "building",           "建", -420f),
+                ("_expeditionButton",    "expedition",         "探", -540f),
+                ("_supporterModeButton", "supporter_mode",     "援", -660f),
             };
 
             // 找到一个已存在的 Button GO 作为模板（用于为未绑定字段建占位）

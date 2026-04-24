@@ -45,7 +45,7 @@ public class Temp_RestoreSimulateBtn
         var tmp = btnTr.GetComponentInChildren<TextMeshProUGUI>(true);
         if (tmp != null)
         {
-            var chFont = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+            var chFont = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
             Undo.RecordObject(tmp, "Restore BtnSimulate Text");
             if (chFont != null) tmp.font = chFont;
             tmp.text      = "模拟弹幕";

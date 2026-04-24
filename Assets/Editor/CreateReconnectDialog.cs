@@ -31,7 +31,7 @@ public class CreateReconnectDialog
         }
 
         // 3. 加载中文字体
-        var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+        var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
         if (font == null)
             Debug.LogWarning("[CreateReconnectDialog] ChineseFont SDF not found, TMP may show box characters.");
 

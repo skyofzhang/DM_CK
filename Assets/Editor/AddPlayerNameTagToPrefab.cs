@@ -76,7 +76,7 @@ public class AddPlayerNameTagToPrefab
             tmpText.overflowMode = TextOverflowModes.Ellipsis;
 
             // 绑定中文字体（必须）
-            var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+            var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
             if (font != null)
             {
                 tmpText.font = font;

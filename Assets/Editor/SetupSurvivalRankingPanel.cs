@@ -25,7 +25,7 @@ public class SetupSurvivalRankingPanel
         if (panelGo == null) { Debug.LogError("[Setup] SurvivalRankingPanel 未找到"); return; }
 
         // ── 3. 加载字体 ──
-        var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+        var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
         if (font == null) Debug.LogWarning("[Setup] ChineseFont SDF 未找到，字体将为默认值");
 
         // ── 4. 修复 TitleText ──

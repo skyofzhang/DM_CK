@@ -89,7 +89,7 @@ public class Setup3DSceneUI
     private static TMP_FontAsset LoadFont()
     {
         // 尝试加载中文字体
-        var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+        var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
         if (font == null)
         {
             // fallback：在 Assets 中找第一个 TMP FontAsset

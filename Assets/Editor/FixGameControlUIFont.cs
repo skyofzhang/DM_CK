@@ -12,7 +12,7 @@ public class FixGameControlUIFont
     static void Run()
     {
         // 加载中文字体
-        var chFont = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+        var chFont = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
         if (chFont == null)
         {
             Debug.LogError("[FixFont] ChineseFont SDF not found at Resources/Fonts/ChineseFont SDF");

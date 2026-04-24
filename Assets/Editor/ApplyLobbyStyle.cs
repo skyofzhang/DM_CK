@@ -15,7 +15,7 @@ public class ApplyLobbyStyle
         var lobby = canvas.transform.Find("LobbyPanel");
         if (lobby == null) { Debug.LogError("LobbyPanel not found"); return; }
 
-        var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+        var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
 
         // ── 按钮素材加载 ──
         var startSprite = AssetDatabase.LoadAssetAtPath<Sprite>("Assets/Art/UI/Buttons/btn_lobby_start.png");

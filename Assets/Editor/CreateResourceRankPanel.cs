@@ -61,7 +61,7 @@ public static class CreateResourceRankPanel
         hlg.padding              = new RectOffset(6, 6, 4, 4);
 
         // ── 字体加载 ──────────────────────────────────────────────────────────
-        var chineseFont    = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+        var chineseFont    = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
         var chineseFontMat = Resources.Load<Material>("Fonts/ChineseFont SDF - Outline");
         if (chineseFont == null)
             Debug.LogWarning("[CreateResourceRankPanel] 未找到 Fonts/ChineseFont SDF，TMP 字体将使用默认值");

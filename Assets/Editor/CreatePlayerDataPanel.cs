@@ -58,7 +58,7 @@ public class CreatePlayerDataPanel
         if (existing != null)
             Undo.DestroyObjectImmediate(existing.gameObject);
 
-        var chineseFont = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+        var chineseFont = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
 
         // ==================== Root Panel (全屏, 初始inactive) ====================
         var panel = CreateGO("PlayerDataPanel", canvas.transform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);

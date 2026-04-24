@@ -24,7 +24,7 @@ public class SetupScrollableRanking
         }
         if (panel == null) { Debug.LogError("SurvivalRankingPanel not found"); return; }
 
-        var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+        var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
         var rowBgSprite = AssetDatabase.LoadAssetAtPath<Sprite>("Assets/Art/UI/Rankings/ranking_row_top1_bg.png");
 
         // ── 1. 删除旧的 RowContainer 和 ScrollArea（如果存在）──

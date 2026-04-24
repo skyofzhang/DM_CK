@@ -478,7 +478,7 @@ namespace DrscfZ.Editor
         // ── 字体
         private static void ApplyChineseFont(TextMeshProUGUI tmp)
         {
-            var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+            var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
             if (font != null) tmp.font = font;
         }
     }
