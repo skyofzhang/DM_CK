@@ -787,6 +787,7 @@ namespace DrscfZ.Survival
         public string buildId;
         public float  progress;       // 0.0 ~ 1.0
         public long   completesAt;    // Unix ms，冗余字段供校准倒计时
+        public long   remainingMs;    // audit-r4 §19.2：服务端每 2s 下发剩余毫秒，UI 可直接显示倒计时
     }
 
     /// <summary>建造完成（type=build_completed）</summary>
@@ -842,18 +843,28 @@ namespace DrscfZ.Survival
 
     // ==================== 主播排行榜（type=streamer_ranking）====================
 
-    /// <summary>主播排行榜单条记录</summary>
+    /// <summary>主播排行榜单条记录（v1.26 重构，audit-r4 补齐客户端字段）
+    /// 服务端 StreamerRankingStore 已升至 v1.26（maxFortressDay / totalCycles / streamerKingTitle），
+    /// 客户端需同步字段才能显示"堡垒之王"称号 + 总周期数统计。
+    /// v1.25 字段（maxDays/totalWins/totalGames/score/maxDifficulty）保留向下兼容。</summary>
     [Serializable]
     public class StreamerRankingEntry
     {
         public int    rank;
         public string streamerId;
-        public string streamerName;    // 主播名
-        public string maxDifficulty;   // "normal" | "hard" | "hell"
-        public int    maxDays;         // 最多坚持天数（最佳完成局）
-        public int    totalWins;       // 总胜场数
-        public int    totalGames;      // 总场次
-        public int    score;           // 排名得分（difficulty_weight × maxDays）
+        public string streamerName;      // 主播名
+
+        // v1.26 新字段（audit-r4 补齐）
+        public int    maxFortressDay;    // 堡垒日最大值（主排序键）
+        public int    totalCycles;       // 总周期数（累计开播局数）
+        public string streamerKingTitle; // "堡垒之王" / "" (Top1 持有者)
+
+        // v1.25 兼容字段（服务端 addGameResult 向下写入）
+        public string maxDifficulty;     // "normal" | "hard" | "hell"
+        public int    maxDays;           // 最多坚持天数（最佳完成局）
+        public int    totalWins;         // 总胜场数
+        public int    totalGames;        // 总场次
+        public int    score;             // 排名得分（difficulty_weight × maxDays）
     }
 
     /// <summary>主播排行榜响应（type=streamer_ranking）</summary>
@@ -1174,12 +1185,25 @@ namespace DrscfZ.Survival
         public string themeId;
     }
 
-    /// <summary>赛季结算（type=season_settlement，D7 夜晚结束或 Boss 池归零后广播）</summary>
+    /// <summary>赛季结算单条玩家贡献（跨房间 Top10）</summary>
+    [Serializable]
+    public class SeasonTopContributorEntry
+    {
+        public string playerId;
+        public string playerName;
+        public int    contribution;
+    }
+
+    /// <summary>赛季结算（type=season_settlement，D7 夜晚结束或 Boss 池归零后广播）
+    /// audit-r4 补齐 survivingRooms / topContributors[] — 服务端 SeasonManager.advanceDay
+    /// 在 season_settlement 广播中携带这两个字段（L174-176），客户端需接收并渲染</summary>
     [Serializable]
     public class SeasonSettlementData
     {
         public int    seasonId;
         public string nextThemeId;
+        public int    survivingRooms;                         // 当前赛季末 fortressDay>0 的房间数
+        public SeasonTopContributorEntry[] topContributors;   // 跨房间 Top10 贡献榜
     }
 
     // ==================== §36.4 赛季 Boss Rush（🆕 v1.27） ====================

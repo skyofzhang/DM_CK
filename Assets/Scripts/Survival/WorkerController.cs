@@ -1031,12 +1031,44 @@ namespace DrscfZ.Survival
                 return;
             }
 
-            // TODO §30 当美术交付 WorkerSkins/ 目录后打开以下 Instantiate 逻辑：
-            //   - 保存当前 Transform（position/rotation/localScale）
-            //   - Destroy 旧 _modelRoot 子节点
-            //   - Instantiate(prefab, _modelRoot) 并同步 Transform
-            //   - 重新缓存 Animator / SMR 等子组件（CacheAnimatorParams）
-            //   当前版本仅做骨架 + 日志，等美术落地后启用实际切换。
+            // audit-r4 §30.11：启用 Instantiate 真实切皮逻辑（美术未交付时走 fallback 同效果，无副作用）
+            //   - 模型容器以 transform 为根（WorkerController 挂在 root，mesh 在子节点）
+            //   - 清理旧 mesh 子节点（保留 NameTag/HPBarCanvas 等 UI 挂点）
+            //   - Instantiate 新 prefab 到 root
+            //   - 重新缓存 Animator（CacheAnimatorParams）
+            try
+            {
+                Transform modelRoot = transform;
+                // 清理旧模型子节点（名含 kuanggong/worker/mesh/model 的销毁，UI 挂点保留）
+                var oldChildren = new System.Collections.Generic.List<GameObject>();
+                for (int i = 0; i < modelRoot.childCount; i++)
+                {
+                    var child = modelRoot.GetChild(i);
+                    if (child == null) continue;
+                    string cname = child.name.ToLowerInvariant();
+                    if (cname.Contains("canvas") || cname.Contains("nametag") || cname.Contains("hpbar") || cname.Contains("bubble") || cname.Contains("worktarget")) continue;
+                    if (cname.Contains("kuanggong") || cname.Contains("worker") || cname.Contains("mesh") || cname.Contains("model"))
+                    {
+                        oldChildren.Add(child.gameObject);
+                    }
+                }
+                foreach (var go in oldChildren) Destroy(go);
+
+                var inst = Instantiate(prefab, modelRoot);
+                inst.transform.localPosition = Vector3.zero;
+                inst.transform.localRotation = Quaternion.identity;
+                inst.transform.localScale    = Vector3.one;
+
+                // 重新缓存 Animator 参数（新 prefab 的 Animator 参数可能不同，兜底 IsRunning/IsMining 集）
+                _animator = GetComponentInChildren<Animator>();
+                CacheAnimatorParams();
+
+                Debug.Log($"[WorkerController] SwapSkinModel: applied {skinPath} (or fallback) to {gameObject.name}");
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[WorkerController] SwapSkinModel Instantiate failed: {e.Message}");
+            }
         }
 
         /// <summary>重置Worker到Idle状态（归还对象池时调用）</summary>

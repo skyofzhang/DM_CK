@@ -217,6 +217,12 @@ class SeasonManager {
                 room.survivalEngine._broadcastRoomState('season_started');
               }
             } catch (_) { /* ignore */ }
+            // audit-r4 §39.8：赛季切换时自动加载 season_shop/{seasonId}.json 注入 _seasonShopPool（B9/B10 启用）
+            try {
+              if (room.survivalEngine && typeof room.survivalEngine.loadSeason === 'function') {
+                room.survivalEngine.loadSeason(this.seasonId);
+              }
+            } catch (_) { /* ignore single room errors */ }
           } catch (e) {
             // 单房异常不影响其他房
           }

@@ -57,7 +57,9 @@ class TribeWarManager {
         roomId,
         streamerName: room.streamerName || roomId,
         state: st,
-        day: engine ? engine.currentDay : 0,
+        // audit-r4 §35.1：改为 fortressDay（堡垒日里程碑，跨赛季持久化）而非 currentDay（本局 wave 计数）
+        day: engine ? (engine.fortressDay || 0) : 0,
+        fortressDay: engine ? (engine.fortressDay || 0) : 0,
         underAttack: this._defenderToSession.has(roomId),
         attackable: isRunning && !this._defenderToSession.has(roomId),
       });

@@ -1138,7 +1138,8 @@ class SurvivalGameEngine {
       // F3: 困难 70 → 40 天 (策划案 §34 F3) —— 抖音直播 4h40min 不现实；Day 40 WAVE_CONFIGS 已有配置
       easy:   { hpMult: 0.6, cntMult: 0.6, decayMult: 0.7, coalBurnTicks: 10, initFood: 160, initCoal: 96,  initOre: 40,  initGateHp: 800,  totalDays: 30, poolNightBase: 300, dayDuration: 120, nightDuration: 120 },
       normal: { hpMult: 1.0, cntMult: 1.0, decayMult: 1.0, coalBurnTicks: 7,  initFood: 200, initCoal: 120, initOre: 50,  initGateHp: 1000, totalDays: 50, poolNightBase: 500, dayDuration: 120, nightDuration: 120 },
-      hard:   { hpMult: 1.5, cntMult: 1.5, decayMult: 1.5, coalBurnTicks: 5,  initFood: 300, initCoal: 180, initOre: 75,  initGateHp: 1500, totalDays: 40, poolNightBase: 800, dayDuration: 120, nightDuration: 120 },
+      // §34 F5 audit-r4：困难初始资源统一 200/120/50（与 normal 持平）；城门 HP 仍 1500，怪物 hp/cnt/decay 倍率维持，通过消耗速率和强度区分而非资源起始量
+      hard:   { hpMult: 1.5, cntMult: 1.5, decayMult: 1.5, coalBurnTicks: 5,  initFood: 200, initCoal: 120, initOre: 50,  initGateHp: 1500, totalDays: 40, poolNightBase: 800, dayDuration: 120, nightDuration: 120 },
     };
     const p = presets[difficulty] || presets.normal;
 
@@ -1404,6 +1405,15 @@ class SurvivalGameEngine {
           hp: w.hp, maxHp: w.maxHp, isDead: w.isDead, respawnAt: w.respawnAt
         }])
       ),
+      // audit-r4 §19.2 workers[] 全量快照：断线重连 + 客户端 WorkerManager 一次性同步全员 level/skinTier/state
+      workers:      Object.entries(this._workerHp).map(([pid, w]) => ({
+        playerId:  pid,
+        level:     (this._playerLevel && this._playerLevel[pid]) || 1,
+        skinTier:  (this._playerSkinTier && this._playerSkinTier[pid]) || 1,
+        maxHp:     w.maxHp,
+        currentHp: w.hp,
+        state:     w.isDead ? 'dead' : (this._frozenWorkers && this._frozenWorkers.has(pid) ? 'frozen' : 'active'),
+      })),
 
       // §36 全服同步 / 赛季 / 堡垒日 / 每日 cap（客户端 survival_game_state 同步）
       fortressDay:           this.fortressDay || 1,
@@ -1913,6 +1923,20 @@ class SurvivalGameEngine {
         const prev = this._playerEfficiencyBonus[playerId] || 0;
         this._playerEfficiencyBonus[playerId] = Math.min(1.0, prev + 0.05);
         effects.efficiencyBonus = this._playerEfficiencyBonus[playerId];
+        // audit-r4 §32.2.2/§34 B8：fairy_wand_applied 每次送都广播，客户端 FairyWandAccumUI/Stardust 渲染累计
+        if (!this._fairyWandStackCount) this._fairyWandStackCount = {};
+        this._fairyWandStackCount[playerId] = (this._fairyWandStackCount[playerId] || 0) + 1;
+        this._broadcast({
+          type: 'fairy_wand_applied',
+          data: {
+            playerId,
+            playerName: playerName || this.playerNames[playerId] || playerId,
+            prevBonus:  Math.round(prev * 1000) / 1000,
+            nextBonus:  Math.round(this._playerEfficiencyBonus[playerId] * 1000) / 1000,
+            stackCount: this._fairyWandStackCount[playerId],
+            capped:     this._playerEfficiencyBonus[playerId] >= 0.999,
+          },
+        });
         // §34.3 B8 满级广播（策划案 5156）：prev<1.0 且本次升至 1.0 且未广播过 → 广播一次
         this._maybeBroadcastFairyWandMaxed(playerId, playerName, prev, this._playerEfficiencyBonus[playerId]);
         break;
@@ -3178,6 +3202,11 @@ class SurvivalGameEngine {
     this._themeHpMult = 1.0;
     this._themeCntMult = 1.0;
     this._themeMaxAliveBonus = 0;
+    // audit-r4 §36.4 主题规则 4 条补齐（原 MEMORY 标已实现，实际仅 blood_moon/frenzy 部分落地）
+    this._themeDayMiningMult  = 1.0;   // snowstorm：白天采矿 ×0.9（消费于 _applyWorkEffect cmd 1/2/3 + state==='day'）
+    this._themeLootMult       = 1.0;   // blood_moon：礼物资源掉落 ×1.2（消费于 T3/T6 gift 食物/煤炭/矿石 加成）
+    this._themeBossHpMult     = 1.0;   // serene：Boss HP ×0.9（消费于所有 Boss spawn 路径 cfg.boss.hp * mult）
+    this._themeWaveIntervalMult = 1.0; // frenzy：wave 间隔 ×0.75（-25%，消费于 _scheduleNightWaves intervalMult）
     // §31 怪物属性主题倍率（polar_night night modifier 额外 +20%，其他主题 1.0）
     //   polar_night 虽为 night modifier 而非 season theme，但属性倍率在此统一管理，
     //   后续 _spawnWave 读取 _themeMonsterHpMult/AtkMult 时会自动应用到新 spawn 的怪物。
@@ -3185,8 +3214,14 @@ class SurvivalGameEngine {
     this._themeMonsterAtkMult = 1.0;
     if (themeId === 'blood_moon') {
       this._themeHpMult = 1.2;
+      this._themeLootMult = 1.2;    // audit-r4: 血月礼物资源掉落 ×1.2
     } else if (themeId === 'frenzy') {
       this._themeMaxAliveBonus = 2;  // 15 → 17
+      this._themeWaveIntervalMult = 0.75;  // audit-r4: 狂潮 wave 间隔 -25%
+    } else if (themeId === 'snowstorm') {
+      this._themeDayMiningMult = 0.9;  // audit-r4: 风雪白天采矿 ×0.9
+    } else if (themeId === 'serene') {
+      this._themeBossHpMult = 0.9;   // audit-r4: 宁静 Boss HP ×0.9（抵消夜晚 ×1.3 时长惩罚）
     }
     // §34.4 polar_night：night modifier 额外 +20%（应用到本夜所有 spawn 的怪物）
     //   注：_currentNightModifier 由 _enterNight 在 _applyThemeRulesForNight 之后设置，
@@ -3713,16 +3748,20 @@ class SurvivalGameEngine {
     const isMiningCmd = (commandId === 1 || commandId === 2 || commandId === 3);
     const doubleMult = (workerTier >= 3 && this.state === 'day' && isMiningCmd && Math.random() < 0.10) ? 2 : 1;
 
+    // audit-r4 §36.4 snowstorm 白天采矿 ×0.9（仅 cmd 1/2/3 + state==='day' 生效，cmd 4 添柴不受影响）
+    const themeMiningMult = (this._themeDayMiningMult && this.state === 'day' && isMiningCmd)
+      ? this._themeDayMiningMult : 1.0;
+
     // 工作效果：每次评论小幅增加资源（基础值 × 综合倍率）
     switch (commandId) {
       case 1: // 采食物（丰收事件额外加成）
-        this.food = Math.min(2000, this.food + Math.round(5 * totalMult * (this.foodBonus || 1.0) * doubleMult));
+        this.food = Math.min(2000, this.food + Math.round(5 * totalMult * (this.foodBonus || 1.0) * doubleMult * themeMiningMult));
         break;
       case 2: // 挖煤
-        this.coal = Math.min(1500, this.coal + Math.round(3 * totalMult * doubleMult));
+        this.coal = Math.min(1500, this.coal + Math.round(3 * totalMult * doubleMult * themeMiningMult));
         break;
       case 3: // 采矿（矿脉事件额外加成）
-        this.ore = Math.min(800, this.ore + Math.round(2 * totalMult * (this.oreBonus || 1.0) * doubleMult));
+        this.ore = Math.min(800, this.ore + Math.round(2 * totalMult * (this.oreBonus || 1.0) * doubleMult * themeMiningMult));
         break;
       case 4: // 添柴升温：每次+3℃（策划案要求），消耗1煤炭
         this.furnaceTemp = Math.min(this.maxTemp, this.furnaceTemp + Math.round(3 * totalMult));
@@ -3800,7 +3839,7 @@ class SurvivalGameEngine {
 
     // Boss（每晚一只，HP受难度影响）
     if (cfg.boss) {
-      const hp = Math.max(1, Math.round(cfg.boss.hp * hpMult));
+      const hp = Math.max(1, Math.round(cfg.boss.hp * hpMult * (this._themeBossHpMult || 1.0)));
       const id = `b_${day}_${++this._monsterIdCounter}`;
       this._activeMonsters.set(id, {
         id,
@@ -3941,11 +3980,18 @@ class SurvivalGameEngine {
    * @param {string} reason - max_level | insufficient_ore | wrong_phase | boss_fight | daily_limit
    * @param {object} [extra] - 附加字段（如 currentLevel/required/available）
    */
-  _failGateUpgrade(reason, extra = {}) {
-    this._broadcast({
+  _failGateUpgrade(reason, extra = {}, playerId = null) {
+    const msg = {
       type: 'gate_upgrade_failed',
       data: Object.assign({ reason }, extra),
-    });
+    };
+    // audit-r4 §10.5：主播专属失败回执单播，避免向全房泄露主播权限失败细节；
+    //   无 playerId（如系统自动升级兜底）仍走广播保证前向兼容
+    if (playerId && typeof this._sendToPlayer === 'function') {
+      this._sendToPlayer(playerId, msg);
+    } else {
+      this._broadcast(msg);
+    }
   }
 
   /**
@@ -3974,7 +4020,7 @@ class SurvivalGameEngine {
   _upgradeGate(secOpenId, source = 'broadcaster') {
     // 1. 阶段校验
     if (this.state !== 'day' && this.state !== 'night') {
-      this._failGateUpgrade('wrong_phase');
+      this._failGateUpgrade('wrong_phase', {}, secOpenId);
       return;
     }
 
@@ -3986,27 +4032,49 @@ class SurvivalGameEngine {
         if (m.type === 'boss') { bossActive = true; break; }
       }
       if (bossActive) {
-        this._failGateUpgrade('boss_fight');
+        this._failGateUpgrade('boss_fight', {}, secOpenId);
         return;
       }
       // 非濒危不允许紧急加固（gateHp/gateMaxHp >= 30% 拒绝）
       if (this.gateMaxHp > 0 && (this.gateHp / this.gateMaxHp) >= 0.3) {
-        this._failGateUpgrade('wrong_phase');
+        this._failGateUpgrade('wrong_phase', {}, secOpenId);
         return;
       }
     }
 
     // 3. 每日上限（T6 不受限；broadcaster 与 expedition_trader 共享额度）
     if (this._gateUpgradedToday && source !== 'gift_t6') {
-      this._failGateUpgrade('daily_limit');
+      this._failGateUpgrade('daily_limit', {}, secOpenId);
       return;
     }
 
     // 4. 最高等级
     const currentLevel = this.gateLevel;
     if (currentLevel >= GATE_MAX_HP_BY_LEVEL.length) {
-      this._failGateUpgrade('max_level', { currentLevel });
+      this._failGateUpgrade('max_level', { currentLevel }, secOpenId);
       return;
+    }
+
+    // audit-r4 §10.5 + §36.12：Lv5/Lv6 升级需 seasonDay ≥ gate_upgrade_high.minDay（默认 4）
+    //   老用户（isVeteran）豁免；T6 礼物跳过功能解锁闸门（付费通道）
+    if (source !== 'gift_t6') {
+      const nextLevel = currentLevel + 1;
+      if (nextLevel >= 5) {
+        try {
+          const { FEATURE_UNLOCK_DAY } = require('./config/FeatureUnlockConfig');
+          const unlockCfg = FEATURE_UNLOCK_DAY.gate_upgrade_high;
+          const requiredDay = unlockCfg ? unlockCfg.minDay : 4;
+          const seasonDay = this.seasonMgr ? this.seasonMgr.seasonDay : 1;
+          const isVeteran = (this.isVeteran === true) || (this.creator && this.creator.isVeteran === true);
+          if (!isVeteran && seasonDay < requiredDay) {
+            this._failGateUpgrade('feature_locked', {
+              blockedLevel: nextLevel,
+              unlockDay:    requiredDay,
+            }, secOpenId);
+            return;
+          }
+        } catch (e) { /* require 失败兜底：不阻挡升级 */ }
+      }
     }
 
     // 5. 矿石消耗（T6 跳过）
@@ -4015,7 +4083,7 @@ class SurvivalGameEngine {
       this._failGateUpgrade('insufficient_ore', {
         required:  cost,
         available: Math.round(this.ore),
-      });
+      }, secOpenId);
       return;
     }
     if (source !== 'gift_t6') this.ore -= cost;
@@ -4142,7 +4210,8 @@ class SurvivalGameEngine {
     const cfg = getWaveConfig(day);
     // Fix 5: §34.4 E6 frenzy —— 波次间隔 × _modifierFrenzyIntervalMult（0.6 = -40%）
     //   仅在本夜 _applyNightModifier('frenzy') 后生效；正常夜晚该值 = 1.0
-    const intervalMult   = this._modifierFrenzyIntervalMult || 1.0;
+    // audit-r4 §36.4：frenzy 赛季主题（_themeWaveIntervalMult=0.75）叠加夜晚修饰符 frenzy（最大 0.45）
+    const intervalMult   = (this._modifierFrenzyIntervalMult || 1.0) * (this._themeWaveIntervalMult || 1.0);
     const effectiveBeginning   = Math.max(0, Math.round(cfg.beginning   * intervalMult * 1000));
     const effectiveRefreshMs   = Math.max(100, Math.round(cfg.refreshTime * intervalMult * 1000));
     console.log(`[SurvivalEngine] Night ${day} waves: ${cfg.baseCount}-${cfg.maxCount} per wave, every ${cfg.refreshTime}s (mult=${intervalMult})`);
@@ -4294,6 +4363,32 @@ class SurvivalGameEngine {
       // blockZeroes=true（刺客伤害专用）：格挡后该份伤害直接丢弃，不顺延；
       // 否则（常规均摊）：伤害归零不扣 HP，但也不消耗 remainingDamage（调用方据返回 0 判断）
       return 0;
+    }
+
+    // audit-r4 §30.3 阶9 HP≤20% 触发 5s 无敌护盾（每次进入低血段触发一次，5s 内再次被击不触发）
+    //   - 仅在 HP 进入低血段时首次激活（防止每次被击都重置 5s）
+    //   - 无敌期内所有伤害直接返回 0（不扣 HP、不消耗 dmg）
+    //   - 复活后 _invincibleShieldUntil 清零（走 _reviveWorker 已有清理路径）
+    const nowMs = Date.now();
+    if (this._getWorkerTier(pid) >= 9) {
+      if (!this._invincibleShieldUntil) this._invincibleShieldUntil = {};
+      if (!this._invincibleShieldArmedAt) this._invincibleShieldArmedAt = {};
+      // 正在无敌期内：免疫
+      if ((this._invincibleShieldUntil[pid] || 0) > nowMs) {
+        return 0;
+      }
+      // 非无敌期：若 HP≤20% 且上次触发已超过 20s（防刷触发），激活护盾
+      const maxHp = this._getWorkerMaxHp(pid);
+      const hpRatio = maxHp > 0 ? (w.hp / maxHp) : 1.0;
+      if (hpRatio <= 0.20 && (nowMs - (this._invincibleShieldArmedAt[pid] || 0)) >= 20000) {
+        this._invincibleShieldUntil[pid] = nowMs + 5000;
+        this._invincibleShieldArmedAt[pid] = nowMs;
+        this._broadcast({
+          type: 'worker_shield_activated',
+          data: { playerId: pid, playerName: this._getPlayerName(pid), durationMs: 5000 }
+        });
+        return 0;
+      }
     }
 
     const actualDmg = Math.min(w.hp, dmg);
@@ -5582,13 +5677,14 @@ class SurvivalGameEngine {
     const remainingMs = Math.max(0, info.completesAt - now);
     const elapsed = Math.max(0, totalMs - remainingMs);
     const progress = Math.min(1, Math.max(0, elapsed / totalMs));
+    // audit-r4 §19.2 build_progress 字段对齐客户端 BuildProgressData：buildingId→buildId / completeAt→completesAt
     this._broadcast({
       type: 'build_progress',
       data: {
-        buildingId:  buildId,
+        buildId,
         progress:    Math.round(progress * 1000) / 1000,
         remainingMs,
-        completeAt:  info.completesAt,
+        completesAt: info.completesAt,
       },
     });
   }
@@ -6446,7 +6542,7 @@ class SurvivalGameEngine {
     for (let i = 0; i < 3; i++) {
       const t = setTimeout(() => {
         if (this.state !== 'night') return;
-        const hp = Math.max(1, Math.round(cfg.boss.hp * hpMult));
+        const hp = Math.max(1, Math.round(cfg.boss.hp * hpMult * (this._themeBossHpMult || 1.0)));
         const id = `b_${day}_actend_${i}_${++this._monsterIdCounter}`;
         this._activeMonsters.set(id, {
           id,
@@ -8399,6 +8495,24 @@ class SurvivalGameEngine {
     // 2) phase 校验
     if (!this._shopIsPhaseAllowed(itemId)) {
       return this._shopFailPurchase('wrong_phase', itemId, null, playerId);
+    }
+
+    // audit-r4 §39.12 season_locked：B 类在赛季末 5min（seasonDay===7 夜晚剩余时间 ≤ 300s）拒购
+    //   - A 类不受限（战术道具随时可用）
+    //   - 老用户豁免不生效（赛季末锁定是商品策略而非功能解锁）
+    if (cfg.category === 'B' && this.seasonMgr && this.globalClock) {
+      const seasonDay = this.seasonMgr.seasonDay || 1;
+      const phase = this.globalClock._phase;
+      if (seasonDay === 7 && phase === 'night') {
+        let remainingSec = 0;
+        try {
+          remainingSec = typeof this.globalClock.getPhaseRemainingSec === 'function'
+            ? this.globalClock.getPhaseRemainingSec() : 600;
+        } catch (_) { remainingSec = 600; }
+        if (remainingSec <= 300) {
+          return this._shopFailPurchase('season_locked', itemId, null, playerId);
+        }
+      }
     }
 
     // 3) pendingId 校验（若有）：一次性凭证
