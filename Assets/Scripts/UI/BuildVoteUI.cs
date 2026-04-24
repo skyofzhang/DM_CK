@@ -21,6 +21,9 @@ namespace DrscfZ.UI
     {
         public static BuildVoteUI Instance { get; private set; }
 
+        // ModalRegistry A 类 id（§17.16 audit-r5 切换新 API）
+        private const string MODAL_A_ID = "build_vote_panel";
+
         [Header("面板引用(Inspector 拖入)")]
         [SerializeField] private GameObject _panel;
         [SerializeField] private TMP_Text   _timerText;
@@ -52,8 +55,15 @@ namespace DrscfZ.UI
             if (data == null) return;
             _current = data;
 
-            // §17.16 A 类 modal：同时只能打开一个（占用时静默打开仍以已有面板为准）
-            if (_panel != null) ModalRegistry.TryOpenModalA(_panel);
+            // §17.16 A 类 modal：新 API Request(id, priority=60, onReplaced)；被高优抢占时自动关闭
+            if (_panel != null)
+            {
+                _panel.SetActive(true);
+                ModalRegistry.Request(MODAL_A_ID, 60, () =>
+                {
+                    if (_panel != null) _panel.SetActive(false);
+                });
+            }
             if (_proposerText != null) _proposerText.text = $"{data.proposerName} 发起建造投票";
 
             int n = data.options != null ? data.options.Length : 0;
@@ -129,7 +139,11 @@ namespace DrscfZ.UI
         private IEnumerator DelayHide(float seconds)
         {
             yield return new WaitForSeconds(seconds);
-            if (_panel != null) ModalRegistry.CloseModalA(_panel);
+            if (_panel != null)
+            {
+                _panel.SetActive(false);
+                ModalRegistry.Release(MODAL_A_ID);
+            }
             _current = null;
         }
 

@@ -60,6 +60,9 @@ namespace DrscfZ.UI
         private static readonly Color BtnSpinReady    = new Color(1.00f, 0.84f, 0.00f, 1f);  // 金色
         private static readonly Color BtnSpinCooldown = new Color(0.35f, 0.40f, 0.55f, 1f);  // 灰蓝
 
+        // ==================== ModalRegistry A 类 id（§17.16 audit-r5）====================
+        private const string MODAL_A_ID = "roulette_panel";
+
         // ==================== 状态机 ====================
 
         private enum State { Idle, Charging, Ready, Spinning, Locked }
@@ -235,9 +238,17 @@ namespace DrscfZ.UI
                 Debug.LogWarning($"[RouletteUI] displayedCards 长度异常：{(data.displayedCards == null ? -1 : data.displayedCards.Length)}");
             }
 
-            // 切换到 Spinning，显示面板（§17.16 走 ModalRegistry A 类互斥）
+            // 切换到 Spinning，显示面板（§17.16 走 ModalRegistry A 类互斥，priority=70 主播轮盘高优）
             SetSpinButtonState(State.Spinning);
-            if (_panel != null) ModalRegistry.TryOpenModalA(_panel);
+            if (_panel != null)
+            {
+                _panel.SetActive(true);
+                ModalRegistry.Request(MODAL_A_ID, 70, () =>
+                {
+                    // 被更高优先级抢占时自动关闭面板
+                    if (_panel != null) _panel.SetActive(false);
+                });
+            }
 
             if (_rollCoroutine != null) StopCoroutine(_rollCoroutine);
             _rollCoroutine = StartCoroutine(Roll(data));
@@ -248,7 +259,11 @@ namespace DrscfZ.UI
         {
             if (data == null) return;
             // 面板可能已关闭（如 time_freeze 8s 内玩家手动关面板），这里只是兜底（§17.16 走 ModalRegistry）
-            if (_panel != null) ModalRegistry.CloseModalA(_panel);
+            if (_panel != null)
+            {
+                _panel.SetActive(false);
+                ModalRegistry.Release(MODAL_A_ID);
+            }
 
             // 回到 Charging（服务端清零重新计时，readyAt 随后会推 RouletteReady）
             _currentResult = null;
@@ -393,7 +408,11 @@ namespace DrscfZ.UI
             }
 
             // 关闭面板，回到充能阶段（服务端随后会推 RouletteReady 启动新一轮计时）；§17.16 走 ModalRegistry
-            if (_panel != null) ModalRegistry.CloseModalA(_panel);
+            if (_panel != null)
+            {
+                _panel.SetActive(false);
+                ModalRegistry.Release(MODAL_A_ID);
+            }
             SetSpinButtonState(State.Charging);
 
             // aurora 的客户端视觉加强（60s 全员金光）——复用现有 API

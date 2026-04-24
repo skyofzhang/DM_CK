@@ -24,8 +24,19 @@ namespace DrscfZ.UI
         private GameObject _activeInfoPanel; // 当前显示的信息面板
         private TMP_FontAsset _chineseFont;  // 中文字体缓存
 
+        private void OnEnable()
+        {
+            // audit-r5 §28：旧 GameManager.Instance 路径已废弃，脚本禁用以避免 NRE
+            // TODO(scene cleanup)：Editor 脚本批量失活或删除 MainMenuUI GO
+            this.enabled = false;
+            if (gameObject.activeInHierarchy) gameObject.SetActive(false);
+        }
+
         private void Start()
         {
+            // 已在 OnEnable 禁用，此处早返回防止执行旧 GameManager 路径
+            if (!enabled) return;
+
             // 加载中文字体
             _chineseFont = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
 

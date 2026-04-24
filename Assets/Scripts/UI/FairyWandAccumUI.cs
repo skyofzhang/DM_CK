@@ -60,7 +60,8 @@ namespace DrscfZ.UI
             if (_subscribed) return;
             var sgm = SurvivalGameManager.Instance;
             if (sgm == null) return;
-            sgm.OnWorkCommand += HandleWorkCommand;
+            sgm.OnWorkCommand       += HandleWorkCommand;
+            sgm.OnFairyWandApplied  += HandleFairyWandApplied;  // audit-r5 §34 B8：实时累计
             _subscribed = true;
         }
 
@@ -68,8 +69,24 @@ namespace DrscfZ.UI
         {
             if (!_subscribed) return;
             var sgm = SurvivalGameManager.Instance;
-            if (sgm != null) sgm.OnWorkCommand -= HandleWorkCommand;
+            if (sgm != null)
+            {
+                sgm.OnWorkCommand       -= HandleWorkCommand;
+                sgm.OnFairyWandApplied  -= HandleFairyWandApplied;
+            }
             _subscribed = false;
+        }
+
+        // audit-r5 §34 B8 fairy_wand_applied 每次广播：
+        //   - 客户端推一个蓝光气泡 "+{stackCount}" 显示当前累计次数
+        //   - 若 capped=true（nextBonus >= 0.999）且 prev<1.0 → 金爆裂（由 FairyWandMaxedBanner 订阅 OnFairyWandMaxed 独立处理）
+        //   - 常规状态展示 "+{nextBonus%}" 气泡（TODO 美术替换 VFX_FairyWand_ApplyPulse.prefab）
+        private void HandleFairyWandApplied(FairyWandAppliedData data)
+        {
+            if (data == null || string.IsNullOrEmpty(data.playerId)) return;
+            int bonusPct = Mathf.RoundToInt(data.nextBonus * 100f);
+            _bonusByPlayer[data.playerId] = bonusPct;
+            ShowAccum(data.playerId, bonusPct);
         }
 
         // ── 事件回调 ──────────────────────────────────────────────────────

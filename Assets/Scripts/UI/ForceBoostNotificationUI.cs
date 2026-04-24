@@ -42,8 +42,16 @@ namespace DrscfZ.UI
             public float duration;
         }
 
+        // audit-r5 §28：Legacy UI — GameManager 订阅路径已废弃；禁用 + GO 失活
+        private void OnEnable()
+        {
+            this.enabled = false;
+            if (gameObject.activeInHierarchy) gameObject.SetActive(false);
+        }
+
         private void Start()
         {
+            if (!enabled) return;
             _chineseFont = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
             _gm = GameManager.Instance;
             if (_gm != null)

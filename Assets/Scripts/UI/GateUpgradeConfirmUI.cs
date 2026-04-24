@@ -22,6 +22,9 @@ namespace DrscfZ.UI
     {
         public static GateUpgradeConfirmUI Instance { get; private set; }
 
+        // ModalRegistry A 类 id（§17.16 audit-r5；priority=75 升级确认关键）
+        private const string MODAL_A_ID = "gate_upgrade_confirm";
+
         [Header("面板根（子 Panel，Awake 中 SetActive(false) 合法）")]
         [SerializeField] private GameObject      _panel;
 
@@ -85,23 +88,36 @@ namespace DrscfZ.UI
             if (_featuresText != null)
                 _featuresText.text = newFeatureDesc ?? "";
 
-            // §17.16 A 类 modal
+            // §17.16 A 类 modal（audit-r5 切换新 API，priority=75 升级确认关键）
             if (_panel != null)
-                ModalRegistry.TryOpenModalA(_panel);
+            {
+                _panel.SetActive(true);
+                ModalRegistry.Request(MODAL_A_ID, 75, () =>
+                {
+                    if (_panel != null) _panel.SetActive(false);
+                    _onConfirm = null;
+                });
+            }
         }
 
         /// <summary>外部主动关闭（例如等级变化导致按钮失效时）</summary>
         public void Hide()
         {
             if (_panel != null)
-                ModalRegistry.CloseModalA(_panel);
+            {
+                _panel.SetActive(false);
+                ModalRegistry.Release(MODAL_A_ID);
+            }
             _onConfirm = null;
         }
 
         private void OnConfirm()
         {
             if (_panel != null)
-                ModalRegistry.CloseModalA(_panel);
+            {
+                _panel.SetActive(false);
+                ModalRegistry.Release(MODAL_A_ID);
+            }
             var cb = _onConfirm;
             _onConfirm = null;
             cb?.Invoke();
@@ -110,7 +126,10 @@ namespace DrscfZ.UI
         private void OnCancel()
         {
             if (_panel != null)
-                ModalRegistry.CloseModalA(_panel);
+            {
+                _panel.SetActive(false);
+                ModalRegistry.Release(MODAL_A_ID);
+            }
             _onConfirm = null;
         }
     }

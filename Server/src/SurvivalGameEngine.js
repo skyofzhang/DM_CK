@@ -638,6 +638,11 @@ class SurvivalGameEngine {
     this._dynamicHpMult      = 1.0;  // 动态难度怪物HP倍率
     this._dynamicCountMult   = 1.0;  // 动态难度怪物数量倍率
 
+    // audit-r5 §30.4 每日衰减追踪（UTC+8 日期字符串，跨日触发 _applyDailyTierDecay 一次）
+    // MVP 版本：仅内存存在，服务器重启后当日首次 tick 触发一次衰减（可接受的副作用）
+    // TODO 持久化：待 RoomPersistence schemaVersion 4 时补 _lastDailyDecayDayKey 字段
+    this._lastDailyDecayDayKey = null;
+
     // ── §24.4 主播事件轮盘（Broadcaster Event Roulette）─────────────────
     this._roulette              = new BroadcasterRoulette(this);
     this._contribMult           = 1.0;   // double_contrib：全员贡献 ×2，60s
@@ -1854,14 +1859,20 @@ class SurvivalGameEngine {
       // 已解锁但仍未注册（理论上 _promoteToSupporter 已在 handleGift 入口晋升）→ 继续走常规分流
     }
 
-    // ===== §33 助威者特殊礼物分支：T1 仙女棒 / T5 爱的爆炸 =====
-    // 这两种礼物依赖"发送者自己有专属矿工"的假设，助威者无矿工 → 需要重路由到场上其他矿工
+    // ===== §33 助威者特殊礼物分支：T1 仙女棒 / T4 能量电池 / T5 爱的爆炸 =====
+    // 这些礼物依赖"发送者自己有专属矿工"的假设，助威者无矿工 → 需要重路由到场上其他矿工
     if (isSupporter && gift.id === 'fairy_wand') {
       this._handleSupporterFairyWand(playerId, playerName, avatarUrl, gift, giftValue);
       return;
     }
     if (isSupporter && gift.id === 'love_explosion') {
       this._handleSupporterLoveExplosion(playerId, playerName, avatarUrl, gift, giftValue);
+      return;
+    }
+    // audit-r5 §33.4 T4 能量电池助威者重路由：发送者 +30% 效率 bonus 改挂在场上某守护者 pid
+    //   发送者仍是助威者（playerName 保留），但 _playerTempBoost 写到随机一名守护者
+    if (isSupporter && gift.id === 'energy_battery') {
+      this._handleSupporterEnergyBattery(playerId, playerName, avatarUrl, gift, giftValue);
       return;
     }
 
@@ -2412,6 +2423,85 @@ class SurvivalGameEngine {
     }
     this._broadcastResourceUpdate();
     console.log(`[SurvivalEngine] supporter T5 love_explosion by ${playerName}: killed ${killed.length} monsters, revived ${effects.revivedWorkers ? effects.revivedWorkers.length : 0} worker(s)`);
+  }
+
+  /**
+   * audit-r5 §33.4 助威者送 T4 能量电池：
+   *  - 炉温 +30℃ 共享资源不变（全房获益）
+   *  - +30% 效率 bonus 改挂在随机一名守护者 pid 上（180s，刷新计时）
+   *  - 发送者（助威者）不享受 bonus（自身无矿工），避免"挂空"
+   *  - 若房间无守护者（不应发生）则 bonus 不应用，仅炉温 + 解冻 + 治愈生效
+   *  - 贡献 / 积分池 / survival_gift 广播与常规路径一致
+   */
+  _handleSupporterEnergyBattery(playerId, playerName, avatarUrl, gift, giftValue) {
+    const effects = { supporterRedirect: true };
+    let needsResourceSync = false;
+
+    // 炉温 +30℃（共享资源）
+    this.furnaceTemp = Math.min(this.maxTemp, this.furnaceTemp + 30);
+    effects.addHeat = 30;
+
+    // 重路由 +30% 效率到随机守护者
+    const guardians = Object.keys(this.contributions);
+    if (guardians.length > 0) {
+      const targetId = guardians[Math.floor(Math.random() * guardians.length)];
+      this._playerTempBoost[targetId] = 1.3;
+      if (this._playerTempBoostTimers[targetId]) clearTimeout(this._playerTempBoostTimers[targetId]);
+      this._playerTempBoostTimers[targetId] = setTimeout(() => {
+        this._playerTempBoost[targetId] = 1.0;
+        delete this._playerTempBoostTimers[targetId];
+      }, 180000);
+      effects.tempBoost = 1.3;
+      effects.boostDuration = 180;
+      effects.redirectTargetId = targetId;
+      effects.redirectTargetName = this.playerNames[targetId] || targetId;
+    }
+
+    // §31.3 T4 联动：额外解冻当前所有被冰封怪冻结的矿工
+    if (this._frozenWorkers.size > 0) {
+      const unfrozen = [];
+      for (const [pid] of this._frozenWorkers) {
+        unfrozen.push(pid);
+        this._broadcast({ type: 'worker_unfrozen', data: { playerId: pid } });
+      }
+      this._frozenWorkers.clear();
+      effects.unfrozenWorkers = unfrozen.length;
+    }
+
+    // §34.4 E6 blizzard_night 治愈：夜晚若 modifier=blizzard_night → 全矿工额外 +20HP
+    this._applyBlizzardT4Heal();
+
+    needsResourceSync = true;
+
+    // 贡献 + 积分池（§37 market 抬升 ×1.1）
+    this._trackContribution(playerId, gift.score);
+    this.scorePool += gift.score * (this._buildings.has('market') ? 1.1 : 1.0);
+
+    const giftData = {
+      playerId,
+      playerName,
+      avatarUrl: avatarUrl || '',
+      giftId:     gift.id,
+      giftName:   gift.name_cn,
+      giftTier:   getTierNumber(gift.tier),
+      giftTierStr: gift.tier,
+      giftValue,
+      score:      gift.score,
+      contribution: gift.score,
+      addFood: 0, addCoal: 0, addOre: 0,
+      addHeat:   effects.addHeat || 0,
+      addGateHp: 0,
+      effects,
+    };
+    this.broadcast({ type: 'survival_gift', timestamp: Date.now(), data: giftData });
+
+    // §34.4 E3c 助威者 energy_battery 也广播 gift_impact（privateOnly，仅 sender 看）
+    const impactsText = this._formatGiftImpactText(gift.id, gift.name_cn, playerName, effects);
+    if (impactsText) {
+      this._scheduleGiftImpact(playerId, playerName, gift.id, gift.name_cn, impactsText, /* privateOnly */ true);
+    }
+    if (needsResourceSync) this._broadcastResourceUpdate();
+    console.log(`[SurvivalEngine] supporter T4 energy_battery by ${playerName}: heat+30, boost redirect=${effects.redirectTargetName || '(no guardian)'}`);
   }
 
   /**
@@ -3134,6 +3224,9 @@ class SurvivalGameEngine {
 
       // §34.3 B10b day_preview：白天最后 10s 广播下一夜预告
       this._broadcastDayPreviewIfDue();
+
+      // audit-r5 §30.4 每日衰减调度（UTC+8 跨日时所有 level × 0.95）
+      this._tickDailyDecayIfDue();
 
       // 资源衰减
       this._decayResources();
@@ -5444,11 +5537,12 @@ class SurvivalGameEngine {
    */
   handleBuildPropose(playerId, playerName, buildId) {
     // P0-A8 helper：build_propose_failed 单播给发起方
+    // audit-r5 §37.3：payload 补 buildingType（客户端 BuildProposeFailedData 期待字段）
     const failPropose = (reason) => {
       const msg = {
         type: 'build_propose_failed',
         timestamp: Date.now(),
-        data: { reason, unlockDay: 0 },
+        data: { reason, unlockDay: 0, buildingType: buildId || '' },
       };
       if (playerId && this._sendToPlayer(playerId, msg)) return;
       this._broadcast(msg);
@@ -7031,18 +7125,22 @@ class SurvivalGameEngine {
     const SUPPORTED_DIFFS = ['easy', 'normal', 'hard'];
     const validDiff    = SUPPORTED_DIFFS.includes(diff);
     const validApplyAt = (applyAt === 'next_night' || applyAt === 'next_season');
+    // audit-r5 §34.4 E9：失败消息改单播给发起方（主播），避免把主播失败信息泄露全房
+    //   成功 change_difficulty_accepted 仍 broadcast（全房通知 OK）
     if (!validDiff) {
-      this._broadcast({
+      const msg = {
         type: 'change_difficulty_failed',
         data: { reason: 'invalid_difficulty', supported: SUPPORTED_DIFFS, difficulty: diff, applyAt },
-      });
+      };
+      if (!playerId || !this._sendToPlayer(playerId, msg)) this._broadcast(msg);
       return;
     }
     if (!validApplyAt) {
-      this._broadcast({
+      const msg = {
         type: 'change_difficulty_failed',
         data: { reason: 'invalid_args', difficulty: diff, applyAt },
-      });
+      };
+      if (!playerId || !this._sendToPlayer(playerId, msg)) this._broadcast(msg);
       return;
     }
     this._pendingDifficulty = { difficulty: diff, applyAt };
@@ -7207,6 +7305,59 @@ class SurvivalGameEngine {
         }
       });
       console.log(`[SurvivalEngine] Level up: ${this._getPlayerName(playerId)} → Lv.${newLevel} 阶${newTier} skin=${TIER_SKINS[newTier - 1]}`);
+    }
+  }
+
+  /**
+   * audit-r5 §30.4 每日衰减工具：返回 UTC+8 日期字符串 "YYYY-MM-DD"
+   *   Node 默认 UTC；加 8 小时偏移后取 ISO 前 10 字符作为 dayKey
+   */
+  _getDayKey() {
+    const now = new Date(Date.now() + 8 * 3600 * 1000); // 偏移到 UTC+8
+    return now.toISOString().slice(0, 10); // "YYYY-MM-DD"
+  }
+
+  /**
+   * audit-r5 §30.4 每日衰减主逻辑：UTC+8 跨日时所有玩家 level × 0.95（向下取整）
+   *   MVP 简化版本：不区分活跃/不活跃，统一 0.95（策划案活跃玩家应为 0.975 — TODO 接入 _lastActiveTs）
+   *   - level ≤ 1 时不再衰减（floor(1 * 0.95) = 0 会打破 1~100 区间约束）
+   *   - 广播 daily_tier_decay { playerId, oldLevel, newLevel }
+   */
+  _applyDailyTierDecay() {
+    const decayed = [];
+    for (const pid of Object.keys(this._playerLevel || {})) {
+      const oldLevel = this._playerLevel[pid] || 1;
+      if (oldLevel <= 1) continue;
+      const newLevel = Math.max(1, Math.floor(oldLevel * 0.95));
+      if (newLevel === oldLevel) continue;
+      this._playerLevel[pid] = newLevel;
+      decayed.push({ playerId: pid, oldLevel, newLevel });
+    }
+    for (const d of decayed) {
+      this._broadcast({
+        type: 'daily_tier_decay',
+        data: { playerId: d.playerId, oldLevel: d.oldLevel, newLevel: d.newLevel },
+      });
+    }
+    if (decayed.length > 0) {
+      console.log(`[SurvivalEngine] _applyDailyTierDecay: ${decayed.length} players decayed (×0.95)`);
+    }
+  }
+
+  /**
+   * audit-r5 §30.4 每日衰减 scheduler（在 _tick 1s 路径内每秒调用）
+   *   _lastDailyDecayDayKey 未初始化或与当前 UTC+8 dayKey 不一致 → 触发衰减并更新
+   */
+  _tickDailyDecayIfDue() {
+    const today = this._getDayKey();
+    if (this._lastDailyDecayDayKey === null) {
+      // 首次启动：仅记录 dayKey 不衰减（避免服务器启动即衰减）
+      this._lastDailyDecayDayKey = today;
+      return;
+    }
+    if (this._lastDailyDecayDayKey !== today) {
+      this._applyDailyTierDecay();
+      this._lastDailyDecayDayKey = today;
     }
   }
 
@@ -8324,7 +8475,14 @@ class SurvivalGameEngine {
    *   MVP 无独立 `recovery` variant（策划案中 recovery = running 的第三种，本版归入 day 口径）
    */
   _shopIsPhaseAllowed(itemId) {
-    const cfg = SHOP_CATALOG[itemId];
+    let cfg = SHOP_CATALOG[itemId];
+    // §39.8 season shop pool fallback：未在 SHOP_CATALOG 则查 _seasonShopPool（B 类限定 SKU）
+    if (!cfg && Array.isArray(this._seasonShopPool)) {
+      const seasonItem = this._seasonShopPool.find(it => it && it.id === itemId);
+      if (seasonItem) {
+        cfg = { category: seasonItem.category || 'B' };
+      }
+    }
     if (!cfg) return false;
     const st = this.state;
     if (cfg.category === 'B') {
@@ -8415,7 +8573,24 @@ class SurvivalGameEngine {
           limitedSeasonId: '',
         });
       }
-      // B9/B10 赛季限定 SKU 跳过（currentSeasonShopPool 始终空，PM MVP 决策）
+      // §39.8 B9/B10 赛季限定 SKU：若 _seasonShopPool 非空则追加到 items 后
+      //   字段格式由 season_shop/{seasonId}.json 决定：{ id, name, slot, price, category, lifetimeContribMin, effect }
+      if (Array.isArray(this._seasonShopPool) && this._seasonShopPool.length > 0) {
+        const seasonId = (this.seasonMgr && this.seasonMgr.currentSeasonId) || '';
+        for (const it of this._seasonShopPool) {
+          if (!it || !it.id) continue;
+          items.push({
+            itemId: it.id,
+            name: it.name || it.id,
+            price: it.price || 0,
+            slot: it.slot || null,
+            category: it.category || 'B',
+            effect: it.effect || '',
+            minLifetimeContrib: it.lifetimeContribMin || 0,
+            limitedSeasonId: seasonId,
+          });
+        }
+      }
     }
     // 应答：按策划案 §39.9，S→C shop_list_data { category, items }
     this._broadcast({
@@ -8432,7 +8607,18 @@ class SurvivalGameEngine {
    */
   handleShopPurchasePrepare(playerId, itemId) {
     if (!playerId) return;
-    const cfg = SHOP_CATALOG[itemId];
+    // §39.8 SHOP_CATALOG + _seasonShopPool 合并查找
+    let cfg = SHOP_CATALOG[itemId];
+    if (!cfg && Array.isArray(this._seasonShopPool)) {
+      const seasonItem = this._seasonShopPool.find(it => it && it.id === itemId);
+      if (seasonItem) {
+        cfg = {
+          category: seasonItem.category || 'B',
+          price: seasonItem.price || 0,
+          slot: seasonItem.slot || null,
+        };
+      }
+    }
     if (!cfg) return;                          // 静默忽略
     if (cfg.category !== 'B') return;          // 静默忽略（A 类无双确认）
     if (cfg.price < 1000) return;              // 静默忽略（<1000 直接购买）
@@ -8489,7 +8675,20 @@ class SurvivalGameEngine {
 
     // 1) itemId 存在性
     // P0-A8：所有 _shopFailPurchase 增加 playerId 参数以单播给发起方
-    const cfg = SHOP_CATALOG[itemId];
+    // §39.8 先查 SHOP_CATALOG；若未找到，再查 _seasonShopPool（B9/B10 赛季限定 SKU）
+    let cfg = SHOP_CATALOG[itemId];
+    if (!cfg && Array.isArray(this._seasonShopPool)) {
+      const seasonItem = this._seasonShopPool.find(it => it && it.id === itemId);
+      if (seasonItem) {
+        cfg = {
+          category: seasonItem.category || 'B',
+          price: seasonItem.price || 0,
+          slot: seasonItem.slot || null,
+          effect: seasonItem.effect || '',
+          _fromSeasonPool: true,
+        };
+      }
+    }
     if (!cfg) return this._shopFailPurchase('item_not_found', itemId, null, playerId);
 
     // 2) phase 校验

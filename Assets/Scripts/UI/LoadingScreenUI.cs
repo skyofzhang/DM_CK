@@ -26,8 +26,17 @@ namespace DrscfZ.UI
         private float _spinAngle;
         private TMP_FontAsset _chineseFont;
 
+        private void OnEnable()
+        {
+            // audit-r5 §28：旧 GameManager 路径（ConnectToServer 等）已废弃；脚本禁用 + GO 失活
+            // TODO(scene cleanup)：Editor 批量失活或删除 LoadingScreenUI GO
+            this.enabled = false;
+            if (gameObject.activeInHierarchy) gameObject.SetActive(false);
+        }
+
         private void Start()
         {
+            if (!enabled) return;
             _chineseFont = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
 
             // 确保 UI 文字有字体

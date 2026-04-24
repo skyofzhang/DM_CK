@@ -52,8 +52,8 @@ namespace DrscfZ.UI
         public void Show()
         {
             gameObject.SetActive(true);
-            if (_titleText != null) _titleText.text = "检测到上一局进行中";
-            if (_descText  != null) _descText.text  = "发现未完成的游戏，是否继续上一局？";
+            if (_titleText != null) _titleText.text = "检测到本次堡垒守护进行中";
+            if (_descText  != null) _descText.text  = "发现未完成的堡垒守护，是否继续？";
         }
 
         private void OnReconnect()
