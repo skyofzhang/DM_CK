@@ -572,6 +572,21 @@ namespace DrscfZ.Survival
             Debug.Log($"[WorkerManager] Worker '{playerId}' 冰封已解除");
         }
 
+        /// <summary>
+        /// 🆕 audit-r5 §30.3 阶8 护盾触发 → 客户端 5s 染蓝 tint + "无敌" 气泡。
+        /// </summary>
+        public void HandleWorkerShieldActivated(string playerId, long durationMs)
+        {
+            var worker = FindWorkerByPlayerId(playerId);
+            if (worker == null)
+            {
+                Debug.LogWarning($"[WorkerManager] HandleWorkerShieldActivated: playerId={playerId} 未找到对应Worker");
+                return;
+            }
+            worker.HandleShieldActivated(durationMs);
+            Debug.Log($"[WorkerManager] Worker '{playerId}' 触发 5s 护盾视效");
+        }
+
         // ==================== §30 矿工成长系统 ====================
 
         /// <summary>服务器通知矿工升级（worker_level_up）→ 路由到对应 WorkerController</summary>

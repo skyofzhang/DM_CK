@@ -1581,4 +1581,43 @@ namespace DrscfZ.Survival
     {
         // 服务端下发空 data，客户端反序列化仍可生成空对象
     }
+
+    // ==================== audit-r5 客户端补齐 Batch ====================
+
+    /// <summary>§19 / §34.4 E9 难度变更生效（type=difficulty_changed，S→C）。
+    /// 服务端在 _consumePendingDifficultyOnNight / onSeasonStart 消费 _pendingDifficulty 后广播。
+    /// 字段对齐 SurvivalGameEngine.js:7099 / 7119。</summary>
+    [Serializable]
+    public class DifficultyChangedData
+    {
+        public string difficulty;          // 请求的原始难度："easy" / "normal" / "hard" / "nightmare"
+        public string appliedDifficulty;   // 实际应用（nightmare → hard 回退）
+        public string applyAt;             // "next_night" | "next_season"
+        public int    seasonId;            // 仅 applyAt=next_season 时非 0
+    }
+
+    /// <summary>§30.3 阶8 矿工护盾触发（type=worker_shield_activated，S→C）。
+    /// 服务端在矿工 HP=0 但消耗 _invincibleShield 抵消致命伤时广播；客户端 5s 染蓝 tint + "无敌" 气泡。
+    /// 字段对齐 SurvivalGameEngine.js:4388。</summary>
+    [Serializable]
+    public class WorkerShieldActivatedData
+    {
+        public string playerId;
+        public string playerName;
+        public long   durationMs;    // 默认 5000（5s）
+    }
+
+    /// <summary>§34 B8 仙女棒累计光点（type=fairy_wand_applied，S→C）。
+    /// 每次 fairy_wand 送出都广播；客户端按 capped=true 切换到金爆裂，否则推一个蓝光点。
+    /// 字段对齐 SurvivalGameEngine.js:1929-1939。</summary>
+    [Serializable]
+    public class FairyWandAppliedData
+    {
+        public string playerId;
+        public string playerName;
+        public float  prevBonus;    // 本次应用前的 _playerEfficiencyBonus（0.00~1.00）
+        public float  nextBonus;    // 本次应用后（+0.05，上限 1.00）
+        public int    stackCount;   // 累计送出次数
+        public bool   capped;       // nextBonus >= 0.999 时 true
+    }
 }

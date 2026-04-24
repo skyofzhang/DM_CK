@@ -150,26 +150,27 @@ namespace DrscfZ.UI
                 var texts = row.GetComponentsInChildren<TMP_Text>(true);
                 BindFonts(texts);
 
-                // §39.5：昵称前缀根据 equipped.title 渲染（[守护者]/[老兵]/[大善人]）
-                string prefix = GetTitlePrefix(entry.equipped?.title);
+                // §39.5 / audit-r5 §19：组合前缀渲染 title + frame + entrance + barrage + legend 金色
+                string prefix = GetEquippedPrefix(entry.equipped);
                 string name  = $"{prefix}{Truncate(entry.playerName, 6)}";
                 string score = entry.contribution.ToString("N0");
                 string rank  = $"#{entry.rank}";
 
+                // audit-r5 §19：启用富文本（金色堡垒之王 / 冰霜王冠 / 传奇前缀）
                 if (texts.Length >= 3)
                 {
                     texts[0].text = rank;
-                    texts[1].text = name;
+                    texts[1].text = name; texts[1].richText = true;
                     texts[2].text = score;
                 }
                 else if (texts.Length == 2)
                 {
-                    texts[0].text = $"{rank} {name}";
+                    texts[0].text = $"{rank} {name}"; texts[0].richText = true;
                     texts[1].text = score;
                 }
                 else if (texts.Length == 1)
                 {
-                    texts[0].text = $"{rank} {name}  {score}";
+                    texts[0].text = $"{rank} {name}  {score}"; texts[0].richText = true;
                 }
 
                 if (changed) StartCoroutine(FlashRow(row));
@@ -228,6 +229,62 @@ namespace DrscfZ.UI
                 case "title_legend_mover": return "[大善人]"; // 金色文字由 LiveRankingUI / BobaoData 富文本处理
                 default:                    return "";
             }
+        }
+
+        /// <summary>
+        /// audit-r5 §19/§13.1/§17.10/§39.5 组合 equipped 多槽位（title/frame/entrance/barrage）→ 富文本前缀。
+        /// 优先级排序：legend_mover 金色 > barrage_crown 金色 > title → frame ★ → entrance 高亮。
+        /// </summary>
+        private static string GetEquippedPrefix(ShopEquipped equipped)
+        {
+            if (equipped == null) return "";
+            var sb = new System.Text.StringBuilder();
+
+            // title slot（legend_mover 金色，其他使用 GetTitlePrefix 标签）
+            if (!string.IsNullOrEmpty(equipped.title))
+            {
+                if (equipped.title == "title_legend_mover")
+                    sb.Append("<color=#FFD700>【大善人】</color>");
+                else
+                    sb.Append(GetTitlePrefix(equipped.title));
+            }
+
+            // frame slot（所有带星前缀）
+            if (!string.IsNullOrEmpty(equipped.frame))
+            {
+                switch (equipped.frame)
+                {
+                    case "frame_gold":   sb.Append("<color=#FFD700>★</color>"); break;
+                    case "frame_silver": sb.Append("<color=#C0C0C0>★</color>"); break;
+                    case "frame_rose":   sb.Append("<color=#FF69B4>★</color>"); break;
+                    case "frame_ice":    sb.Append("<color=#66CCFF>★</color>"); break;
+                    case "frame_sunset": sb.Append("<color=#FF8C00>★</color>"); break;
+                    default:             sb.Append("★"); break;
+                }
+            }
+
+            // entrance slot（简化为淡色徽标前缀；美术交付前占位）
+            if (!string.IsNullOrEmpty(equipped.entrance))
+            {
+                switch (equipped.entrance)
+                {
+                    case "entrance_fire":   sb.Append("<color=#FF6820>♨</color>"); break;
+                    case "entrance_ice":    sb.Append("<color=#66CCFF>❄</color>"); break;
+                    case "entrance_aurora": sb.Append("<color=#80FFD4>✦</color>"); break;
+                    case "entrance_crown":  sb.Append("<color=#FFD700>♛</color>"); break;
+                    default:                sb.Append("✦"); break;
+                }
+            }
+
+            // barrage slot（barrage_crown = 冰霜王冠金色；其他无前缀但可由 BarrageMessageUI 着色）
+            if (!string.IsNullOrEmpty(equipped.barrage))
+            {
+                if (equipped.barrage == "barrage_crown")
+                    sb.Append("<color=#FFD700>[冰霜王冠]</color>");
+                // 其他 barrage 样式由 BarrageMessageUI 渲染时单独读 equipped.barrage，这里不加前缀避免冗余
+            }
+
+            return sb.ToString();
         }
     }
 }

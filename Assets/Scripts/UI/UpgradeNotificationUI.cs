@@ -22,6 +22,13 @@ namespace DrscfZ.UI
         public float shakeIntensity = 6f;
         public float shakeDuration = 0.4f;
 
+        // audit-r5 §28：Legacy UI — 新版使用 SurvivalGameManager，此组件保留但自动失活
+        private void OnEnable()
+        {
+            this.enabled = false;
+            if (gameObject.activeInHierarchy) gameObject.SetActive(false);
+        }
+
         private Queue<UpgradeData> _pendingQueue = new Queue<UpgradeData>();
         private List<GameObject> _active = new List<GameObject>();
         private Queue<GameObject> _pool = new Queue<GameObject>();

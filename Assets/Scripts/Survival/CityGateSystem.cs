@@ -312,16 +312,26 @@ namespace DrscfZ.Survival
         }
 
         /// <summary>
-        /// 城门升级（旧签名，兼容过渡）：
-        ///   - tierName 空、features 空、hpBonus=20（与 v1.22 之前的旧逻辑一致）
-        ///   - 新代码应直接调用 HandleUpgrade(level, newMaxHp, hpBonus, tierName, features)
+        /// 城门升级（旧签名，已废弃 — v1.27 audit-r5 标注）：
+        ///   - 原固定 hpBonus=20 与策划案 v1.27 Lv2+100/Lv3+200/Lv4+300/Lv5+500/Lv6 回满相悖；
+        ///     为避免误用已改为 0（不回血），要求调用方切到新签名。
+        ///   - 新签名：HandleUpgrade(level, newMaxHp, hpBonus, tierName, features)
+        ///     hpBonus 由服务端 gate_upgraded 消息下发（_applyGateUpgrade → GATE_UPGRADE_HP_BONUS 表）。
         /// </summary>
+        [System.Obsolete("旧签名 hpBonus 固定 20 与策划案 v1.27 相悖。请改用 HandleUpgrade(level, newMaxHp, hpBonus, tierName, features)。")]
         public void HandleUpgrade(int level, int newMaxHp)
         {
-            HandleUpgrade(level, newMaxHp, 20, "", null);
+            // audit-r5：将 hpBonus 从旧值 20 改为 0（避免错误加血）；tierName/features 由后续主入口覆盖
+            HandleUpgrade(level, newMaxHp, 0, "", null);
         }
 
         /// <summary>城门升级（🆕 v1.22 §10 主入口，由 SurvivalGameManager 解析 gate_upgraded 后调用）</summary>
+        /// <remarks>
+        /// hpBonus 由服务端下发（策划案 v1.27 §10）：
+        ///   - Lv2: +100  / Lv3: +200  / Lv4: +300  / Lv5: +500
+        ///   - Lv6: 回满（hpBonus == gateMaxHp - gateHp，服务端计算好传入）
+        /// 客户端不在此二次推导，防止与服务端不一致。
+        /// </remarks>
         public void HandleUpgrade(int level, int newMaxHp, int hpBonus, string tierName, string[] features)
         {
             GateLevel = level;
@@ -329,10 +339,6 @@ namespace DrscfZ.Survival
             Features  = features ?? new string[0];
             MaxHp     = newMaxHp;
 
-            // hpBonus 由服务端下发：
-            //   - Lv2/3/4 常规：+20
-            //   - Lv5：+50
-            //   - Lv6：回满（hpBonus == gateMaxHp - gateHp）
             CurrentHp = Mathf.Clamp(CurrentHp + hpBonus, 0, MaxHp);
             OnHpChanged?.Invoke(CurrentHp, MaxHp);
             SyncHpLabel();

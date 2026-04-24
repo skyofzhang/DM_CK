@@ -202,6 +202,11 @@ namespace DrscfZ.Survival
         public event Action<PlayerStatsData>    OnPlayerStatsUpdated;   // B9 每次 work_command_response 分发
         public event Action<FairyWandMaxedData> OnFairyWandMaxed;       // B8 仙女棒满级单播（+100% 满级）
 
+        // ----- audit-r5 客户端补齐（🆕 v1.27+） -----
+        public event Action<DifficultyChangedData>     OnDifficultyChanged;     // §19/§34.4 E9 难度生效广播
+        public event Action<WorkerShieldActivatedData> OnWorkerShieldActivated; // §30.3 阶8 护盾触发视效
+        public event Action<FairyWandAppliedData>      OnFairyWandApplied;      // §34 B8 仙女棒累计光点
+
         /// <summary>§34 B9 最近一次收到的 playerStats（供 UI 查询，初始为 null）。
         /// 收到第一条 work_command_response.playerStats 后 PersonalContribUI 常驻显示。</summary>
         public PlayerStatsData LastPlayerStats { get; private set; }
@@ -950,6 +955,38 @@ namespace DrscfZ.Survival
                     {
                         Debug.Log($"[SGM] tribe_war_retaliate target={twR.targetRoomId} dmgMul={twR.damageMultiplier}");
                         OnTribeWarRetaliate?.Invoke(twR);
+                    }
+                    break;
+
+                // ----- audit-r5 客户端补齐（🆕 v1.27+） -----
+                // §19/§34.4 E9 难度生效：E9 UI / 跑马灯订阅
+                case SurvivalMessageProtocol.DifficultyChanged:
+                    var dc = JsonUtility.FromJson<DifficultyChangedData>(dataJson);
+                    if (dc != null)
+                    {
+                        Debug.Log($"[SGM] difficulty_changed: {dc.difficulty}→{dc.appliedDifficulty} applyAt={dc.applyAt}");
+                        OnDifficultyChanged?.Invoke(dc);
+                    }
+                    break;
+
+                // §30.3 阶8 护盾触发：WorkerController 订阅播放 5s 蓝 tint + 无敌气泡
+                case SurvivalMessageProtocol.WorkerShieldActivated:
+                    var wsa = JsonUtility.FromJson<WorkerShieldActivatedData>(dataJson);
+                    if (wsa != null)
+                    {
+                        Debug.Log($"[SGM] worker_shield_activated playerId={wsa.playerId} dur={wsa.durationMs}ms");
+                        if (WorkerManager.Instance != null)
+                            WorkerManager.Instance.HandleWorkerShieldActivated(wsa.playerId, wsa.durationMs);
+                        OnWorkerShieldActivated?.Invoke(wsa);
+                    }
+                    break;
+
+                // §34 B8 仙女棒累计光点：FairyWandAccumUI / Stardust 订阅，capped=true 时切金爆裂
+                case SurvivalMessageProtocol.FairyWandApplied:
+                    var fwa = JsonUtility.FromJson<FairyWandAppliedData>(dataJson);
+                    if (fwa != null)
+                    {
+                        OnFairyWandApplied?.Invoke(fwa);
                     }
                     break;
             }
@@ -1752,11 +1789,16 @@ namespace DrscfZ.Survival
             // 路由到 WorkerManager 刷新对应 Worker 的显示
             WorkerManager.Instance?.HandleWorkerLevelUp(data);
 
-            // 阶段10（传奇）→ 特殊相机震撼（TODO §30：未来替换为镜头推近 + 全场金红粒子爆发）
+            // 阶段10（传奇）→ 特殊相机震撼 + 金色跑马灯（audit-r5 §30.8 轻量占位）
             if (data.newTier >= 10)
             {
                 SurvivalCameraController.Shake(0.3f, 0.8f);
-                // TODO §30：传奇镜头——镜头缓慢推近该矿工 1s，金红色粒子全场爆发
+                // TODO(美术) §30.8：替换为镜头推近 0.8s + VFX_LegendGold 金色粒子爆发（美术清单 v4 未交付）
+                // 轻量占位：独立金色跑马灯（与常规升级 marquee 区分）
+                string legendName = string.IsNullOrEmpty(data.playerName) ? "传奇矿工" : data.playerName;
+                UI.HorizontalMarqueeUI.Instance?.AddMessage(
+                    legendName, null, "<color=#FFD700>晋升传奇矿工！</color>");
+                Debug.Log($"[SGM][Legend] {legendName} 达到阶 10 传奇（TODO 相机推近 + 金色粒子）");
             }
             else
             {

@@ -377,13 +377,23 @@ namespace DrscfZ.UI
                 foreach (var t in filteredTexts)
                     if (t != null && font != null) t.font = font;
 
-                string diffLabel = TranslateDifficulty(entry.maxDifficulty);
-                string info = $"{diffLabel} {entry.maxDays}天 {entry.totalWins}胜/{entry.totalGames}场";
+                // audit-r5 §13.3 v1.26 字段：maxFortressDay / totalCycles / streamerKingTitle
+                // （旧 maxDays / totalWins / totalGames / maxDifficulty 弃用，服务端 v1.26 已不写）
+                string info = $"堡垒 D{entry.maxFortressDay} · 第{entry.totalCycles}局";
+
+                // rank=1 且有堡垒之王称号 → 金色富文本前缀
+                bool isKing = entry.rank == 1
+                              && !string.IsNullOrEmpty(entry.streamerKingTitle)
+                              && entry.streamerKingTitle == "堡垒之王";
+                string nameDisplay = isKing
+                    ? $"<color=#FFD700>【堡垒之王】</color>{TruncateName(entry.streamerName, 7)}"
+                    : TruncateName(entry.streamerName, 7);
 
                 if (filteredTexts.Count >= 3)
                 {
                     filteredTexts[0].text = entry.rank <= 3 ? "" : $"{entry.rank}";
-                    filteredTexts[1].text = TruncateName(entry.streamerName, 7);
+                    filteredTexts[1].text = nameDisplay;
+                    filteredTexts[1].richText = true;
                     filteredTexts[2].text = info;
                 }
             }

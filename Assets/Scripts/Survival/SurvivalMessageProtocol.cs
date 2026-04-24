@@ -193,5 +193,10 @@ namespace DrscfZ.Survival
         // ----- §36.10 WaitingPhase（🆕 v1.27+ audit-r3/P1） -----
         public const string WaitingPhaseStarted = "waiting_phase_started"; // S→C：新赛季 30s 准备窗口开始
         public const string WaitingPhaseEnded   = "waiting_phase_ended";   // S→C：准备窗口结束（兜底 UI 隐藏）
+
+        // ----- audit-r5 客户端补齐（🆕 v1.27+） -----
+        public const string DifficultyChanged       = "difficulty_changed";        // S→C：§19/§34.4 E9 难度已应用（next_night/next_season）
+        public const string WorkerShieldActivated   = "worker_shield_activated";   // S→C：§30.3 阶8 矿工 5s 护盾触发视觉反馈
+        public const string FairyWandApplied        = "fairy_wand_applied";        // S→C：§34 B8 仙女棒累计光点（每次送都广播，含 capped）
     }
 }

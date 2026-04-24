@@ -887,6 +887,58 @@ namespace DrscfZ.Survival
             if (_state == State.Frozen) Unfreeze();
         }
 
+        // ==================== §30.3 阶8 无敌护盾视效（audit-r5）====================
+        private Coroutine _shieldCoroutine;
+        private static readonly Color SHIELD_TINT = new Color(0.533f, 0.9f, 1.0f, 0.95f);
+
+        /// <summary>
+        /// 🆕 audit-r5 §30.3 阶8 矿工 5s 护盾触发视效。
+        /// 服务端在 HP=0 但 _invincibleShield 抵消致命伤时广播 worker_shield_activated；
+        /// 客户端：durationMs 期内染浅蓝 tint + 头顶气泡"无敌"。
+        /// TODO(美术)：替换为 VFX_Shield_Activate.prefab 粒子特效（美术清单 v4 未交付，现用材质染色占位）。
+        /// </summary>
+        public void HandleShieldActivated(long durationMs)
+        {
+            if (durationMs <= 0) durationMs = 5000;
+            float durationSec = Mathf.Max(0.5f, durationMs / 1000f);
+
+            if (_shieldCoroutine != null) StopCoroutine(_shieldCoroutine);
+            _shieldCoroutine = StartCoroutine(ShieldVisualCoroutine(durationSec));
+
+            // 占位音效（若 AudioManager 没该 SFX 则静默）
+            try { DrscfZ.Systems.AudioManager.Instance?.PlaySFX("sfx_worker_shield_activate"); }
+            catch { /* AudioManager 可能未初始化 */ }
+        }
+
+        private IEnumerator ShieldVisualCoroutine(float durationSec)
+        {
+            // 染浅蓝 tint（Dead/Frozen 态不覆盖，避免状态冲突）
+            bool tinted = false;
+            if (_visual != null && _state != State.Dead && _state != State.Frozen)
+            {
+                // 通过反射路径复用现有染色：直接走 SetWorkColor 会被下次 AssignWork 覆盖
+                // 此处简单走 SetFrozen(true) 的浅蓝材质路径，但 5s 后手动 Reset
+                // 注：SetFrozen 仅影响 material，不影响状态机，安全
+                _visual.SetFrozen(true);
+                tinted = true;
+            }
+
+            // 头顶气泡"无敌"
+            if (_bubble != null && _state != State.Dead && _state != State.Frozen)
+                _bubble.ShowSpecial("无敌", SHIELD_TINT);
+
+            yield return new WaitForSeconds(durationSec);
+
+            // 恢复视觉（仅当未被后续状态覆盖）
+            if (tinted && _visual != null && _state != State.Frozen)
+                _visual.Reset();
+            if (_bubble != null && _state != State.Dead && _state != State.Frozen
+                && _state != State.Work && _state != State.Move)
+                _bubble.Hide();
+
+            _shieldCoroutine = null;
+        }
+
         /// <summary>服务器通知矿工死亡（夜间HP归零）</summary>
         /// <param name="respawnAtMs">复活时间点（Unix毫秒），0=不计时</param>
         public void EnterDead(long respawnAtMs)
