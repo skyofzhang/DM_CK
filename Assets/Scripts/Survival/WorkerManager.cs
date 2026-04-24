@@ -628,6 +628,13 @@ namespace DrscfZ.Survival
                 return;
             }
             worker.HandleWorkerLevelUp(data);
+
+            // §30.8 audit-r9：阶 10 传奇矿工晋升 → 镜头推近 0.8s（SGM 负责 Shake + 金色跑马灯）
+            if (data.newTier >= 10)
+            {
+                SurvivalCameraController.ZoomInBurst(worker.transform.position, 3f, 0.8f);
+            }
+
             Debug.Log($"[WorkerManager] Worker '{data.playerId}' 升级到 Lv.{data.newLevel} (阶{data.newTier})");
         }
 

@@ -314,8 +314,10 @@ const SHOP_PEP_TALK_DURATION_MS = 30 * 1000;
 const SHOP_SPOTLIGHT_DURATION_MS = 10 * 1000;
 // A2 gate_quickpatch 立即 +100 HP（§39.2 A2）
 const SHOP_GATE_QUICKPATCH_HP = 100;
-// A3 emergency_alert 预警提前秒数（§39.2 A3，无瞭望塔时 10s，有瞭望塔时 30s——MVP 简化为固定 10s）
-const SHOP_EMERGENCY_ALERT_LEAD_SEC = 10;
+// A3 emergency_alert 预警提前秒数（§39.2 A3 / §37.2）
+// audit-r9: 有瞭望塔时 30s，无瞭望塔时 10s（消费点见 `_applyShopItemEffect` emergency_alert 分支）
+const SHOP_EMERGENCY_ALERT_LEAD_SEC              = 10;
+const SHOP_EMERGENCY_ALERT_LEAD_SEC_WATCHTOWER   = 30;
 
 // ==================== §34.4 Layer 3 组 D（E2 五幕 / E5a 提词 / E5b 夜报 / E6 修饰符 / E8 唤回 / E9 难度）====================
 // 策划案 §34.4 第 5205–5482 行，与组 C（E1/E3/E4）并存：
@@ -9328,7 +9330,10 @@ class SurvivalGameEngine {
 
       case 'emergency_alert': {
         // §39.2 A3：立即推送一次 monster_wave_incoming；标记 _shopEmergencyAlertUsedWave
-        const leadSec = SHOP_EMERGENCY_ALERT_LEAD_SEC;
+        // audit-r9 §37.2 A3：有瞭望塔时 30s，无瞭望塔时 10s
+        const leadSec = this._buildings.has('watchtower')
+          ? SHOP_EMERGENCY_ALERT_LEAD_SEC_WATCHTOWER
+          : SHOP_EMERGENCY_ALERT_LEAD_SEC;
         const waveIdx = this.currentDay; // MVP 简化：以 currentDay 代理 waveIdx
         const spawnsAt = now + leadSec * 1000;
         const firstAttackAt = spawnsAt + 3000;

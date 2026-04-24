@@ -1898,16 +1898,17 @@ namespace DrscfZ.Survival
             // 路由到 WorkerManager 刷新对应 Worker 的显示
             WorkerManager.Instance?.HandleWorkerLevelUp(data);
 
-            // 阶段10（传奇）→ 特殊相机震撼 + 金色跑马灯（audit-r5 §30.8 轻量占位）
+            // 阶段10（传奇）→ 相机震撼 + 镜头推近（WorkerManager 消费 worker 位置）+ 金色跑马灯
+            //   audit-r9 §30.8 策划案 L3359：镜头短暂推近该矿工（0.8s）+ 金色粒子 + 跑马灯
+            //   ZoomInBurst 由 WorkerManager.HandleWorkerLevelUp 调用（已有 worker ref）
+            //   此处仅处理 Shake（全局震屏）+ 跑马灯（UI 层），美术 VFX_LegendGold 粒子待交付
             if (data.newTier >= 10)
             {
                 SurvivalCameraController.Shake(0.3f, 0.8f);
-                // TODO(美术) §30.8：替换为镜头推近 0.8s + VFX_LegendGold 金色粒子爆发（美术清单 v4 未交付）
-                // 轻量占位：独立金色跑马灯（与常规升级 marquee 区分）
                 string legendName = string.IsNullOrEmpty(data.playerName) ? "传奇矿工" : data.playerName;
                 UI.HorizontalMarqueeUI.Instance?.AddMessage(
                     legendName, null, "<color=#FFD700>晋升传奇矿工！</color>");
-                Debug.Log($"[SGM][Legend] {legendName} 达到阶 10 传奇（TODO 相机推近 + 金色粒子）");
+                Debug.Log($"[SGM][Legend] {legendName} 达到阶 10 传奇（已调 Shake + ZoomInBurst + 金跑马灯；美术 VFX_LegendGold 粒子待交付）");
             }
             else
             {
