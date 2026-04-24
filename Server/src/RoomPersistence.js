@@ -1,18 +1,28 @@
 /**
- * RoomPersistence - §36 房间持久化（MVP 极简版）
+ * RoomPersistence - §36 房间持久化（schemaVersion 3）
  *
  * 职责：
  * 1. 每房一 JSON 文件：./data/rooms/{roomId}.json
  * 2. 保存字段：fortressDay/maxFortressDay、§30 终身数据、§39 商店、§36.5.1 每日 cap
  * 3. 每 30s 自动保存；reset_game / end_game / destroy 前保存
  *
+ * schemaVersion 迁移链：
+ *   v1 → v2：若无 _contribBalance，从 _lifetimeContrib 拷贝
+ *   v2 → v3：
+ *     - 旧 _playerSkinId 字段改名 _playerSkinTier（保留旧字段以兼容，读取时 fallback）
+ *     - 补齐 totalCycles=0 / lastThemeId=null / currentSeasonId=1 / seasonSnapshot=null /
+ *           _supporters=[] / streamerKingTitle=null / _dailyBuildVoteUsed={}
+ *
  * PM 决策（MVP 裁剪项）：
- * - schemaVersion=3；字段缺失自动回退默认值，不做向下兼容迁移脚本
+ * - schemaVersion=3；字段缺失自动回退默认值
  * - 失败只记 warn，不 throw（避免主循环阻塞）
  */
 
 const fs = require('fs');
 const path = require('path');
+
+// P0-A2 schemaVersion 3（新增 8 字段 + v1→v3 迁移）
+const CURRENT_SCHEMA_VERSION = 3;
 
 class RoomPersistence {
   /**
@@ -25,7 +35,7 @@ class RoomPersistence {
     } catch (e) {
       console.warn(`[RoomPersistence] mkdir fail: ${e.message}`);
     }
-    console.log(`[RoomPersistence] dataDir=${this.dataDir}`);
+    console.log(`[RoomPersistence] dataDir=${this.dataDir} schemaVersion=${CURRENT_SCHEMA_VERSION}`);
   }
 
   /** 保存房间快照到 JSON 文件 */
@@ -42,8 +52,50 @@ class RoomPersistence {
       try { veteranSnapshot = engine.veteranTracker.snapshot(); } catch (e) { /* ignore */ }
     }
 
+    // P0-A2 §36 SeasonManager 关联字段（若 engine 已注入 seasonMgr）
+    const seasonMgr = engine.seasonMgr || null;
+    const currentSeasonId = seasonMgr && typeof seasonMgr.seasonId === 'number' ? seasonMgr.seasonId : 1;
+    const lastThemeId     = seasonMgr ? (seasonMgr.themeId || null) : null;
+    // seasonSnapshot：保存赛季级别的镜像（seasonId/seasonDay/themeId + _nextThemeId），
+    //   用于跨进程重启时 SeasonManager 单例恢复。不参与排行。
+    const seasonSnapshot = seasonMgr ? {
+      seasonId:     seasonMgr.seasonId,
+      seasonDay:    seasonMgr.seasonDay,
+      themeId:      seasonMgr.themeId,
+      nextThemeId:  seasonMgr._nextThemeId || null,
+    } : null;
+
+    // P0-A4 StreamerRanking v1.26：总周期数与堡垒之王称号（供恢复时填回 store）
+    //   engine._streamerRankingEntry 不存在 → 读 room.streamerRanking 的当前条目
+    let totalCycles = 0;
+    let streamerKingTitle = null;
+    if (room.streamerRanking && room.streamerRanking._data && room.streamerRanking._data.streamers) {
+      const entry = room.streamerRanking._data.streamers[room.roomId];
+      if (entry) {
+        totalCycles = Number(entry.totalCycles) || 0;
+        streamerKingTitle = entry.streamerKingTitle || null;
+      }
+    }
+
+    // P0-A2 _supporters：Map → Array.from(entries()) 形式
+    const supportersArr = (engine._supporters && typeof engine._supporters.entries === 'function')
+      ? Array.from(engine._supporters.entries())
+      : [];
+
+    // P0-A2 _dailyBuildVoteUsed：对象 seasonDay → bool（§37 建造每日限额 per seasonDay）
+    //   若 engine 尚未维护该字段（旧版本只用全局 bool _buildVoteUsedToday），快照回退空对象
+    const dailyBuildVoteUsed = (engine._dailyBuildVoteUsed && typeof engine._dailyBuildVoteUsed === 'object')
+      ? engine._dailyBuildVoteUsed
+      : {};
+
+    // P0-A2 _playerSkinTier：v3 新字段（取代旧 _playerSkinId）
+    //   engine 已迁移 → 读 engine._playerSkinTier；未迁移 → 从 _playerSkinId 现有值兜底
+    const playerSkinTier = (engine._playerSkinTier && typeof engine._playerSkinTier === 'object')
+      ? engine._playerSkinTier
+      : (engine._playerSkinId || {});
+
     const snapshot = {
-      schemaVersion: 3,
+      schemaVersion: CURRENT_SCHEMA_VERSION,
       roomId: room.roomId,
       savedAt: Date.now(),
 
@@ -54,6 +106,8 @@ class RoomPersistence {
       // §30 矿工成长（跨局永续）
       _lifetimeContrib: engine._lifetimeContrib || {},
       _playerLevel: engine._playerLevel || {},
+      // v3 新字段：_playerSkinTier 取代 _playerSkinId；旧字段仍保留写入（load 时向下兼容）
+      _playerSkinTier: playerSkinTier,
       _playerSkinId: engine._playerSkinId || {},
 
       // §39 商店（跨局永续）
@@ -66,7 +120,7 @@ class RoomPersistence {
       _dailyResetKey: engine._dailyResetKey || 0,
       _dailyCapBlocked: engine._dailyCapBlocked || false,
 
-      // §36.12 老用户豁免（仅增字段；schemaVersion 保持 3）
+      // §36.12 老用户豁免
       _veteranStreamers:     veteranSnapshot ? veteranSnapshot._veteranStreamers     : [],
       _maxSeasonDayAttended: veteranSnapshot ? veteranSnapshot._maxSeasonDayAttended : {},
 
@@ -75,10 +129,20 @@ class RoomPersistence {
       // §38.3 探险符文 24h 滑动窗口（跨重启永续）
       _runeChargeLog: engine._runeChargeLog || [],
 
-      // §37 建造系统：已建成建筑集合（跨重启永续；未完成骨架不持久化，重启视为取消，与 §37.4 规范对齐）
+      // §37 建造系统：已建成建筑集合（跨重启永续；未完成骨架不持久化，重启视为取消）
       _buildings: (engine._buildings && typeof engine._buildings[Symbol.iterator] === 'function')
         ? [...engine._buildings]
         : [],
+
+      // ---- P0-A2 v3 新增 8 字段 ----
+      totalCycles,                      // v1.26 累计周期数（镜像自 streamerRanking entry）
+      lastThemeId,                      // 当前（结束时即"上一"）赛季主题
+      currentSeasonId,                  // 当前赛季 id（SeasonManager 镜像）
+      seasonSnapshot,                   // SeasonManager 快照（seasonId/seasonDay/themeId/_nextThemeId）
+      _supporters: supportersArr,       // Map → [[pid, data], ...] 序列化
+      streamerKingTitle,                // v1.26 "堡垒之王" 称号
+      _dailyBuildVoteUsed: dailyBuildVoteUsed,  // 对象 seasonDay → bool
+      // _playerSkinTier 已在上面写入（与 §30 同组）
     };
 
     try {
@@ -90,7 +154,7 @@ class RoomPersistence {
   }
 
   /**
-   * 加载房间快照
+   * 加载房间快照，并执行 schemaVersion 迁移（v1/v2 → v3）
    * @returns {object|null}  JSON 对象或 null（文件不存在/解析失败均返 null）
    */
   load(roomId) {
@@ -100,11 +164,51 @@ class RoomPersistence {
       if (!fs.existsSync(file)) return null;
       const buf = fs.readFileSync(file, 'utf8');
       const obj = JSON.parse(buf);
-      return obj;
+      return this._migrate(obj);
     } catch (e) {
       console.warn(`[RoomPersistence] load fail ${roomId}: ${e.message}`);
       return null;
     }
+  }
+
+  /**
+   * schemaVersion 迁移：v1 → v2 → v3
+   *   - v1→v2：补 _contribBalance（从 _lifetimeContrib 拷贝）
+   *   - v2→v3：
+   *       - 旧 _playerSkinId 字段 → _playerSkinTier（不存在则空）
+   *       - 补齐 totalCycles=0 / lastThemeId=null / currentSeasonId=1 / seasonSnapshot=null /
+   *             _supporters=[] / streamerKingTitle=null / _dailyBuildVoteUsed={}
+   */
+  _migrate(obj) {
+    if (!obj || typeof obj !== 'object') return obj;
+    const fromVersion = Number(obj.schemaVersion) || 1;
+
+    // v1 → v2：_contribBalance 默认 = _lifetimeContrib 拷贝
+    if (fromVersion < 2) {
+      if (!obj._contribBalance || typeof obj._contribBalance !== 'object') {
+        obj._contribBalance = Object.assign({}, obj._lifetimeContrib || {});
+      }
+    }
+
+    // v2 → v3：_playerSkinId → _playerSkinTier + 补齐 8 新字段
+    if (fromVersion < 3) {
+      if (!obj._playerSkinTier || typeof obj._playerSkinTier !== 'object') {
+        obj._playerSkinTier = Object.assign({}, obj._playerSkinId || {});
+      }
+      if (typeof obj.totalCycles !== 'number')          obj.totalCycles = 0;
+      if (typeof obj.lastThemeId === 'undefined')       obj.lastThemeId = null;
+      if (typeof obj.currentSeasonId !== 'number')      obj.currentSeasonId = 1;
+      if (typeof obj.seasonSnapshot === 'undefined')    obj.seasonSnapshot = null;
+      if (!Array.isArray(obj._supporters))              obj._supporters = [];
+      if (typeof obj.streamerKingTitle === 'undefined') obj.streamerKingTitle = null;
+      if (!obj._dailyBuildVoteUsed || typeof obj._dailyBuildVoteUsed !== 'object') {
+        obj._dailyBuildVoteUsed = {};
+      }
+    }
+
+    // 读后统一标记为最新
+    obj.schemaVersion = CURRENT_SCHEMA_VERSION;
+    return obj;
   }
 
   /**
@@ -128,3 +232,4 @@ class RoomPersistence {
 }
 
 module.exports = RoomPersistence;
+module.exports.CURRENT_SCHEMA_VERSION = CURRENT_SCHEMA_VERSION;

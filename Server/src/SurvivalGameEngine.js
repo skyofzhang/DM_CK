@@ -625,7 +625,8 @@ class SurvivalGameEngine {
     //   snapshot / _applyPersistedSnapshot 负责序列化与恢复；构造函数初值仅在首次 load 前使用。
     this._lifetimeContrib    = {};   // 终身累计贡献（跨局永续）
     this._playerLevel        = {};   // 1~100（跨局永续）
-    this._playerSkinId       = {};   // 当前激活皮肤（跨局永续）
+    this._playerSkinId       = {};   // 当前激活皮肤（跨局永续，v1.25 字段名保留兼容读取点）
+    this._playerSkinTier     = {};   // P0-A2 v3 新字段：替代 _playerSkinId，持久化 tier 粒度
     this._legendReviveUsed   = {};   // 阶10 每晚1次免死标记（_enterNight 重置）
     this._playerSkinCooldown = {};   // 换肤弹幕冷却（60s）
     this._dynamicHpMult      = 1.0;  // 动态难度怪物HP倍率
@@ -660,6 +661,10 @@ class SurvivalGameEngine {
     // _buildings: 已建成建筑 ID 集合；跨夜/跨堡垒日保留，失败降级按 BUILDING_KEEP_ON_DEMOTE 部分保留
     // _buildingInProgress: buildId -> { completesAt, timer }
     // _buildVote: 当前活跃投票 { proposalId, options, startAt, votingEndsAt, votes, proposerName, timer }
+    // P0-A2 v3：_dailyBuildVoteUsed 按 seasonDay → bool 持久化（跨重启保留）
+    //   与 _buildVoteUsedToday 并存：前者跨进程/跨游戏周期（seasonDay key 粒度），
+    //   后者每局 reset + _enterDay 重置（当前局的瞬时状态）。
+    this._dailyBuildVoteUsed = {};
     // _buildVoteUsedToday: 每日限 1 次投票；_enterDay 重置
     this._buildings          = new Set();
     this._buildingInProgress = new Map();
@@ -740,6 +745,16 @@ class SurvivalGameEngine {
     this._dailyFortressDayGained = 0;      // 本 dayKey 已获得的 fortressDay 数
     this._dailyResetKey          = 0;      // 当前 dayKey（UTC+8 05:00 作为日切）
     this._dailyCapBlocked        = false;  // 达到 cap → 本 dayKey 后续 success 静默
+
+    // P0-A5 room_state：最近一次 fortressDay 变化原因（供断线重连快照读取）
+    //   'none' | 'promoted' | 'gate_breached' | 'food_depleted' | 'temp_freeze' | 'all_dead' | 'newbie_protected' | 'cap_blocked' | 'cap_reset'
+    this._lastFortressDayChangeReason = 'none';
+
+    // P0-A5 room_state：当前 phase 的 variant 字段（与 phase_changed.variant 同步更新）
+    //   - 夜晚：null / 'peace_night' / 'peace_night_silent' / 'peace_night_prelude'
+    //   - 白天 recovery：'recovery'
+    //   - 其他：null
+    this._currentPhaseVariant = null;
 
     // §17.15 新手引导气泡（内存变量，不持久化；服务端重启全房间重置为 0）
     this._lastOnboardingAt        = 0;     // Unix ms，最近一次触发时间
@@ -930,6 +945,28 @@ class SurvivalGameEngine {
   }
 
   /**
+   * P0-A9：单播消息给房间创建者（主播）
+   * 用途：streamer_prompt / 仅主播可见的提示类消息
+   * 依赖：setRoomContext 注入 this.room；SurvivalRoom 维护 roomCreatorWs
+   * @param {object} msg  完整消息体 { type, data, ... }
+   * @returns {boolean}  true 已发送；false 无主播 ws（调用方可自行决定是否 broadcast 兜底）
+   */
+  _sendToRoomCreator(msg) {
+    if (!msg) return false;
+    const ws = this.room && this.room.roomCreatorWs;
+    if (!ws || ws.readyState !== 1) return false;
+    try {
+      const roomId = this.room.roomId || '';
+      const copy = Object.assign({ roomId }, msg);
+      ws.send(JSON.stringify(copy));
+      return true;
+    } catch (e) {
+      console.warn(`[SurvivalEngine] _sendToRoomCreator error: ${e.message}`);
+      return false;
+    }
+  }
+
+  /**
    * §35 P2 追加战报，自动维持最多 10 条滑动窗口。
    * TribeWarManager._endSession 在清登记前按 attacker/defender 双向调用。
    * @param {object} report — { sessionId, startedAt, endedAt, reason, stolenFood/Coal/Ore, role, ... }
@@ -971,7 +1008,14 @@ class SurvivalGameEngine {
     // §30 矿工成长
     if (snap._lifetimeContrib && typeof snap._lifetimeContrib === 'object') this._lifetimeContrib = { ...snap._lifetimeContrib };
     if (snap._playerLevel     && typeof snap._playerLevel     === 'object') this._playerLevel     = { ...snap._playerLevel };
-    if (snap._playerSkinId    && typeof snap._playerSkinId    === 'object') this._playerSkinId    = { ...snap._playerSkinId };
+    // P0-A2 v3：_playerSkinTier 取代 _playerSkinId；优先读新字段，fallback 到旧字段
+    if (snap._playerSkinTier  && typeof snap._playerSkinTier  === 'object') {
+      this._playerSkinTier = { ...snap._playerSkinTier };
+      if (!this._playerSkinId) this._playerSkinId = { ...snap._playerSkinTier };  // 兼容旧读取点
+    } else if (snap._playerSkinId && typeof snap._playerSkinId === 'object') {
+      this._playerSkinId = { ...snap._playerSkinId };
+      this._playerSkinTier = { ...snap._playerSkinId };
+    }
 
     // §39 商店
     if (snap._playerShopInventory && typeof snap._playerShopInventory === 'object') this._playerShopInventory = { ...snap._playerShopInventory };
@@ -1004,7 +1048,35 @@ class SurvivalGameEngine {
       try { this.veteranTracker.loadSnapshot(payload); } catch (e) { /* ignore */ }
     }
 
-    console.log(`[Engine:${(this.room && this.room.roomId) || '?'}] Loaded snapshot: fortressDay=${this.fortressDay} maxFortressDay=${this.maxFortressDay} dailyGained=${this._dailyFortressDayGained} dailyCapBlocked=${this._dailyCapBlocked}`);
+    // ---- P0-A2 v3 新增字段恢复 ----
+    // _supporters：数组 → Map<pid, data>
+    if (Array.isArray(snap._supporters)) {
+      if (!(this._supporters instanceof Map)) this._supporters = new Map();
+      else this._supporters.clear();
+      for (const entry of snap._supporters) {
+        if (!Array.isArray(entry) || entry.length < 2) continue;
+        const [pid, data] = entry;
+        if (pid) this._supporters.set(pid, data || {});
+      }
+    }
+    // _dailyBuildVoteUsed：对象 seasonDay → bool
+    if (snap._dailyBuildVoteUsed && typeof snap._dailyBuildVoteUsed === 'object') {
+      this._dailyBuildVoteUsed = { ...snap._dailyBuildVoteUsed };
+    }
+    // SeasonManager 快照回填（仅当 seasonMgr 存在且为未初始化空状态；避免覆盖正在运行的全局时钟）
+    if (this.seasonMgr && snap.seasonSnapshot && typeof snap.seasonSnapshot === 'object') {
+      const ss = snap.seasonSnapshot;
+      // 仅在 seasonMgr 还是默认初值（seasonId=1 && seasonDay=1）时恢复；
+      // 这样多房间共享同一 SeasonManager 时，首个 load 覆盖默认值，其余 load 跳过
+      if (this.seasonMgr.seasonId === 1 && this.seasonMgr.seasonDay === 1 && !this.seasonMgr._nextThemeId) {
+        if (typeof ss.seasonId === 'number')  this.seasonMgr.seasonId  = ss.seasonId | 0;
+        if (typeof ss.seasonDay === 'number') this.seasonMgr.seasonDay = Math.max(1, Math.min(7, ss.seasonDay | 0));
+        if (typeof ss.themeId === 'string' && ss.themeId) this.seasonMgr.themeId = ss.themeId;
+        if (ss.nextThemeId) this.seasonMgr._nextThemeId = ss.nextThemeId;
+      }
+    }
+
+    console.log(`[Engine:${(this.room && this.room.roomId) || '?'}] Loaded snapshot v${snap.schemaVersion || '?'}: fortressDay=${this.fortressDay} maxFortressDay=${this.maxFortressDay} dailyGained=${this._dailyFortressDayGained} dailyCapBlocked=${this._dailyCapBlocked} supporters=${(this._supporters && this._supporters.size) || 0}`);
   }
 
   /** §35 Tribe War：获取当前 roomId（未注入 room 时返 null）*/
@@ -1203,7 +1275,9 @@ class SurvivalGameEngine {
     // §37 建造系统重置：清建筑、清进行中、清投票
     this._buildings.clear();
     for (const [, info] of this._buildingInProgress) {
-      if (info.timer) clearTimeout(info.timer);
+      if (info.timer)         clearTimeout(info.timer);
+      // P0-A6：同时清 build_progress 周期推送定时器
+      if (info.progressTimer) clearInterval(info.progressTimer);
     }
     this._buildingInProgress.clear();
     if (this._buildVote?.timer) clearTimeout(this._buildVote.timer);
@@ -1405,7 +1479,8 @@ class SurvivalGameEngine {
         itemId = SHOP_B_INDEX[idx - 1];
       } else if (cat === 'B' && (idx === 9 || idx === 10)) {
         // PM MVP 决策：B9/B10 赛季限定 SKU 跳过，currentSeasonShopPool 始终空 → item_not_found
-        this._shopFailPurchase('item_not_found', `买${cat}${idx}`);
+        // P0-A8 单播：barrage 路径也尽量按 playerId 单播；_sendToPlayer 在未找到 ws 时回退 broadcast
+        this._shopFailPurchase('item_not_found', `买${cat}${idx}`, null, playerId);
         return;
       }
       if (itemId) {
@@ -1606,10 +1681,15 @@ class SurvivalGameEngine {
       if (!playerId) return;
       const creatorId = (this.room && this.room.roomCreatorOpenId) || '';
       if (creatorId && playerId !== creatorId) {
-        this._broadcast({
+        // P0-A8：expedition_failed 单播给发起方
+        const msg = {
           type: 'expedition_failed',
+          timestamp: Date.now(),
           data: { playerId, reason: 'supporter_not_allowed', unlockDay: 0 },
-        });
+        };
+        if (!this._sendToPlayer(playerId, msg)) {
+          this._broadcast(msg);
+        }
         return;
       }
       const firstExp = this._expeditions.size > 0 ? this._expeditions.values().next().value : null;
@@ -2440,6 +2520,9 @@ class SurvivalGameEngine {
     // §34.4 E2：检测当前 seasonDay 对应的幕（可能跨幕） → 必要时广播 chapter_changed
     this._checkActTagChange();
 
+    // P0-A5：正常 _enterDay 变种为 null（recovery 单独走 _enterRecovery 路径）
+    this._currentPhaseVariant = null;
+
     this.broadcast({
       type: 'phase_changed',
       timestamp: Date.now(),
@@ -2455,6 +2538,9 @@ class SurvivalGameEngine {
 
     // 同步完整状态
     this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
+
+    // P0-A5 room_state 广播：phase_changed 后推一次
+    try { this._broadcastRoomState('phase_changed:day'); } catch (e) { /* ignore */ }
 
     this._startTick();
   }
@@ -2582,6 +2668,9 @@ class SurvivalGameEngine {
         phaseChangedData.peacePreludeEndsAt = this._peaceNightDelayUntil;
       }
     }
+    // P0-A5：同步 _currentPhaseVariant（room_state 消费）
+    this._currentPhaseVariant = peaceVariant || null;
+
     this.broadcast({
       type: 'phase_changed',
       timestamp: Date.now(),
@@ -2592,6 +2681,9 @@ class SurvivalGameEngine {
     this._checkActTagChange();
 
     this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
+
+    // P0-A5 room_state 广播：phase_changed 后推一次
+    try { this._broadcastRoomState('phase_changed:night'); } catch (e) { /* ignore */ }
 
     // §10.6.4 Lv5 冰霜光环：夜晚开始时若 gateLevel>=5 重播一次激活状态（兼顾重连 / 新客户端）
     if (this.gateLevel >= 5) {
@@ -2732,8 +2824,9 @@ class SurvivalGameEngine {
 
     // §36.5 堡垒日降级（manual 跳过）：新手保护 / 10% demote 公式 + room_failed 广播
     //   注意：先调 _onRoomFail（会修改 this.fortressDay）再读 fortressDayAfter
+    //   P0-A5：把语义化 reason 传入 _onRoomFail 以便 _lastFortressDayChangeReason 记录具体原因
     if (!isManual) {
-      try { this._onRoomFail(); } catch (e) {
+      try { this._onRoomFail(reason); } catch (e) {
         console.warn(`[SurvivalEngine] _onRoomFail error: ${e.message}`);
       }
     }
@@ -2841,6 +2934,8 @@ class SurvivalGameEngine {
 
     // ===== §4.2 广播 phase_changed（phase='day' + variant='recovery'，phaseDuration=120）=====
     // §34.4 E2 扩展：附带 act_tag；E6 扩展：白天/恢复期 nightModifier=null
+    // P0-A5：同步 _currentPhaseVariant='recovery' 供 room_state 消费
+    this._currentPhaseVariant = 'recovery';
     this.broadcast({
       type: 'phase_changed',
       timestamp: Date.now(),
@@ -2856,6 +2951,9 @@ class SurvivalGameEngine {
 
     // 同步完整状态（客户端刷新资源条/城门/矿工 HP）
     this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
+
+    // P0-A5 room_state：recovery phase_changed 后也推一次（与 _enterDay / _enterNight 一致）
+    try { this._broadcastRoomState('phase_changed:recovery'); } catch (e) { /* ignore */ }
 
     console.log(`[SurvivalEngine] ===== Recovery Start (120s, day=${this.currentDay}) =====`);
 
@@ -3061,6 +3159,7 @@ class SurvivalGameEngine {
       // 首次触顶 → 设置 _dailyCapBlocked 并广播一次；后续同日再次调用静默
       if (!this._dailyCapBlocked) {
         this._dailyCapBlocked = true;
+        this._lastFortressDayChangeReason = 'cap_blocked';
         this.broadcast({
           type: 'fortress_day_changed',
           timestamp: Date.now(),
@@ -3075,6 +3174,8 @@ class SurvivalGameEngine {
             dailyCapBlocked: true,
           },
         });
+        // P0-A5 room_state 广播：cap_blocked 后推一次
+        try { this._broadcastRoomState('cap_blocked'); } catch (e) { /* ignore */ }
         console.log(`[Engine:${(this.room && this.room.roomId) || '?'}] _onRoomSuccess: cap_blocked at ${this._dailyFortressDayGained}/${DAILY_FORTRESS_CAP_MAX}`);
       }
       // dedup：同日再次调用不再推送，fortressDay 不变
@@ -3087,6 +3188,7 @@ class SurvivalGameEngine {
     if (FeatureFlags.ENABLE_DAILY_CAP) {
       this._dailyFortressDayGained += 1;
     }
+    this._lastFortressDayChangeReason = 'promoted';
 
     this.broadcast({
       type: 'fortress_day_changed',
@@ -3104,6 +3206,12 @@ class SurvivalGameEngine {
     });
 
     console.log(`[Engine:${(this.room && this.room.roomId) || '?'}] _onRoomSuccess: ${oldFortressDay}→${this.fortressDay} reason=promoted dailyGained=${this._dailyFortressDayGained}/${DAILY_FORTRESS_CAP_MAX}`);
+
+    // P0-A4 StreamerRankingStore v1.26：每次 fortress_day_changed 后更新 maxFortressDay/totalCycles
+    this._updateStreamerRankingOnFortressChange(false);
+
+    // P0-A5 room_state 广播：fortress_day_changed 后推一次
+    try { this._broadcastRoomState('fortress_day_changed'); } catch (e) { /* ignore */ }
 
     // §36.12 老用户豁免评估：挺过一夜 → maxFortressDay 可能达到 50 → 触发豁免条件 2
     //   markSeasonAttendance 与 evaluateVeteran 都需要 creatorOpenId；若未注入则 skip
@@ -3136,8 +3244,11 @@ class SurvivalGameEngine {
    *   §36.5 新手保护：fortressDay <= FORTRESS_NEWBIE_PROTECT_DAY (10) 免罚
    *   否则：fortressDay = max(1, floor(fortressDay * 0.9))
    * 广播 room_failed
+   *
+   * @param {string} [failReason]  P0-A5：失败具体原因（'gate_breached'/'food_depleted'/'temp_freeze'/'all_dead'），
+   *   用于填充 _lastFortressDayChangeReason；未提供时回退 'demoted'/'newbie_protected'
    */
-  _onRoomFail() {
+  _onRoomFail(failReason) {
     const oldFortressDay = this.fortressDay;
     let demotionReason = '';
     let newbieProtected = false;
@@ -3151,6 +3262,15 @@ class SurvivalGameEngine {
       demotionReason = 'demoted';
       // §36.5.1.4 反作弊核心：房间失败（含降级）**不**清零 _dailyFortressDayGained / _dailyCapBlocked
       //   —— 只有 UTC+8 05:00 dayKey 切换才 reset；否则"已花出去"的 fortressDay 不退回
+    }
+
+    // P0-A5：记录语义化失败原因供 room_state 携带
+    // 优先使用传入的 failReason（如 'gate_breached'），其次回退到降级枚举
+    const semanticReasons = ['gate_breached', 'food_depleted', 'temp_freeze', 'all_dead'];
+    if (failReason && semanticReasons.includes(failReason)) {
+      this._lastFortressDayChangeReason = failReason;
+    } else {
+      this._lastFortressDayChangeReason = newbieProtected ? 'newbie_protected' : 'demoted';
     }
 
     // 策划案 §36.5 要求:两种失败路径都必须同时推 fortress_day_changed(reason='demoted'|'newbie_protected')
@@ -3181,7 +3301,28 @@ class SurvivalGameEngine {
       },
     });
 
+    // P0-A4 StreamerRankingStore v1.26：fortress_day_changed 后更新 maxFortressDay/totalCycles
+    this._updateStreamerRankingOnFortressChange(false);
+
+    // P0-A5 room_state 广播：fortress_day_changed 后推一次
+    try { this._broadcastRoomState('fortress_day_changed'); } catch (e) { /* ignore */ }
+
     console.log(`[Engine:${(this.room && this.room.roomId) || '?'}] _onRoomFail: ${oldFortressDay}→${this.fortressDay} reason=${demotionReason}`);
+  }
+
+  /**
+   * P0-A4：fortress_day_changed 后调用 StreamerRankingStore.updateIfBetter 同步 v1.26 轨道
+   * @param {boolean} wonCycle  本周期是否胜利（永续制下 _onRoomSuccess 过夜视为 wonCycle=true；_onRoomFail 视为 false）
+   */
+  _updateStreamerRankingOnFortressChange(wonCycle) {
+    if (!this.room || !this.room.streamerRanking) return;
+    try {
+      const streamerId   = this.room.roomId;
+      const streamerName = this.room.streamerName || streamerId;
+      this.room.streamerRanking.updateIfBetter(streamerId, streamerName, this.fortressDay || 1, !!wonCycle);
+    } catch (e) {
+      console.warn(`[Engine] StreamerRanking updateIfBetter error: ${e.message}`);
+    }
   }
 
   // ==================== §36.5.1 每日闯关上限 ====================
@@ -3232,6 +3373,7 @@ class SurvivalGameEngine {
 
       // §36.5.1.2 P52：只对昨日 blocked 的房间推送一次 cap_reset（避免 1000 房间广播洪峰）
       if (wasBlocked) {
+        this._lastFortressDayChangeReason = 'cap_reset';
         this.broadcast({
           type: 'fortress_day_changed',
           timestamp: Date.now(),
@@ -3246,6 +3388,8 @@ class SurvivalGameEngine {
             dailyCapBlocked: false,
           },
         });
+        // P0-A5 room_state：cap_reset 后推一次
+        try { this._broadcastRoomState('fortress_day_changed'); } catch (e) { /* ignore */ }
       }
       console.log(`[Engine:${(this.room && this.room.roomId) || '?'}] Daily cap reset: dayKey ${storedKey}→${currentKey} wasBlocked=${wasBlocked}`);
     } else if (currentKey < storedKey) {
@@ -5112,54 +5256,44 @@ class SurvivalGameEngine {
    * 候选生成：buildId 必入 options[0]；剩余 2 张从"未建造 + 资源够"随机抽；不足补"已建造可重建"；退化 [buildId]
    */
   handleBuildPropose(playerId, playerName, buildId) {
+    // P0-A8 helper：build_propose_failed 单播给发起方
+    const failPropose = (reason) => {
+      const msg = {
+        type: 'build_propose_failed',
+        timestamp: Date.now(),
+        data: { reason, unlockDay: 0 },
+      };
+      if (playerId && this._sendToPlayer(playerId, msg)) return;
+      this._broadcast(msg);
+    };
+
     // 1) 仅白天受理（策划案 §37.3 / §10.5 口径统一，不含 recovery）
     if (this.state !== 'day') {
-      return this._broadcast({
-        type: 'build_propose_failed',
-        data: { reason: 'wrong_phase', unlockDay: 0 },
-      });
+      return failPropose('wrong_phase');
     }
     // 2) 已有活跃投票
     if (this._buildVote !== null) {
-      return this._broadcast({
-        type: 'build_propose_failed',
-        data: { reason: 'already_voting', unlockDay: 0 },
-      });
+      return failPropose('already_voting');
     }
     // 3) 每日限 1 次
     if (this._buildVoteUsedToday) {
-      return this._broadcast({
-        type: 'build_propose_failed',
-        data: { reason: 'daily_limit', unlockDay: 0 },
-      });
+      return failPropose('daily_limit');
     }
     // 4) 助威者不能发起（可投票但不能提案）
     if (playerId && this._supporters.has(playerId)) {
-      return this._broadcast({
-        type: 'build_propose_failed',
-        data: { reason: 'supporter_not_allowed', unlockDay: 0 },
-      });
+      return failPropose('supporter_not_allowed');
     }
     // 5) 非法 buildId（当作 already_built 口径统一）
     if (!BUILDING_CATALOG[buildId]) {
-      return this._broadcast({
-        type: 'build_propose_failed',
-        data: { reason: 'already_built', unlockDay: 0 },
-      });
+      return failPropose('already_built');
     }
     // 6) 已建成（同类建筑唯一）
     if (this._buildings.has(buildId)) {
-      return this._broadcast({
-        type: 'build_propose_failed',
-        data: { reason: 'already_built', unlockDay: 0 },
-      });
+      return failPropose('already_built');
     }
     // 7) 资源不足
     if (!this._hasBuildResources(buildId)) {
-      return this._broadcast({
-        type: 'build_propose_failed',
-        data: { reason: 'insufficient_resources', unlockDay: 0 },
-      });
+      return failPropose('insufficient_resources');
     }
 
     // ---- 生成候选 options（长度 1~3）----
@@ -5314,9 +5448,23 @@ class SurvivalGameEngine {
     if (cfg.cost.coal) this.coal = Math.max(0, this.coal - cfg.cost.coal);
     if (cfg.cost.food) this.food = Math.max(0, this.food - cfg.cost.food);
 
-    const completesAt = Date.now() + cfg.buildMs;
-    const timer = setTimeout(() => this._completeBuild(buildId), cfg.buildMs);
-    this._buildingInProgress.set(buildId, { completesAt, timer });
+    const startedAt   = Date.now();
+    const totalMs     = cfg.buildMs;
+    const completesAt = startedAt + totalMs;
+    const timer = setTimeout(() => this._completeBuild(buildId), totalMs);
+
+    // P0-A6 build_progress 周期推送（每 2s 一次，客户端进度条平滑）
+    const progressTimer = setInterval(() => {
+      this._broadcastBuildProgress(buildId);
+    }, 2000);
+
+    this._buildingInProgress.set(buildId, {
+      completesAt,
+      startedAt,
+      totalMs,
+      timer,
+      progressTimer,
+    });
 
     this._broadcast({
       type: 'build_started',
@@ -5327,13 +5475,41 @@ class SurvivalGameEngine {
       },
     });
     this._broadcastResourceUpdate();
-    console.log(`[Building] started: ${buildId} completesAt=+${cfg.buildMs/1000}s cost=${JSON.stringify(cfg.cost)}`);
+    console.log(`[Building] started: ${buildId} completesAt=+${totalMs/1000}s cost=${JSON.stringify(cfg.cost)}`);
+  }
+
+  /**
+   * P0-A6 建造进度周期推送（每 2s 一次，每个 in-progress 建筑独立推）
+   *   payload: { type:'build_progress', buildingId, progress(0~1), remainingMs, completeAt }
+   */
+  _broadcastBuildProgress(buildId) {
+    const info = this._buildingInProgress.get(buildId);
+    if (!info) return;   // 可能已 complete 或被 demote 清理
+    const now = Date.now();
+    const totalMs = info.totalMs || 1;
+    const remainingMs = Math.max(0, info.completesAt - now);
+    const elapsed = Math.max(0, totalMs - remainingMs);
+    const progress = Math.min(1, Math.max(0, elapsed / totalMs));
+    this._broadcast({
+      type: 'build_progress',
+      data: {
+        buildingId:  buildId,
+        progress:    Math.round(progress * 1000) / 1000,
+        remainingMs,
+        completeAt:  info.completesAt,
+      },
+    });
   }
 
   /** 建造完成 → 加入 _buildings 集合，广播 build_completed */
   _completeBuild(buildId) {
     const info = this._buildingInProgress.get(buildId);
     if (info && info.timer) clearTimeout(info.timer);
+    // P0-A6 build_progress：清除周期推送定时器
+    if (info && info.progressTimer) {
+      clearInterval(info.progressTimer);
+      info.progressTimer = null;
+    }
     this._buildingInProgress.delete(buildId);
     // 幂等：若已被 demote 清理则不重复加入
     if (this._buildings.has(buildId)) return;
@@ -5341,6 +5517,9 @@ class SurvivalGameEngine {
 
     this._broadcast({ type: 'build_completed', data: { buildId } });
     console.log(`[Building] completed: ${buildId} → _buildings=[${[...this._buildings].join(',')}]`);
+
+    // P0-A5 room_state 广播：build_completed 后推一次
+    try { this._broadcastRoomState('build_completed'); } catch (e) { /* ignore */ }
 
     // §37.2 watchtower：已在 _scheduleNightWaves 统一挂钩（每 wave 前 10s 广播 monster_wave_incoming）。
     //   夜晚建成时当晚已进入的调度不回溯重排；从下一夜起所有 wave 自动获得预告。
@@ -5364,6 +5543,11 @@ class SurvivalGameEngine {
     // 2) 进行中：全部取消（不返资源），广播 build_demolished
     for (const [bid, info] of this._buildingInProgress) {
       if (info.timer) clearTimeout(info.timer);
+      // P0-A6：同步清除周期推送定时器（防止残留 setInterval）
+      if (info.progressTimer) {
+        clearInterval(info.progressTimer);
+        info.progressTimer = null;
+      }
       this._broadcast({
         type: 'build_demolished',
         data: { buildId: bid, reason: 'demoted_during_build' },
@@ -5440,6 +5624,189 @@ class SurvivalGameEngine {
    */
   _broadcast(msg) {
     this.broadcast(Object.assign({ timestamp: Date.now() }, msg));
+  }
+
+  /**
+   * P0-A5：汇总全房间 _lifetimeContrib 总和（room_state.lifetimeContribTotal 用）
+   */
+  _sumLifetimeContrib() {
+    if (!this._lifetimeContrib) return 0;
+    let sum = 0;
+    for (const v of Object.values(this._lifetimeContrib)) {
+      const n = Number(v);
+      if (Number.isFinite(n) && n > 0) sum += n;
+    }
+    return Math.round(sum);
+  }
+
+  /**
+   * P0-A5：构造 room_state.inProgress 子对象（roulette/build/expeditions[]/tribeWar）
+   *   — 字段命名与客户端 RoomStateData 内嵌的 InProgress 类型对齐（RouletteInProgressData / BuildInProgressData /
+   *     ExpeditionInProgressData[] / TribeWarInProgressData）。
+   *   — 任一子对象无活跃状态时返回 null（客户端 JsonUtility 宽容 null 字段）。
+   */
+  _buildRoomStateInProgress() {
+    const nowMs = Date.now();
+
+    // roulette
+    let roulette = null;
+    if (this._roulette) {
+      const effect = this._roulette._effectActive;
+      const pending = this._roulette._pending;
+      if (effect || pending || this._roulette._readyAt > 0) {
+        roulette = {
+          cardId:       effect ? effect.cardId : (pending ? pending.cardId : ''),
+          effectEndsAt: effect ? effect.endsAt : 0,
+          readyAt:      this._roulette._readyAt > 0 ? this._roulette._readyAt : -1,
+        };
+      }
+    }
+
+    // build（当前仅支持一个投票 + 多个 in-progress 建造；MVP 仅回投票或最早 in-progress）
+    let build = null;
+    if (this._buildVote) {
+      // 投票阶段：progress=0，completedAt=votingEndsAt 方便客户端按阶段区分
+      build = {
+        buildingId:  this._buildVote.options && this._buildVote.options[0] || '',
+        name:        this._buildVote.proposerName || '',
+        progress:    0,
+        completedAt: this._buildVote.votingEndsAt || 0,
+      };
+    } else if (this._buildingInProgress && this._buildingInProgress.size > 0) {
+      // 建造阶段：取最早一条
+      for (const [buildId, info] of this._buildingInProgress) {
+        const cfg = BUILDING_CATALOG[buildId] || {};
+        const totalMs = cfg.buildMs || 1;
+        const elapsed = Math.max(0, totalMs - Math.max(0, info.completesAt - nowMs));
+        const progress = Math.min(1, Math.max(0, elapsed / totalMs));
+        build = {
+          buildingId:  buildId,
+          name:        buildId,
+          progress:    Math.round(progress * 1000) / 1000,
+          completedAt: info.completesAt || 0,
+        };
+        break;
+      }
+    }
+
+    // expeditions[]
+    const expeditions = [];
+    if (this._expeditions && this._expeditions.size > 0) {
+      for (const [expId, exp] of this._expeditions) {
+        if (!exp) continue;
+        // 三阶段推断 phase：outbound → event → return
+        let phase = 'outbound';
+        if (exp.eventEndsAt && nowMs < exp.eventEndsAt) {
+          phase = 'event';
+        } else if (exp.eventEndsAt && nowMs >= exp.eventEndsAt && nowMs < exp.returnsAt) {
+          phase = 'return';
+        } else if (!exp.eventEndsAt) {
+          // 未到事件阶段
+          phase = 'outbound';
+        }
+        expeditions.push({
+          expeditionId: expId,
+          workerId:     exp.playerId || '',
+          phase,
+          endsAt:       exp.returnsAt || 0,
+        });
+      }
+    }
+
+    // tribeWar
+    let tribeWar = null;
+    if (this.tribeWarMgr && this.room && this.room.roomId) {
+      const rid = this.room.roomId;
+      const asAtkSid = this.tribeWarMgr._attackerToSession && this.tribeWarMgr._attackerToSession.get(rid);
+      const asDefSid = this.tribeWarMgr._defenderToSession && this.tribeWarMgr._defenderToSession.get(rid);
+      const sid = asAtkSid || asDefSid;
+      if (sid) {
+        const session = this.tribeWarMgr._sessions && this.tribeWarMgr._sessions.get(sid);
+        if (session && !session._ended) {
+          tribeWar = {
+            sessionId:    sid,
+            state:        asAtkSid ? 'attacking' : 'defending',
+            targetRoomId: asAtkSid
+              ? (session.defender && session.defender.roomId || '')
+              : (session.attacker && session.attacker.roomId || ''),
+            endsAt:       0,   // MVP 无硬结束时间（无能量 180s 自动断，非绝对时间戳）
+          };
+        }
+      }
+    }
+
+    const hasAny = !!(roulette || build || (expeditions && expeditions.length > 0) || tribeWar);
+    return hasAny ? { roulette, build, expeditions, tribeWar } : null;
+  }
+
+  /**
+   * P0-A5：广播 room_state（断线重连 + 关键时机的房间全量快照）
+   *
+   * 触发时机（按策划案 §18.7 / §19）：
+   *   1. 客户端重连 sync_state 后       — 由 SurvivalRoom 触发（_sendStateToClient 内）
+   *   2. phase_changed                   — _enterDay / _enterNight 末尾
+   *   3. fortress_day_changed            — _onRoomSuccess / _onRoomFail / cap_blocked / cap_reset
+   *   4. build_completed                 — _completeBuild 末尾
+   *   5. season_changed                  — SeasonManager.advanceDay 换赛季后（P0-A5 由 engine 侧联动）
+   *   6. tribe_war_start / tribe_war_end — TribeWar 启停后
+   *   7. start_game                      — addClient 首次注入（亦可由 SurvivalRoom 调用）
+   *
+   * @param {string} [trigger] 可选的触发来源标记（仅用于日志）
+   */
+  _broadcastRoomState(trigger) {
+    // 无 room 注入时无法构造 streamerKingTitle 等字段 → 跳过（guard）
+    const inProgress = this._buildRoomStateInProgress();
+
+    // 获取 streamerKingTitle / totalCycles（P0-A4 v1.26 字段）— 从 room.streamerRanking 读当前主播条目
+    let totalCycles = 0;
+    let streamerKingTitle = null;
+    if (this.room && this.room.streamerRanking && this.room.streamerRanking._data &&
+        this.room.streamerRanking._data.streamers) {
+      const entry = this.room.streamerRanking._data.streamers[this.room.roomId];
+      if (entry) {
+        totalCycles = Number(entry.totalCycles) || 0;
+        streamerKingTitle = entry.streamerKingTitle || null;
+      }
+    }
+
+    const payload = {
+      type: 'room_state',
+      timestamp: Date.now(),
+      data: {
+        // §36 堡垒日
+        fortressDay:    this.fortressDay || 1,
+        maxFortressDay: this.maxFortressDay || 1,
+        // P0-A4 v1.26
+        totalCycles,
+        streamerKingTitle,
+        // §36 赛季
+        currentSeasonId: (this.seasonMgr && this.seasonMgr.seasonId) || 1,
+        lastThemeId:     (this.seasonMgr && this.seasonMgr.themeId)  || null,
+        themeId:         (this.seasonMgr && this.seasonMgr.themeId)  || null,
+        // phase
+        phase:               this.state || 'idle',
+        variant:             this._currentPhaseVariant || null,
+        // P0-A5 语义化 fortress 变化原因
+        fortressDayChangeReason: this._lastFortressDayChangeReason || 'none',
+        // §30 跨房间汇总（全房间玩家 lifetime 贡献总和）
+        lifetimeContribTotal: this._sumLifetimeContrib(),
+        // 进行中子系统（与 RoomStateData 对齐字段）
+        roulette:    inProgress ? inProgress.roulette    : null,
+        build:       inProgress ? inProgress.build       : null,
+        expeditions: inProgress ? inProgress.expeditions : [],
+        tribeWar:    inProgress ? inProgress.tribeWar    : null,
+        // §36.5.1 每日 cap（与 fortress_day_changed 一致的 4 字段）
+        dailyFortressDayGained: this._dailyFortressDayGained || 0,
+        dailyCapMax:            DAILY_FORTRESS_CAP_MAX,
+        dailyResetAt:           this._getNextDailyResetMs(),
+        dailyCapBlocked:        !!this._dailyCapBlocked,
+      },
+    };
+
+    this.broadcast(payload);
+    if (trigger) {
+      console.log(`[SurvivalEngine] room_state broadcast: trigger=${trigger} phase=${payload.data.phase} fortressDay=${payload.data.fortressDay} reason=${payload.data.fortressDayChangeReason}`);
+    }
   }
 
   _broadcastResourceUpdate() {
@@ -6067,7 +6434,7 @@ class SurvivalGameEngine {
 
   /**
    * §34.4 E5a：启动 / 重启提词器定时器（每 10s 调用一次）
-   * TODO: 接入 _roomCreatorId 单播能力后按主播身份过滤；当前版本广播，客户端按 isRoomCreator=true 过滤
+   * P0-A9：streamer_prompt 改为 _sendToRoomCreator 单播；未获取到主播 ws 时 fallback broadcast（兼容早期无 roomCreatorWs 绑定场景）
    */
   _startStreamerPromptTimer() {
     if (this._streamerPromptTimer) {
@@ -6078,16 +6445,19 @@ class SurvivalGameEngine {
       if (this.state !== 'day' && this.state !== 'night' && this.state !== 'recovery') return;
       const prompt = this._generateStreamerPrompt();
       if (!prompt) return;
-      this.broadcast({
+      const msg = {
         type: 'streamer_prompt',
         timestamp: Date.now(),
         data: {
           text:      prompt.text,
           priority:  prompt.priority,
-          // TODO: 客户端按 isRoomCreator=true 过滤，仅主播 UI 展示
           recipient: 'broadcaster_only',
         },
-      });
+      };
+      // P0-A9 单播：优先只发给主播；未绑定主播 ws 时 fallback broadcast（客户端按 isRoomCreator 过滤）
+      if (!this._sendToRoomCreator(msg)) {
+        this.broadcast(msg);
+      }
     }, STREAMER_PROMPT_INTERVAL_MS);
   }
 
@@ -7219,14 +7589,15 @@ class SurvivalGameEngine {
       const unlockDay = failReason === 'feature_locked'
         ? ((((require('./config/FeatureUnlockConfig').FEATURE_UNLOCK_DAY || {}).expedition || {}).minDay) || 0)
         : 0;
-      this._broadcast({
+      // P0-A8：expedition_failed 单播给发起方（弹幕入口也尽量按 playerId 单播）
+      const msg = {
         type: 'expedition_failed',
-        data: {
-          playerId,
-          reason: failReason,
-          unlockDay,
-        },
-      });
+        timestamp: Date.now(),
+        data: { playerId, reason: failReason, unlockDay },
+      };
+      if (!(playerId && this._sendToPlayer(playerId, msg))) {
+        this._broadcast(msg);
+      }
       console.log(`[SurvivalEngine] expedition_failed: ${playerName} (${playerId}) reason=${failReason}`);
     }
   }
@@ -7791,11 +8162,23 @@ class SurvivalGameEngine {
     return `pend_${Date.now().toString(36)}_${this._shopPendingIdCounter}_${Math.floor(Math.random() * 0xfffff).toString(36)}`;
   }
 
-  /** §39 工具：推送 shop_purchase_failed（带 reason + 可选附加字段） */
-  _shopFailPurchase(reason, itemId, extra) {
+  /**
+   * §39 工具：推送 shop_purchase_failed（带 reason + 可选附加字段）
+   * P0-A8：优先按 playerId 单播给发起方；未知 playerId 时兜底 broadcast
+   * @param {string} reason     失败原因
+   * @param {string} itemId     商品 id
+   * @param {object} [extra]    附加字段
+   * @param {string} [playerId] 发起方 playerId（主要调用点 handleShopPurchase 已传）
+   */
+  _shopFailPurchase(reason, itemId, extra, playerId) {
     const data = { reason, itemId: itemId || null };
     if (extra) Object.assign(data, extra);
-    this._broadcast({ type: 'shop_purchase_failed', data });
+    const msg = { type: 'shop_purchase_failed', timestamp: Date.now(), data };
+    if (playerId && this._sendToPlayer(playerId, msg)) {
+      return;  // 已单播
+    }
+    // 兜底：无 playerId 或未找到对应 ws → broadcast（兼容老路径）
+    this._broadcast(msg);
   }
 
   /**
@@ -7861,15 +8244,16 @@ class SurvivalGameEngine {
     // MVP PM 决策：_roomCreatorId 鉴权放开，任何玩家都可发起 prepare
 
     // 校验余额（余额不足直接 shop_purchase_failed，不进 pending 池）
+    // P0-A8：失败消息单播给发起方
     const balance = this._contribBalance[playerId] || 0;
     if (balance < cfg.price) {
-      return this._shopFailPurchase('insufficient', itemId);
+      return this._shopFailPurchase('insufficient', itemId, null, playerId);
     }
 
     // 已拥有 → already_owned（prepare 阶段就拦截，避免浪费 pending）
     const owned = this._playerShopInventory[playerId] || [];
     if (owned.includes(itemId)) {
-      return this._shopFailPurchase('already_owned', itemId);
+      return this._shopFailPurchase('already_owned', itemId, null, playerId);
     }
 
     // 清掉该玩家已有的旧 pending（同主播同时最多 1 个 pending，§39.7）
@@ -7909,27 +8293,28 @@ class SurvivalGameEngine {
     if (!playerId) return;
 
     // 1) itemId 存在性
+    // P0-A8：所有 _shopFailPurchase 增加 playerId 参数以单播给发起方
     const cfg = SHOP_CATALOG[itemId];
-    if (!cfg) return this._shopFailPurchase('item_not_found', itemId);
+    if (!cfg) return this._shopFailPurchase('item_not_found', itemId, null, playerId);
 
     // 2) phase 校验
     if (!this._shopIsPhaseAllowed(itemId)) {
-      return this._shopFailPurchase('wrong_phase', itemId);
+      return this._shopFailPurchase('wrong_phase', itemId, null, playerId);
     }
 
     // 3) pendingId 校验（若有）：一次性凭证
     if (pendingId) {
       const pending = this._shopPendingPurchases.get(pendingId);
       if (!pending) {
-        return this._shopFailPurchase('pending_invalid', itemId);
+        return this._shopFailPurchase('pending_invalid', itemId, null, playerId);
       }
       if (Date.now() > pending.expiresAt) {
         this._shopPendingPurchases.delete(pendingId);
-        return this._shopFailPurchase('pending_expired', itemId);
+        return this._shopFailPurchase('pending_expired', itemId, null, playerId);
       }
       // playerId + itemId 一致性
       if (pending.playerId !== playerId || pending.itemId !== itemId) {
-        return this._shopFailPurchase('pending_invalid', itemId);
+        return this._shopFailPurchase('pending_invalid', itemId, null, playerId);
       }
       // 匹配成功 → 一次性删除
       this._shopPendingPurchases.delete(pendingId);
@@ -7940,22 +8325,22 @@ class SurvivalGameEngine {
     if (cfg.category === 'A') {
       // 助威者禁 A 类
       if (this._supporters.has(playerId)) {
-        return this._shopFailPurchase('supporter_not_allowed', itemId);
+        return this._shopFailPurchase('supporter_not_allowed', itemId, null, playerId);
       }
 
       // A 类特殊预检（在扣费前，避免"无效购买"也扣钱）
       if (itemId === 'gate_quickpatch') {
         if (this.gateHp >= this.gateMaxHp) {
-          return this._shopFailPurchase('no_effect', itemId);  // 满血不扣费
+          return this._shopFailPurchase('no_effect', itemId, null, playerId);  // 满血不扣费
         }
       }
       if (itemId === 'spotlight') {
         const active = this._shopSpotlightActive[playerId];
         if (active && Date.now() < active.endsAt) {
-          return this._shopFailPurchase('spotlight_active', itemId);  // 激活中不扣费
+          return this._shopFailPurchase('spotlight_active', itemId, null, playerId);  // 激活中不扣费
         }
         if (this._shopSpotlightUsedThisGame[playerId]) {
-          return this._shopFailPurchase('limit_exceeded', itemId);   // 本局已用过不扣费
+          return this._shopFailPurchase('limit_exceeded', itemId, null, playerId);   // 本局已用过不扣费
         }
       }
       if (itemId === 'emergency_alert') {
@@ -7963,14 +8348,14 @@ class SurvivalGameEngine {
         const lastWave = this._shopEmergencyAlertUsedWave[playerId];
         const curWave  = this.currentDay;  // 以 currentDay 作为 wave 代理（MVP 简化）
         if (lastWave !== undefined && lastWave === curWave) {
-          return this._shopFailPurchase('per_game_limit', itemId);
+          return this._shopFailPurchase('per_game_limit', itemId, null, playerId);
         }
       }
 
       // 余额校验（A 类从 contributions 扣）
       const curContrib = this.contributions[playerId] || 0;
       if (curContrib < cfg.price) {
-        return this._shopFailPurchase('insufficient', itemId);
+        return this._shopFailPurchase('insufficient', itemId, null, playerId);
       }
       // 扣费
       this.contributions[playerId] = curContrib - cfg.price;
@@ -7995,13 +8380,13 @@ class SurvivalGameEngine {
       if (!this._playerShopInventory[playerId]) this._playerShopInventory[playerId] = [];
       const owned = this._playerShopInventory[playerId];
       if (owned.includes(itemId)) {
-        return this._shopFailPurchase('already_owned', itemId);
+        return this._shopFailPurchase('already_owned', itemId, null, playerId);
       }
 
       // 余额校验（B 类从 _contribBalance 扣）
       const balance = this._contribBalance[playerId] || 0;
       if (balance < cfg.price) {
-        return this._shopFailPurchase('insufficient', itemId);
+        return this._shopFailPurchase('insufficient', itemId, null, playerId);
       }
       // 扣费 + 入库存
       this._contribBalance[playerId] = balance - cfg.price;
@@ -8340,7 +8725,9 @@ class SurvivalGameEngine {
     // §37 建造系统：清投票定时器 + 进行中建造定时器（不清 _buildings 集合）
     if (this._buildVote?.timer) { clearTimeout(this._buildVote.timer); this._buildVote.timer = null; }
     for (const [, info] of this._buildingInProgress) {
-      if (info.timer) { clearTimeout(info.timer); info.timer = null; }
+      if (info.timer)         { clearTimeout(info.timer);         info.timer = null; }
+      // P0-A6：同时清 build_progress 周期推送定时器
+      if (info.progressTimer) { clearInterval(info.progressTimer); info.progressTimer = null; }
     }
 
     // §39 商店系统：清 spotlight 过期定时器（不清 _shopSpotlightActive，交给 reset() 决定）

@@ -151,6 +151,18 @@ class TribeWarManager {
       console.warn(`[TribeWarManager] start broadcast error: ${e.message}`);
     }
 
+    // P0-A5 room_state 广播：tribe_war_start 后双方各推一次
+    try {
+      if (attacker.survivalEngine && typeof attacker.survivalEngine._broadcastRoomState === 'function') {
+        attacker.survivalEngine._broadcastRoomState('tribe_war_start');
+      }
+    } catch (_) { /* ignore */ }
+    try {
+      if (defender.survivalEngine && typeof defender.survivalEngine._broadcastRoomState === 'function') {
+        defender.survivalEngine._broadcastRoomState('tribe_war_start');
+      }
+    } catch (_) { /* ignore */ }
+
     console.log(`[TribeWarManager] Attack started: ${attackerRoomId} → ${defenderRoomId} (session=${sessionId}, dm=${dm})`);
     return { ok: true, sessionId };
   }
@@ -326,6 +338,20 @@ class TribeWarManager {
     if (defId && this._defenderToSession.get(defId) === session.id) {
       this._defenderToSession.delete(defId);
     }
+
+    // P0-A5 room_state 广播：tribe_war_end 后双方各推一次（清登记后，room_state.tribeWar 将为 null）
+    try {
+      if (session.attacker && session.attacker.survivalEngine &&
+          typeof session.attacker.survivalEngine._broadcastRoomState === 'function') {
+        session.attacker.survivalEngine._broadcastRoomState('tribe_war_end');
+      }
+    } catch (_) { /* ignore */ }
+    try {
+      if (session.defender && session.defender.survivalEngine &&
+          typeof session.defender.survivalEngine._broadcastRoomState === 'function') {
+        session.defender.survivalEngine._broadcastRoomState('tribe_war_end');
+      }
+    } catch (_) { /* ignore */ }
 
     console.log(`[TribeWarManager] Session ended: ${session.id} (reason=${reason}, stolen F/C/O=${session.stolenFood}/${session.stolenCoal}/${session.stolenOre})`);
   }
