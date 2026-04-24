@@ -129,6 +129,16 @@ namespace DrscfZ.Core
         public const string SFX_RANK_DOWN = "sfx_rank_down";
 
         // ============================================================
+        // SFX — 矿工成长 §30.8（audit-r11 GAP-C09 新增）
+        // ============================================================
+
+        /// <summary>矿工阶段晋升（每 10 级触发一次，2s 庄严号角，音量 0.9）— 美术待交付 sfx_tier_promote.mp3</summary>
+        public const string SFX_TIER_PROMOTE = "sfx_tier_promote";
+
+        /// <summary>矿工阶 10 传奇晋升（与 SFX_TIER_PROMOTE 共用 clip，可未来独立化）</summary>
+        public const string SFX_LEGEND_PROMOTE = "sfx_tier_promote";
+
+        // ============================================================
         // SFX — 主播
         // ============================================================
 

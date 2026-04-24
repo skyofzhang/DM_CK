@@ -4339,8 +4339,8 @@ class SurvivalGameEngine {
       return;
     }
 
-    // 2. 夜晚特殊限制（T6 礼物可在任意合法阶段升级）
-    if (this.state === 'night' && source !== 'gift_t6') {
+    // 2. 夜晚特殊限制（T6 礼物 / expedition_trader 事件触发可在任意合法阶段升级）
+    if (this.state === 'night' && source !== 'gift_t6' && source !== 'expedition_trader') {
       // Boss 已出现：主动升级被锁定（用 _activeMonsters 中是否存在 boss 类型判断）
       let bossActive = false;
       for (const m of this._activeMonsters.values()) {
@@ -4392,16 +4392,16 @@ class SurvivalGameEngine {
       }
     }
 
-    // 5. 矿石消耗（T6 跳过）
+    // 5. 矿石消耗（T6 / expedition_trader 跳过 — trader 资源已在 case trader_caravan 内部扣除 food+ore）
     const cost = GATE_UPGRADE_COSTS[currentLevel - 1];
-    if (source !== 'gift_t6' && this.ore < cost) {
+    if (source !== 'gift_t6' && source !== 'expedition_trader' && this.ore < cost) {
       this._failGateUpgrade('insufficient_ore', {
         required:  cost,
         available: Math.round(this.ore),
       }, secOpenId);
       return;
     }
-    if (source !== 'gift_t6') this.ore -= cost;
+    if (source !== 'gift_t6' && source !== 'expedition_trader') this.ore -= cost;
 
     // 6. 执行升级
     this.gateLevel = currentLevel + 1;
@@ -4613,22 +4613,48 @@ class SurvivalGameEngine {
         return;
       }
 
-      // 广播 waiting_phase_started（allowVoteTypes 空数组占位，P1 §33 助威 / §34 体验投票接入后填充）
+      // audit-r11 GAP-D01：从房间状态派生 allowVoteTypes（替代 r9-r10 的空数组占位）
+      //   - support：仅当本房有助威者（_supporters 非空，§33 D6 已解锁）才允许投票
+      //   - experience：仅当本房有 altar 建筑（§37 体验加成）才允许
+      //   - tribe_war：仅当本房未被任何攻防战会话锁定（tribeWarMgr 查询）才允许
+      //   注：MVP 阶段"允许的投票类型"由 WaitingPhase 决定可投，UI 投票实装在 P1 接入；
+      //   字段已派生让客户端 WaitingPhaseUI 提前可读，不再 r12 还要改 payload
+      const allowVoteTypes = [];
+      try {
+        if (_engineRef._supporters && _engineRef._supporters.size > 0) allowVoteTypes.push('support');
+        if (_engineRef._buildings && _engineRef._buildings.has('altar')) allowVoteTypes.push('experience');
+        // tribeWar：从 tribeWarMgr 反查本房 roomId 是否在 _attackerToSession / _defenderToSession 中
+        let inTribeWar = false;
+        try {
+          const rid = _engineRef.room && _engineRef.room.roomId;
+          const tw  = _engineRef.tribeWarMgr;
+          if (rid && tw) {
+            inTribeWar = (tw._attackerToSession && tw._attackerToSession.get(rid))
+                      || (tw._defenderToSession && tw._defenderToSession.get(rid));
+          }
+        } catch (_) { /* tribeWarMgr 未挂载视为 idle */ }
+        if (!inTribeWar) allowVoteTypes.push('tribe_war');
+      } catch (e) { /* 兜底：派生失败保持空数组 */ }
+
       _engineRef.broadcast({
         type: 'waiting_phase_started',
         timestamp: Date.now(),
         data: {
           waveIdx:        wIdx,
           countdownSec:   waitSec,
-          allowVoteTypes: [],
+          allowVoteTypes,
         },
       });
-      console.log(`[SurvivalEngine] waiting_phase_started: day=${day} waveIdx=${wIdx} countdown=${waitSec}s (boss=${!!isBossWave})`);
+      console.log(`[SurvivalEngine] waiting_phase_started: day=${day} waveIdx=${wIdx} countdown=${waitSec}s (boss=${!!isBossWave}) allowVoteTypes=[${allowVoteTypes.join(',')}]`);
       const waitTimer = setTimeout(() => {
         _engineRef.broadcast({
           type: 'waiting_phase_ended',
           timestamp: Date.now(),
-          data: { waveIdx: wIdx },
+          data: {
+            waveIdx:    wIdx,
+            // audit-r11 GAP-D01：占位字段保协议向后兼容；P1 投票接入后由真实 result 替换
+            voteResult: null,
+          },
         });
         if (_engineRef.state !== 'night') return;
         doSpawn();
@@ -5855,6 +5881,8 @@ class SurvivalGameEngine {
    * 发起建造投票（C→S build_propose）
    * 前置：state==='day' + 无活跃投票 + 非助威者 + 未当日用完 + buildId 合法且未建成 + 资源充足
    * 候选生成：buildId 必入 options[0]；剩余 2 张从"未建造 + 资源够"随机抽；不足补"已建造可重建"；退化 [buildId]
+   * audit-r11 GAP-D06：§37.4 v1.27 明示——攻防战期间（攻击方/防御方均算）允许正常发起 build_propose 与 45s 投票
+   *   不在此函数拦截 tribeWar 状态（玩家在战斗中仍可发动建造投票，是设计意图，不视为冲突）
    */
   handleBuildPropose(playerId, playerName, buildId) {
     // P0-A8 helper：build_propose_failed 单播给发起方
@@ -8561,29 +8589,28 @@ class SurvivalGameEngine {
         }
 
         case 'trader_caravan': {
-          // accept 且资源足够 → 扣 food+ore，城门直升 Lv+1（PM 决策：简化直接升级）
+          // audit-r11 GAP-A2 修：accept 且资源足够 → 扣 food+ore，调 _upgradeGate('expedition_trader')
+          //   原 r10 直改 gateLevel/gateMaxHp/gateHp + 自造广播 5 项数据断裂：
+          //     ① 未置 _gateUpgradedToday → 主播仍可同日再升 1 次（违 §10.10.2 step 8 每日 1 次）
+          //     ② Lv4→Lv5 未触发 _broadcastFrostAuraState
+          //     ③ Lv5→Lv6 未启动 _frostPulseTimer
+          //     ④ 缺 hpBonus/tierName/newFeatures 字段（客户端 GateUpgradedData 反序列化空字符串）
+          //     ⑤ 字段名 reason='trader_caravan' 而非约定的 source='expedition_trader'
+          //   r11 改走 _upgradeGate('expedition_trader')：自动跳 night Boss 检查 + 跳 ore 检查（trader 用 food+ore），
+          //   保留 daily_limit / max_level / Lv5 frost_aura / Lv6 frost_pulse 全副作用 + 标准 gate_upgraded 广播
           if (userChoice === 'accept' && this.food >= TRADER_COST_FOOD && this.ore >= TRADER_COST_ORE) {
-            if (this.gateLevel < GATE_MAX_HP_BY_LEVEL.length) {
+            if (this.gateLevel >= GATE_MAX_HP_BY_LEVEL.length) {
+              outcome.type = 'empty'; // 已满级
+            } else if (this._gateUpgradedToday) {
+              outcome.type = 'empty'; // 今日已升级（与主播共享额度）
+            } else {
+              // 扣 trader 专属资源（food+ore），_upgradeGate 内部跳过 ore 二次扣
               this.food = Math.max(0, this.food - TRADER_COST_FOOD);
               this.ore  = Math.max(0, this.ore  - TRADER_COST_ORE);
-              this.gateLevel = this.gateLevel + 1;
-              this.gateMaxHp = GATE_MAX_HP_BY_LEVEL[this.gateLevel - 1];
-              this.gateHp    = this.gateMaxHp;
-              this._broadcast({
-                type: 'gate_upgraded',
-                data: {
-                  newLevel:     this.gateLevel,
-                  newMaxHp:     this.gateMaxHp,
-                  oreRemaining: Math.round(this.ore),
-                  upgradedBy:   exp.playerId || '',
-                  reason:       'trader_caravan',
-                },
-              });
+              this._upgradeGate(exp.playerId || '', 'expedition_trader');
               this._broadcastResourceUpdate();
-              console.log(`[SurvivalEngine] trader_caravan accepted: gate Lv→${this.gateLevel}`);
+              console.log(`[SurvivalEngine] trader_caravan accepted: gate Lv→${this.gateLevel} (via _upgradeGate)`);
               outcome.type = 'success';
-            } else {
-              outcome.type = 'empty'; // 已满级，空手
             }
           } else {
             // cancel / 超时 / 资源不足 → 空手

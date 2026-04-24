@@ -392,6 +392,37 @@ namespace DrscfZ.UI
             RenderCard(_card2, cards.Count > 2 ? cards[2] : null);
         }
 
+        // ==================== audit-r11 GAP-E01：BroadcasterPanel 反射兼容入口 ====================
+        // BroadcasterPanel.OnExpeditionClicked / OnBuildingClicked 用反射查找以下方法名作为面板入口：
+        //   OpenExpeditionPanel / ShowExpeditionControls （§38 探险）
+        //   OpenBuildPropose / ShowBuildMenu / OpenBuildMenu （§37 建造）
+        // r11 之前这些方法不存在 → 反射 Invoke 走异常 fallback toast 占位（用户无入口操作）
+        // 当前实装：触发 _onExpeditionClicked / _onBuildClicked UnityEvent（Inspector 绑定的现有面板回调）
+        // 同时高亮当前 HUD 的对应卡片，强引导用户注意
+
+        /// <summary>§38 探险面板入口（反射兼容；对外触发 UnityEvent _onExpeditionClicked）。</summary>
+        public void OpenExpeditionPanel()
+        {
+            _onExpeditionClicked?.Invoke();
+            Debug.Log("[BroadcasterDecisionHUD] OpenExpeditionPanel: _onExpeditionClicked.Invoke()");
+        }
+
+        /// <summary>§38 探险面板入口别名（兼容 BroadcasterPanel 反射的备用名）。</summary>
+        public void ShowExpeditionControls() => OpenExpeditionPanel();
+
+        /// <summary>§37 建造投票面板入口（反射兼容；对外触发 UnityEvent _onBuildClicked）。</summary>
+        public void OpenBuildPropose()
+        {
+            _onBuildClicked?.Invoke();
+            Debug.Log("[BroadcasterDecisionHUD] OpenBuildPropose: _onBuildClicked.Invoke()");
+        }
+
+        /// <summary>§37 建造投票面板入口别名 1。</summary>
+        public void ShowBuildMenu() => OpenBuildPropose();
+
+        /// <summary>§37 建造投票面板入口别名 2。</summary>
+        public void OpenBuildMenu() => OpenBuildPropose();
+
         private void RenderCard(CardView view, CardData data)
         {
             if (view == null) return;

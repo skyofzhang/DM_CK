@@ -27,6 +27,9 @@ namespace DrscfZ.UI
     {
         public static TribeWarLobbyUI Instance { get; private set; }
 
+        // §17.16 audit-r11 GAP-B01：A 类阻塞 modal — 与 SettlementUI / GateUpgradeConfirmUI 互斥
+        private const string MODAL_A_ID = "tribe_war_lobby";
+
         // ==================== Inspector 字段（Prefab 绑定由人工） ====================
 
         [Header("面板根（初始 inactive）")]
@@ -62,12 +65,15 @@ namespace DrscfZ.UI
 
         private void OnDestroy()
         {
+            // 兜底：销毁时释放 modal 防止僵尸占位
+            ModalRegistry.Release(MODAL_A_ID);
             if (Instance == this) Instance = null;
         }
 
         // ==================== 对外接口 ====================
 
-        /// <summary>打开面板并请求最新房间列表。</summary>
+        /// <summary>打开面板并请求最新房间列表。
+        /// §17.16 audit-r11：申请 A 类 modal（priority=70），与 SettlementUI(85) / GateUpgradeConfirmUI(75) 互斥。</summary>
         public void OpenPanel()
         {
             if (_panel == null)
@@ -78,12 +84,17 @@ namespace DrscfZ.UI
             }
             _panel.SetActive(true);
             if (_statusText != null) _statusText.text = "加载中...";
+            ModalRegistry.Request(MODAL_A_ID, 70, () =>
+            {
+                if (_panel != null) _panel.SetActive(false);
+            });
             RequestRoomList();
         }
 
         public void ClosePanel()
         {
             if (_panel != null) _panel.SetActive(false);
+            ModalRegistry.Release(MODAL_A_ID);
         }
 
         /// <summary>SurvivalGameManager 收到 tribe_war_room_list_result 后路由到此。</summary>

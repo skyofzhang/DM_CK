@@ -76,7 +76,7 @@ class TribeWarManager {
    * @param {string} attackerRoomId
    * @param {string} defenderRoomId
    * @param {object} [opts]
-   * @param {number} [opts.damageMultiplier=1.0] — §37 beacon 反击加成（默认 1.0，TODO hook）
+   * @param {number} [opts.damageMultiplier=1.0] — §37 beacon 反击加成（已 hook：SurvivalRoom.js:939 注入 1.5 当本房有 beacon 建筑）
    * @returns {{ok: boolean, reason?: string, sessionId?: string}}
    */
   startAttack(attackerRoomId, defenderRoomId, opts) {

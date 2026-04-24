@@ -175,26 +175,12 @@ namespace DrscfZ.Systems
                 { "sfx_gate_alarm",          sfxGateAlarm },
                 { "sfx_cold_alarm",          sfxColdAlarm },
 
-                // T1: 规范名 + GiftNotificationUI 使用名（同clip）
+                // T1-T5: 规范名（audit-r11 GAP-C11 清理：GiftNotificationUI 已删除，6 个别名已无消费方）
                 { "sfx_gift_t1_ding",        sfxGiftT1 },
-
-                // T2: 规范名 + GiftNotificationUI 使用名（同clip）
                 { "sfx_gift_t2_bubble",      sfxGiftT2 },
-                { "sfx_gift_t2_appear",      sfxGiftT2 },   // GiftNotificationUI 使用
-
-                // T3: 规范名 + GiftNotificationUI 使用名（同clip，飞入/爆炸用同一素材）
                 { "sfx_gift_t3_boom",        sfxGiftT3 },
-                { "sfx_gift_t3_land",        sfxGiftT3 },   // GiftNotificationUI 使用（飞入落地）
-                { "sfx_gift_t3_explode",     sfxGiftT3 },   // GiftNotificationUI 使用（爆炸）
-
-                // T4: 规范名 + GiftNotificationUI 使用名（同clip）
                 { "sfx_gift_t4_electric",    sfxGiftT4 },
-                { "sfx_gift_t4_charge",      sfxGiftT4 },   // GiftNotificationUI 使用
-
-                // T5: 规范名 + GiftNotificationUI 使用名（同clip，多阶段用同一素材）
                 { "sfx_gift_t5_airdrop",     sfxGiftT5 },
-                { "sfx_gift_t5_land",        sfxGiftT5 },   // GiftNotificationUI 使用（落地）
-                { "sfx_gift_t5_epic",        sfxGiftT5 },   // GiftNotificationUI 使用（史诗烟花）
 
                 { "sfx_broadcaster_boost",   sfxBroadcasterBoost },
                 { "sfx_day_start",           sfxDayStart },

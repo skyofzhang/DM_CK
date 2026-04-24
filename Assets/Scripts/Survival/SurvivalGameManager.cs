@@ -1467,6 +1467,22 @@ namespace DrscfZ.Survival
             if (_lastTop1PlayerId != null && _lastTop1PlayerId != currentTop1)
             {
                 Systems.AudioManager.Instance?.PlaySFX(Core.AudioConstants.SFX_RANK_UP);
+
+                // audit-r11 GAP-C03：旧 Top1 完全跌出榜单（不在新 rankings 中）→ 播 SFX_RANK_DOWN
+                //   只触发"跌出可见排名"，避免 Top1↔Top2 频繁切换播两个音效
+                bool oldTop1StillVisible = false;
+                for (int i = 0; i < data.rankings.Length; i++)
+                {
+                    if (data.rankings[i] != null && data.rankings[i].playerId == _lastTop1PlayerId)
+                    {
+                        oldTop1StillVisible = true;
+                        break;
+                    }
+                }
+                if (!oldTop1StillVisible)
+                {
+                    Systems.AudioManager.Instance?.PlaySFX(Core.AudioConstants.SFX_RANK_DOWN);
+                }
             }
             _lastTop1PlayerId = currentTop1;
         }
@@ -1938,21 +1954,23 @@ namespace DrscfZ.Survival
             // 路由到 WorkerManager 刷新对应 Worker 的显示
             WorkerManager.Instance?.HandleWorkerLevelUp(data);
 
-            // 阶段10（传奇）→ 相机震撼 + 镜头推近（WorkerManager 消费 worker 位置）+ 金色跑马灯
+            // 阶段10（传奇）→ 相机震撼 + 镜头推近（WorkerManager 消费 worker 位置）+ 金色跑马灯 + 专属音效
             //   audit-r9 §30.8 策划案 L3359：镜头短暂推近该矿工（0.8s）+ 金色粒子 + 跑马灯
             //   ZoomInBurst 由 WorkerManager.HandleWorkerLevelUp 调用（已有 worker ref）
-            //   此处仅处理 Shake（全局震屏）+ 跑马灯（UI 层），美术 VFX_LegendGold 粒子待交付
+            //   audit-r11 GAP-C09：接入 SFX_TIER_PROMOTE / SFX_LEGEND_PROMOTE（策划案 §30.8 "专属音效"未实装）
             if (data.newTier >= 10)
             {
                 SurvivalCameraController.Shake(0.3f, 0.8f);
+                Systems.AudioManager.Instance?.PlaySFX(Core.AudioConstants.SFX_LEGEND_PROMOTE);
                 string legendName = string.IsNullOrEmpty(data.playerName) ? "传奇矿工" : data.playerName;
                 UI.HorizontalMarqueeUI.Instance?.AddMessage(
                     legendName, null, "<color=#FFD700>晋升传奇矿工！</color>");
-                Debug.Log($"[SGM][Legend] {legendName} 达到阶 10 传奇（已调 Shake + ZoomInBurst + 金跑马灯；美术 VFX_LegendGold 粒子待交付）");
+                Debug.Log($"[SGM][Legend] {legendName} 达到阶 10 传奇（Shake + SFX_LEGEND_PROMOTE + 金跑马灯；美术 VFX_LegendGold 粒子待交付）");
             }
             else
             {
-                // 阶段 2~9：彩色公告横幅
+                // 阶段 2~9：彩色公告横幅 + 专属音效
+                Systems.AudioManager.Instance?.PlaySFX(Core.AudioConstants.SFX_TIER_PROMOTE);
                 UI.AnnouncementUI.Instance?.ShowAnnouncement(
                     $"{data.playerName} 晋升{GetTierTitle(data.newTier)}！",
                     $"Lv.{data.newLevel}",

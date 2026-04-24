@@ -7,10 +7,10 @@
  * 3. seasonDay > 7 → 赛季结束：seasonId +1, seasonDay 归 1, 主题按 6 主题顺序轮换
  * 4. 广播 season_settlement（空占位）与 season_started
  *
- * PM 决策（MVP 裁剪项）：
- * - 赛季结算内容（排名、奖励）为空占位对象
- * - D7 Boss Rush 不做（仅保留主题标记 frenzy 等）
- * - 跨房间 Top10 榜单不做
+ * 实装状态（audit-r11 GAP-D02 注释更新；原 r2 MVP 裁剪声明已实现）：
+ * - 赛季结算 _buildSeasonSettlementExtras (SeasonManager.js:80) 实装跨房 Top10 榜单
+ * - D7 Boss Rush 实装（GlobalClock.js:125-247 _initBossRushForD7Night + SurvivalGameEngine.js:5262 _accumulateBossRushDamage）
+ * - 跨房 Top10 榜单实装（season_settlement payload extras.top10[]）
  */
 
 const SEASON_THEMES = [

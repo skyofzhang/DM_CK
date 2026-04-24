@@ -47,7 +47,8 @@ namespace DrscfZ.UI
         [SerializeField] private float _fadeOutSec       = 0.25f;
 
         [Header("文案（中文，禁用 emoji；CLAUDE.md UI emoji 踩坑）")]
-        [SerializeField] private string _b1Text = "守住城门，活过今夜！白天采矿，夜晚打怪";
+        // audit-r11 GAP-B03：对齐策划案 §17.15 L1844 永续制心智模型（避免"一局终点"歧义）
+        [SerializeField] private string _b1Text = "活过今夜就算胜利！白天采矿，夜晚打怪";
         [SerializeField] private string _b2Text = "矿工帮你打工，刷礼物让他变强";
         [SerializeField] private string _b3Text = "刷这些礼物来参与，最便宜 1 元";
         [SerializeField] private string _b4Text = "夜晚来临！做好准备";
@@ -168,10 +169,11 @@ namespace DrscfZ.UI
         {
             if (pc == null) return;
 
-            // B4 触发：phase=night + seasonDay∈[3,5] + fortressDay∈[3,5] + 未触发过
+            // B4 触发：phase=night + seasonDay≥3（避开 §36.5 D1/D2 完全和平夜）+ fortressDay∈[3,5]（限新房间前 5 晚）+ 未触发过
+            // audit-r11 GAP-B03：删除 _currentSeasonDay <= 5 上限（策划案 §17.15 L1847 仅要求 seasonDay≥3，不限上界；
+            //   原上限会让 seasonDay=6/7 永远不触发 B4，与策划案"夜晚警示"全场景不符）
             if (pc.phase == "night"
                 && _currentSeasonDay >= 3
-                && _currentSeasonDay <= 5
                 && _currentFortressDay >= 3
                 && _currentFortressDay <= 5
                 && !_b4ShownThisSession)
@@ -189,12 +191,13 @@ namespace DrscfZ.UI
             // 更新缓存
             _currentFortressDay = data.newFortressDay;
 
-            // B5 触发：reason=promoted + newFortressDay∈[3,5] + seasonDay∈[3,5] + 未触发过
+            // B5 触发：reason=promoted + newFortressDay∈[3,5] + seasonDay≥3 + 未触发过
+            // audit-r11 GAP-B03：删除 data.seasonDay <= 5 上限（策划案 §17.15 L1848 仅要求 seasonDay≥3，
+            //   双判避免跨赛季新赛季 seasonDay=1/2 和平夜误触发；新房间生命周期 fortressDay 上限已起到限流）
             if (data.reason == "promoted"
                 && data.newFortressDay >= 3
                 && data.newFortressDay <= 5
                 && data.seasonDay >= 3
-                && data.seasonDay <= 5
                 && !_b5ShownThisSession)
             {
                 _b5ShownThisSession = true;

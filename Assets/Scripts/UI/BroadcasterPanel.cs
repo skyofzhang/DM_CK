@@ -298,10 +298,11 @@ namespace DrscfZ.UI
             var net = NetworkManager.Instance;
             if (net == null || !net.IsConnected) return;
 
-            string json = $"{{\"type\":\"broadcaster_action\",\"data\":{{\"action\":\"efficiency_boost\",\"duration\":30000,\"cooldown\":120000}},\"timestamp\":{System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}";
+            // audit-r11 GAP-B04：删除 cooldown 字段（服务端不读，r9-r10 客户端冗余）；duration=30000 仍服务端读
+            string json = $"{{\"type\":\"broadcaster_action\",\"data\":{{\"action\":\"efficiency_boost\",\"duration\":30000}},\"timestamp\":{System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}";
             net.SendJson(json);
 
-            // 开始CD
+            // 开始CD（客户端本地管理 BOOST_CD，与策划案 §15.3 当前一致）
             _boostCd = BOOST_CD;
             SetBoostCdState(true);
             Debug.Log("[BroadcasterPanel] ⚡ efficiency_boost 已发送");
@@ -314,10 +315,11 @@ namespace DrscfZ.UI
             var net = NetworkManager.Instance;
             if (net == null || !net.IsConnected) return;
 
-            string json = $"{{\"type\":\"broadcaster_action\",\"data\":{{\"action\":\"trigger_event\",\"cooldown\":60000}},\"timestamp\":{System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}";
+            // audit-r11 GAP-B04：删除 cooldown 字段（服务端不读，r9-r10 客户端冗余）
+            string json = $"{{\"type\":\"broadcaster_action\",\"data\":{{\"action\":\"trigger_event\"}},\"timestamp\":{System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}";
             net.SendJson(json);
 
-            // 开始CD
+            // 开始CD（客户端本地管理 EVENT_CD）
             _eventCd = EVENT_CD;
             SetEventCdState(true);
             Debug.Log("[BroadcasterPanel] 🌊 trigger_event 已发送");
