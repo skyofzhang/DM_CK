@@ -1,9 +1,9 @@
 /**
- * RoomPersistence - §36 房间持久化（schemaVersion 3）
+ * RoomPersistence - §36 房间持久化（schemaVersion 4）
  *
  * 职责：
  * 1. 每房一 JSON 文件：./data/rooms/{roomId}.json
- * 2. 保存字段：fortressDay/maxFortressDay、§30 终身数据、§39 商店、§36.5.1 每日 cap
+ * 2. 保存字段：fortressDay/maxFortressDay、§30 终身数据、§39 商店、§36.5.1 每日 cap、§30.4 衰减元数据
  * 3. 每 30s 自动保存；reset_game / end_game / destroy 前保存
  *
  * schemaVersion 迁移链：
@@ -12,17 +12,20 @@
  *     - 旧 _playerSkinId 字段改名 _playerSkinTier（保留旧字段以兼容，读取时 fallback）
  *     - 补齐 totalCycles=0 / lastThemeId=null / currentSeasonId=1 / seasonSnapshot=null /
  *           _supporters=[] / streamerKingTitle=null / _dailyBuildVoteUsed={}
+ *   v3 → v4（audit-r7 §30.4）：
+ *     - 补齐 _lastDailyDecayDayKey=null（UTC+8 "YYYY-MM-DD"）
+ *     - 补齐 _playerLastActiveTs={}（playerId → ms，活跃/不活跃分档输入）
  *
  * PM 决策（MVP 裁剪项）：
- * - schemaVersion=3；字段缺失自动回退默认值
+ * - schemaVersion=4；字段缺失自动回退默认值
  * - 失败只记 warn，不 throw（避免主循环阻塞）
  */
 
 const fs = require('fs');
 const path = require('path');
 
-// P0-A2 schemaVersion 3（新增 8 字段 + v1→v3 迁移）
-const CURRENT_SCHEMA_VERSION = 3;
+// audit-r7 schemaVersion 4（在 v3 基础上新增 _lastDailyDecayDayKey / _playerLastActiveTs）
+const CURRENT_SCHEMA_VERSION = 4;
 
 class RoomPersistence {
   /**
@@ -143,6 +146,14 @@ class RoomPersistence {
       streamerKingTitle,                // v1.26 "堡垒之王" 称号
       _dailyBuildVoteUsed: dailyBuildVoteUsed,  // 对象 seasonDay → bool
       // _playerSkinTier 已在上面写入（与 §30 同组）
+
+      // ---- audit-r7 v4 新增 2 字段（§30.4 每日衰减元数据）----
+      // _lastDailyDecayDayKey：UTC+8 "YYYY-MM-DD"，跨日识别用；null = 首次启动
+      _lastDailyDecayDayKey: (typeof engine._lastDailyDecayDayKey === 'string' && engine._lastDailyDecayDayKey)
+        ? engine._lastDailyDecayDayKey : null,
+      // _playerLastActiveTs：playerId → ms（最近一次正向贡献 ts），_applyDailyTierDecay 分档输入
+      _playerLastActiveTs: (engine._playerLastActiveTs && typeof engine._playerLastActiveTs === 'object')
+        ? engine._playerLastActiveTs : {},
     };
 
     try {
@@ -172,12 +183,16 @@ class RoomPersistence {
   }
 
   /**
-   * schemaVersion 迁移：v1 → v2 → v3
+   * schemaVersion 迁移：v1 → v2 → v3 → v4
    *   - v1→v2：补 _contribBalance（从 _lifetimeContrib 拷贝）
    *   - v2→v3：
    *       - 旧 _playerSkinId 字段 → _playerSkinTier（不存在则空）
    *       - 补齐 totalCycles=0 / lastThemeId=null / currentSeasonId=1 / seasonSnapshot=null /
    *             _supporters=[] / streamerKingTitle=null / _dailyBuildVoteUsed={}
+   *   - v3→v4（audit-r7 §30.4）：
+   *       - 补齐 _lastDailyDecayDayKey=null / _playerLastActiveTs={}
+   *       - 旧存档加载后首次 _tickDailyDecayIfDue 触发时将当前 dayKey 回填，不立即衰减
+   *         （_tickDailyDecayIfDue 内部: null → 仅记录不衰减，避免服务器启动即衰减）
    */
   _migrate(obj) {
     if (!obj || typeof obj !== 'object') return obj;
@@ -210,6 +225,14 @@ class RoomPersistence {
       if (typeof obj.streamerKingTitle === 'undefined') obj.streamerKingTitle = null;
       if (!obj._dailyBuildVoteUsed || typeof obj._dailyBuildVoteUsed !== 'object') {
         obj._dailyBuildVoteUsed = {};
+      }
+    }
+
+    // v3 → v4（audit-r7 §30.4）：补齐衰减元数据
+    if (fromVersion < 4) {
+      if (typeof obj._lastDailyDecayDayKey === 'undefined')   obj._lastDailyDecayDayKey = null;
+      if (!obj._playerLastActiveTs || typeof obj._playerLastActiveTs !== 'object') {
+        obj._playerLastActiveTs = {};
       }
     }
 
