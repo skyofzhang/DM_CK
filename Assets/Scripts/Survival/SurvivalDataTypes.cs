@@ -1690,10 +1690,12 @@ namespace DrscfZ.Survival
     }
 
     /// <summary>§30.7 限时皮肤到期（type=gift_skin_expired，S→C，广播）。
-    /// 服务端 _scanGiftSkinExpiry 在昼夜切换时清理。</summary>
+    /// 服务端 _scanGiftSkinExpiry 在昼夜切换时清理。
+    /// audit-r6 Reviewer LOW：补 skinId 字段对齐服务端 `:7215` 广播 {playerId, skinId}，避免 JsonUtility 静默丢弃。</summary>
     [Serializable]
     public class GiftSkinExpiredData
     {
         public string playerId;
+        public string skinId;    // "G01" | "G02" | "G03"（客户端可用于跑马灯 / 日志文案细节）
     }
 }
