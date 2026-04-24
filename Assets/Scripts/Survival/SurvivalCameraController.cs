@@ -303,5 +303,53 @@ namespace DrscfZ.Survival
         {
             Shake(0.12f, 0.4f);
         }
+
+        // ==================== audit-r6 P0-F5：§30.8 传奇矿工晋升镜头推近 ====================
+
+        /// <summary>镜头短暂推近指定世界坐标（§30.8 传奇矿工晋升/荣耀时刻）。
+        /// 协程：推近 (duration/2) → 回位 (duration/2)；使用 SmoothStep 缓动。
+        /// 与 Shake 并存（不打断震屏）；推近通过 world position 叠加、震屏通过 localPosition，两者互不干扰。
+        /// </summary>
+        /// <param name="target">世界坐标（矿工位置）</param>
+        /// <param name="zoomAmount">推近距离（单位 unity unit，推荐 3f）</param>
+        /// <param name="duration">总时长（秒，推荐 0.8f）</param>
+        public static void ZoomInBurst(Vector3 target, float zoomAmount, float duration)
+        {
+            if (Instance != null)
+                Instance.StartCoroutine(Instance.ZoomInBurstCoroutine(target, zoomAmount, duration));
+        }
+
+        private IEnumerator ZoomInBurstCoroutine(Vector3 target, float zoomAmount, float duration)
+        {
+            if (_camera == null) yield break;
+
+            Vector3 startPos = transform.position;
+            Vector3 dir = (target - startPos).normalized;
+            Vector3 zoomOffset = dir * Mathf.Max(0.1f, zoomAmount);
+
+            float half = Mathf.Max(0.1f, duration) * 0.5f;
+            float t = 0f;
+
+            // 阶段 1：推近
+            while (t < half)
+            {
+                t += Time.deltaTime;
+                float k = Mathf.SmoothStep(0f, 1f, t / half);
+                transform.position = startPos + zoomOffset * k;
+                yield return null;
+            }
+
+            // 阶段 2：回位
+            t = 0f;
+            while (t < half)
+            {
+                t += Time.deltaTime;
+                float k = Mathf.SmoothStep(0f, 1f, t / half);
+                transform.position = startPos + zoomOffset * (1f - k);
+                yield return null;
+            }
+
+            transform.position = startPos;
+        }
     }
 }

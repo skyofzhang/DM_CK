@@ -207,6 +207,13 @@ namespace DrscfZ.Survival
         public event Action<WorkerShieldActivatedData> OnWorkerShieldActivated; // §30.3 阶8 护盾触发视效
         public event Action<FairyWandAppliedData>      OnFairyWandApplied;      // §34 B8 仙女棒累计光点
 
+        // audit-r6 客户端补齐
+        public event Action<ChangeDifficultyFailedData>   OnChangeDifficultyFailed;   // §34.4 E9 切换难度失败
+        public event Action<ChangeDifficultyAcceptedData> OnChangeDifficultyAccepted; // §34.4 E9 切换难度已排队
+        public event Action<DailyTierDecayData>            OnDailyTierDecay;            // §30.4 每日不活跃等级衰减
+        public event Action<GiftSkinAppliedData>           OnGiftSkinApplied;           // §30.7 T4/T5/T6 限时皮肤激活
+        public event Action<GiftSkinExpiredData>           OnGiftSkinExpired;           // §30.7 限时皮肤到期
+
         /// <summary>§34 B9 最近一次收到的 playerStats（供 UI 查询，初始为 null）。
         /// 收到第一条 work_command_response.playerStats 后 PersonalContribUI 常驻显示。</summary>
         public PlayerStatsData LastPlayerStats { get; private set; }
@@ -987,6 +994,72 @@ namespace DrscfZ.Survival
                     if (fwa != null)
                     {
                         OnFairyWandApplied?.Invoke(fwa);
+                    }
+                    break;
+
+                // ----- audit-r6 客户端补齐（🆕 v1.27+） -----
+                // §34.4 E9 主播切换难度失败（not_broadcaster/wrong_phase/unknown_difficulty/season_frozen）
+                case SurvivalMessageProtocol.ChangeDifficultyFailed:
+                    var cdf = JsonUtility.FromJson<ChangeDifficultyFailedData>(dataJson);
+                    if (cdf != null)
+                    {
+                        Debug.LogWarning($"[SGM] change_difficulty_failed reason={cdf.reason}");
+                        OnChangeDifficultyFailed?.Invoke(cdf);
+                        var reasonText = cdf.reason switch
+                        {
+                            "not_broadcaster"     => "仅主播可切换难度",
+                            "wrong_phase"         => "当前不可切换（非 day/night）",
+                            "unknown_difficulty"  => "未知难度",
+                            "season_frozen"       => $"赛季末冻结（第 {cdf.unlockDay} 天解锁）",
+                            _                      => "切换失败"
+                        };
+                        UI.HorizontalMarqueeUI.Instance?.AddMessage("系统", null, $"<color=#FF9999>切换难度失败：{reasonText}</color>");
+                    }
+                    break;
+
+                case SurvivalMessageProtocol.ChangeDifficultyAccepted:
+                    var cda = JsonUtility.FromJson<ChangeDifficultyAcceptedData>(dataJson);
+                    if (cda != null)
+                    {
+                        Debug.Log($"[SGM] change_difficulty_accepted {cda.difficulty} applyAt={cda.applyAt}");
+                        OnChangeDifficultyAccepted?.Invoke(cda);
+                        UI.HorizontalMarqueeUI.Instance?.AddMessage("系统", null, $"<color=#9EC5FF>难度切换已排队：{cda.difficulty}</color>");
+                    }
+                    break;
+
+                // §30.4 每日不活跃等级衰减：BarrageMessageUI / 名牌刷新
+                case SurvivalMessageProtocol.DailyTierDecay:
+                    var dtd = JsonUtility.FromJson<DailyTierDecayData>(dataJson);
+                    if (dtd != null)
+                    {
+                        Debug.Log($"[SGM] daily_tier_decay playerId={dtd.playerId} {dtd.oldLevel}→{dtd.newLevel}");
+                        OnDailyTierDecay?.Invoke(dtd);
+                        if (WorkerManager.Instance != null)
+                            WorkerManager.Instance.HandleDailyTierDecay(dtd.playerId, dtd.oldLevel, dtd.newLevel);
+                    }
+                    break;
+
+                // §30.7 T4/T5/T6 限时皮肤激活
+                case SurvivalMessageProtocol.GiftSkinApplied:
+                    var gsa = JsonUtility.FromJson<GiftSkinAppliedData>(dataJson);
+                    if (gsa != null)
+                    {
+                        Debug.Log($"[SGM] gift_skin_applied playerId={gsa.playerId} skinId={gsa.skinId} expireAt={gsa.expireAt}");
+                        OnGiftSkinApplied?.Invoke(gsa);
+                        if (WorkerManager.Instance != null)
+                            WorkerManager.Instance.HandleGiftSkinApplied(gsa.playerId, gsa.skinId, gsa.expireAt);
+                    }
+                    break;
+
+                // §30.7 限时皮肤到期
+                case SurvivalMessageProtocol.GiftSkinExpired:
+                    var gse = JsonUtility.FromJson<GiftSkinExpiredData>(dataJson);
+                    if (gse != null)
+                    {
+                        Debug.Log($"[SGM] gift_skin_expired playerId={gse.playerId}");
+                        OnGiftSkinExpired?.Invoke(gse);
+                        if (WorkerManager.Instance != null)
+                            WorkerManager.Instance.HandleGiftSkinExpired(gse.playerId);
                     }
                     break;
             }

@@ -178,14 +178,38 @@ namespace DrscfZ.UI
 
         // ─── Public API: inject settlement data directly ──────────────────────
 
+        private const string MODAL_A_ID_SETTLEMENT = "settlement";
+        private bool _modalRegistered = false;
+
         public void ShowSettlement(SettlementData data)
         {
             gameObject.SetActive(true);
             // 保险：显示时再订阅一次（Awake 顺序若早于 NetworkManager 初始化时会跳过，此处兜底）
             TrySubscribeNet();
 
+            // audit-r6 P1-F8：§17.16 登记 A 类 priority=80（最高）；其他 A 类（GateUpgradeConfirm 75 / Roulette 70 / BuildVote 60）自动被抢占
+            if (!_modalRegistered)
+            {
+                DrscfZ.UI.ModalRegistry.Request(MODAL_A_ID_SETTLEMENT, 80, () =>
+                {
+                    // 被更高优先级替换时（理论上不会发生，因为 80 已是最高），兜底关闭本面板
+                    _modalRegistered = false;
+                    gameObject.SetActive(false);
+                });
+                _modalRegistered = true;
+            }
+
             if (_sequenceCoroutine != null) StopCoroutine(_sequenceCoroutine);
             _sequenceCoroutine = StartCoroutine(PlaySettlementSequence(data));
+        }
+
+        private void OnDisable()
+        {
+            if (_modalRegistered)
+            {
+                DrscfZ.UI.ModalRegistry.Release(MODAL_A_ID_SETTLEMENT);
+                _modalRegistered = false;
+            }
         }
 
         // ─── Sequence coroutine ───────────────────────────────────────────────

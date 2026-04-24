@@ -16,6 +16,14 @@ namespace DrscfZ.UI
     /// </summary>
     public class RankingPanelUI : MonoBehaviour
     {
+        // audit-r6 P0-F2：Legacy 角力游戏 RankingPanelUI（已被 SurvivalRankingUI 取代）已废弃
+        private void OnEnable()
+        {
+            Debug.LogWarning("[RankingPanelUI] Legacy 角力游戏排行面板已废弃（Survival 用 SurvivalRankingUI），自动失活");
+            gameObject.SetActive(false);
+            enabled = false;
+        }
+
         [Header("Tabs")]
         public Button[] tabButtons;          // 4个标签按钮
         public Image[] tabImages;            // 4个标签图片（用于切换选中态）

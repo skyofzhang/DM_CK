@@ -73,6 +73,17 @@ namespace DrscfZ.Core
             }
         }
 
+        // audit-r6 P0-F1：Legacy 角力游戏 GameManager 自动失活
+        // 原 Start() 会订阅 NetworkManager.OnMessageReceived 分发旧协议（game_state/force_update/gift_received 等），
+        // 与 SurvivalGameManager 竞争网络消息。场景中 GameObject 已 inactive（m_IsActive=0），
+        // 此处加 OnEnable 兜底，即使未来被意外 SetActive(true) 也能立即自杀。
+        private void OnEnable()
+        {
+            Debug.LogWarning("[GameManager] Legacy 角力游戏 GameManager 已废弃（Survival 用 SurvivalGameManager），自动失活");
+            gameObject.SetActive(false);
+            enabled = false;
+        }
+
         private void Start()
         {
             // 初始化 GiftHandler

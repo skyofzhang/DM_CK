@@ -17,6 +17,14 @@ namespace DrscfZ.UI
     /// </summary>
     public class PlayerListUI : MonoBehaviour
     {
+        // audit-r6 P0-F2：Legacy 角力游戏 PlayerListUI（订阅 RankingSystem/CampSystem 旧系统）已废弃
+        private void OnEnable()
+        {
+            Debug.LogWarning("[PlayerListUI] Legacy 角力游戏玩家列表已废弃，自动失活");
+            gameObject.SetActive(false);
+            enabled = false;
+        }
+
         [Header("References")]
         public Transform leftListContainer;
         public Transform rightListContainer;

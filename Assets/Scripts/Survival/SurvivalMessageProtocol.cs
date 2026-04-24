@@ -198,5 +198,12 @@ namespace DrscfZ.Survival
         public const string DifficultyChanged       = "difficulty_changed";        // S→C：§19/§34.4 E9 难度已应用（next_night/next_season）
         public const string WorkerShieldActivated   = "worker_shield_activated";   // S→C：§30.3 阶8 矿工 5s 护盾触发视觉反馈
         public const string FairyWandApplied        = "fairy_wand_applied";        // S→C：§34 B8 仙女棒累计光点（每次送都广播，含 capped）
+
+        // ----- audit-r6 客户端补齐（🆕 v1.27+） -----
+        public const string ChangeDifficultyFailed   = "change_difficulty_failed";   // S→C：§34.4 E9 切换难度失败（not_broadcaster/wrong_phase/unknown_difficulty/season_frozen）
+        public const string ChangeDifficultyAccepted = "change_difficulty_accepted"; // S→C：§34.4 E9 切换难度排队成功
+        public const string DailyTierDecay           = "daily_tier_decay";           // S→C：§30.4 每日不活跃玩家等级衰减 ×0.95
+        public const string GiftSkinApplied          = "gift_skin_applied";          // S→C：§30.7 T4/T5/T6 限时皮肤激活（G01/G02/G03）
+        public const string GiftSkinExpired          = "gift_skin_expired";          // S→C：§30.7 限时皮肤到期（昼夜切换结束）
     }
 }

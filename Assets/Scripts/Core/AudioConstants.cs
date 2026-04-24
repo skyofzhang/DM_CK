@@ -79,6 +79,9 @@ namespace DrscfZ.Core
         /// <summary>炉温≤-80℃寒风警报（循环，3s循环体，音量0.8）</summary>
         public const string SFX_COLD_ALARM = "sfx_cold_alarm";
 
+        /// <summary>矿工护盾激活 5s 免伤（§30.3 阶8，audit-r6 P0-F4 常量化）</summary>
+        public const string SFX_WORKER_SHIELD_ACTIVATE = "sfx_worker_shield_activate";
+
         // ============================================================
         // SFX — 礼物（按tier分级）
         // ============================================================

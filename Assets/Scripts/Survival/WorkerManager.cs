@@ -587,6 +587,34 @@ namespace DrscfZ.Survival
             Debug.Log($"[WorkerManager] Worker '{playerId}' 触发 5s 护盾视效");
         }
 
+        // audit-r6 P1-F4：§30.4 每日不活跃等级衰减
+        public void HandleDailyTierDecay(string playerId, int oldLevel, int newLevel)
+        {
+            var worker = FindWorkerByPlayerId(playerId);
+            if (worker == null) return;   // 衰减推送可能针对已下线玩家，正常
+            worker.HandleDailyTierDecay(oldLevel, newLevel);
+        }
+
+        // audit-r6 P1-F7：§30.7 T4/T5/T6 限时皮肤激活
+        public void HandleGiftSkinApplied(string playerId, string skinId, long expireAt)
+        {
+            var worker = FindWorkerByPlayerId(playerId);
+            if (worker == null)
+            {
+                Debug.LogWarning($"[WorkerManager] HandleGiftSkinApplied: playerId={playerId} 未找到（可能是助威者，§30.7 皮肤仅限守护者）");
+                return;
+            }
+            worker.SetGiftSkin(skinId);
+        }
+
+        // audit-r6 P1-F7：§30.7 限时皮肤到期
+        public void HandleGiftSkinExpired(string playerId)
+        {
+            var worker = FindWorkerByPlayerId(playerId);
+            if (worker == null) return;
+            worker.ClearGiftSkin();
+        }
+
         // ==================== §30 矿工成长系统 ====================
 
         /// <summary>服务器通知矿工升级（worker_level_up）→ 路由到对应 WorkerController</summary>

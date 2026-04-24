@@ -63,6 +63,13 @@ namespace DrscfZ.UI
 
         private void OnEnable()
         {
+            // audit-r6 P0-F2：Legacy 角力游戏 SettlementUI（含"香橙温泉胜利"旧文案）已废弃
+            // 由 SurvivalSettlementUI 取代。即便场景意外激活也立即自失活。
+            Debug.LogWarning("[SettlementUI] Legacy 角力游戏结算面板已废弃（Survival 用 SurvivalSettlementUI），自动失活");
+            gameObject.SetActive(false);
+            enabled = false;
+            return;
+#pragma warning disable CS0162 // 保留旧逻辑备份，禁用 unreachable warning
             // 运行时排版保障：确保所有 TMP 位置和对齐正确
             if (!_layoutApplied)
             {
@@ -84,6 +91,7 @@ namespace DrscfZ.UI
 
             if (restartButton)
                 restartButton.onClick.AddListener(OnRestartClicked);
+#pragma warning restore CS0162
         }
 
         private void OnDisable()

@@ -233,6 +233,20 @@ namespace DrscfZ.Survival
         public PlayerStatsData playerStats;
     }
 
+    /// <summary>礼物 effects 嵌套字段（audit-r6 P1-F1 补齐：T5 AOE 视觉反馈）
+    /// 服务端 _handleLoveExplosion / _handleMysteryAirdrop 等效果分支下发 effects object。</summary>
+    [Serializable]
+    public class GiftEffectsData
+    {
+        public int   aoeDamage;             // T5 全体怪物单次 AOE 伤害值
+        public int   monstersKilled;        // T5 击杀怪物数（用于跑马灯/GloryMoment）
+        public int   revivedWorkers;        // T5 复活矿工数
+        public int   healedWorkers;         // T5 治疗满血矿工数
+        public float efficiencyBonus;       // T1 仙女棒累计发送者个人加成（同步 §34 B8）
+        public float globalEfficiencyBoost; // T2 能力药丸全局 30s 提升倍率
+        public bool  supporterRedirect;     // §33.4 T4/T5 由助威者发送时重路由到随机守护者
+    }
+
     /// <summary>礼物效果</summary>
     [Serializable]
     public class SurvivalGiftData
@@ -243,6 +257,8 @@ namespace DrscfZ.Survival
         public string giftId;    // 礼物英文ID（如 "fairy_wand"），用于客户端效果/名称查询
         public string giftName;  // 礼物展示名（服务器设置，通常是中文）
         public int    giftTier;    // 1-6
+        public string giftTierStr; // audit-r6 P1-F1: "T1"~"T6" 字符串（服务端下发）
+        public int    score;       // audit-r6 P1-F1: 积分值（1/100/500/1000/2000/5000）
         public float  giftValue;   // 礼物价值（分）
         public int    addFood;
         public int    addCoal;
@@ -250,6 +266,7 @@ namespace DrscfZ.Survival
         public float  addHeat;     // 炉温加成
         public int    addGateHp;   // 城门HP回复
         public float  contribution;// 贡献值（用于排行）
+        public GiftEffectsData effects;  // audit-r6 P1-F1: nested effects（T5 AOE 等详细反馈）
     }
 
     /// <summary>玩家加入</summary>
@@ -1564,14 +1581,22 @@ namespace DrscfZ.Survival
 
     // ==================== §36.10 WaitingPhase（🆕 v1.27+ audit-r3/P1） ====================
 
-    /// <summary>新赛季 30s 准备窗口开始（type=waiting_phase_started，S→C）。
-    /// 客户端显示主题预告大横幅 + 倒计时；使用 A 类阻塞 modal 独占。</summary>
+    /// <summary>WaitingPhase 窗口开始（type=waiting_phase_started，S→C）。
+    /// 两种触发源共用同一消息类型：
+    ///   1) SeasonManager 赛季切换时广播（durationSec/newSeasonId/newThemeId 三字段）
+    ///   2) audit-r6 §36.10：SurvivalGameEngine 夜晚 Boss 波前广播（waveIdx/countdownSec/allowVoteTypes）
+    /// 客户端按 waveIdx > 0 判断是哪种源，驱动不同 UI 展示。</summary>
     [Serializable]
     public class WaitingPhaseStartedData
     {
-        public int    durationSec;   // 默认 30；客户端倒计时
-        public int    newSeasonId;
-        public string newThemeId;    // classic_frozen / blood_moon / snowstorm / dawn / frenzy / serene
+        public int    durationSec;   // SeasonManager: 默认 30；客户端倒计时（兼容旧 schema）
+        public int    newSeasonId;   // SeasonManager: 仅赛季切换时非 0
+        public string newThemeId;    // SeasonManager: classic_frozen / blood_moon / snowstorm / dawn / frenzy / serene
+
+        // audit-r6 §36.10 新增字段（夜晚 Boss 波前窗口）
+        public int      waveIdx;         // 即将到来的波次 index（0 及以下视为 SeasonManager 源）
+        public int      countdownSec;    // 波次窗口倒计时（默认 15）
+        public string[] allowVoteTypes;  // ['support','experience','tribe_war'] 等；MVP 可空数组
     }
 
     /// <summary>准备窗口结束（type=waiting_phase_ended，S→C）。
@@ -1619,5 +1644,56 @@ namespace DrscfZ.Survival
         public float  nextBonus;    // 本次应用后（+0.05，上限 1.00）
         public int    stackCount;   // 累计送出次数
         public bool   capped;       // nextBonus >= 0.999 时 true
+    }
+
+    // ==================== audit-r6 客户端补齐 Batch ====================
+
+    /// <summary>§34.4 E9 主播切换难度失败（type=change_difficulty_failed，S→C，单播）。
+    /// 服务端 4 路径：not_broadcaster / wrong_phase / unknown_difficulty / season_frozen。
+    /// 字段对齐 SurvivalGameEngine.js:7131。</summary>
+    [Serializable]
+    public class ChangeDifficultyFailedData
+    {
+        public string   reason;             // not_broadcaster / wrong_phase / unknown_difficulty / season_frozen
+        public int      unlockDay;          // 用于 season_frozen 兜底回答（0 表示无）
+        public string[] supported;          // unknown_difficulty 时附带支持列表
+    }
+
+    /// <summary>§34.4 E9 主播切换难度已排队（type=change_difficulty_accepted，S→C，单播）。
+    /// 字段对齐 SurvivalGameEngine.js:7148。</summary>
+    [Serializable]
+    public class ChangeDifficultyAcceptedData
+    {
+        public string difficulty;   // 请求值
+        public long   applyAt;      // Unix ms（生效时间点）
+    }
+
+    /// <summary>§30.4 每日不活跃玩家等级衰减 ×0.95（type=daily_tier_decay，S→C，广播）。
+    /// 服务端在 UTC+8 00:00 _tickDailyDecayIfDue 触发时对不活跃玩家广播。</summary>
+    [Serializable]
+    public class DailyTierDecayData
+    {
+        public string playerId;
+        public int    oldLevel;
+        public int    newLevel;
+    }
+
+    /// <summary>§30.7 限时皮肤激活（type=gift_skin_applied，S→C，广播）。
+    /// T4 → G01 炽热矿工 / T5 → G02 战魂矿工 / T6 → G03 空投精英。
+    /// 字段对齐 SurvivalGameEngine.js:_applyGiftSkin。</summary>
+    [Serializable]
+    public class GiftSkinAppliedData
+    {
+        public string playerId;
+        public string skinId;       // "G01" | "G02" | "G03"
+        public long   expireAt;     // Unix ms；到达昼夜切换结束
+    }
+
+    /// <summary>§30.7 限时皮肤到期（type=gift_skin_expired，S→C，广播）。
+    /// 服务端 _scanGiftSkinExpiry 在昼夜切换时清理。</summary>
+    [Serializable]
+    public class GiftSkinExpiredData
+    {
+        public string playerId;
     }
 }

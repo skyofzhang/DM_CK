@@ -51,6 +51,17 @@ namespace DrscfZ.UI
         [Header("🛡 升级城门按钮（🆕 v1.22 §10，可留空；场景中通过 Editor 工具绑定）")]
         [SerializeField] private Button _btnUpgradeGate;
 
+        // audit-r6 P0-F3：补齐 §36.12 3 个缺失 feature 按钮入口（building/expedition/supporter_mode）
+        [Header("🏗️ 建造（§37，D3 解锁）")]
+        [SerializeField] private Button _buildingButton;
+
+        [Header("🧭 探险（§38，D5 解锁）")]
+        [SerializeField] private Button _expeditionButton;
+
+        [Header("🤝 助威模式（§33，D6 解锁）")]
+        [SerializeField] private Button _supporterModeButton;
+
+
         [Header("§17.15 关闭引导按钮（🆕 v1.27；点击后服务端房间会话内不再广播 B1-B3 气泡）")]
         [SerializeField] private Button _btnDisableOnboarding;
 
@@ -60,7 +71,10 @@ namespace DrscfZ.UI
         [SerializeField] private string _tipNight   = "快刷礼物！怪物要攻城了！";
         [SerializeField] private string _tipLowGate = "城门快破了！刷甜甜圈救场！";
         [Tooltip("§17.15 低血话术触发阈值：gateHp < 此值时显示 _tipLowGate（默认 300）")]
+        // audit-r6 P1-F6：从硬编码 300 改为比例化（低血提示随 Gate.MaxHp 动态计算）
+        // 保留 SerializeField 兼容旧场景绑定；若 Ratio>0 则优先使用 Ratio*MaxHp 作为阈值
         [SerializeField] private int _tipLowGateThreshold = 300;
+        [SerializeField, Range(0f, 1f)] private float _tipLowGateRatio = 0.3f;
 
         // ==================== 🆕 v1.22 §10 升级常量表（与服务端 SurvivalGameEngine.js 顶部常量对齐）====================
 
@@ -144,6 +158,14 @@ namespace DrscfZ.UI
             // 🆕 v1.22 §10 升级城门按钮
             if (_btnUpgradeGate != null)
                 _btnUpgradeGate.onClick.AddListener(OnUpgradeGateClick);
+
+            // audit-r6 P0-F3：3 新按钮 click 绑定
+            if (_buildingButton != null)
+                _buildingButton.onClick.AddListener(OnBuildingClicked);
+            if (_expeditionButton != null)
+                _expeditionButton.onClick.AddListener(OnExpeditionClicked);
+            if (_supporterModeButton != null)
+                _supporterModeButton.onClick.AddListener(OnSupporterModeClicked);
 
             // 🆕 §17.15 关闭引导按钮
             if (_btnDisableOnboarding != null)
@@ -347,6 +369,83 @@ namespace DrscfZ.UI
             {
                 Debug.LogWarning("[BroadcasterPanel] OnTribeWarClicked：TribeWarLobbyUI.Instance 为 null，检查是否挂载 TribeWarLobbyUI 脚本");
             }
+        }
+
+        // ==================== audit-r6 P0-F3：§36.12 三个新按钮入口 ====================
+
+        /// <summary>
+        /// 🏗️ 建造系统入口（§37，D3 解锁）。
+        /// 按钮实际受 FeatureLockOverlay(featureId=building) 视觉守门，
+        /// 点击后由 BroadcasterDecisionHUD 接管发起 build_propose 投票流程；
+        /// 若面板未挂则 Log 占位。
+        /// </summary>
+        private void OnBuildingClicked()
+        {
+            // 服务端 feature 锁定由 FeatureLockOverlay 展示；点击仍可发起（服务端拒后回 build_propose_failed）
+            var hud = BroadcasterDecisionHUD.Instance;
+            if (hud != null)
+            {
+                // BroadcasterDecisionHUD 有 OpenBuildPropose / ShowBuildMenu 类方法时调用（反射兼容）
+                try
+                {
+                    var method = hud.GetType().GetMethod("OpenBuildPropose")
+                               ?? hud.GetType().GetMethod("ShowBuildMenu")
+                               ?? hud.GetType().GetMethod("OpenBuildMenu");
+                    method?.Invoke(hud, null);
+                    Debug.Log("[BroadcasterPanel] 🏗️ OnBuildingClicked → BroadcasterDecisionHUD");
+                    return;
+                }
+                catch { /* fall through to placeholder */ }
+            }
+            Debug.LogWarning("[BroadcasterPanel] OnBuildingClicked：BroadcasterDecisionHUD 未就绪（或无 OpenBuildPropose），D3 解锁后请 Setup 脚本补齐");
+            AnnouncementUI.Instance?.ShowAnnouncement("建造系统", "请稍候，建造菜单加载中...", new Color(0.6f, 0.9f, 0.6f), 2f);
+        }
+
+        /// <summary>
+        /// 🧭 探险系统入口（§38，D5 解锁）。点击触发召回面板或下发 expedition_command (recall)。
+        /// </summary>
+        private void OnExpeditionClicked()
+        {
+            var hud = BroadcasterDecisionHUD.Instance;
+            if (hud != null)
+            {
+                try
+                {
+                    var method = hud.GetType().GetMethod("OpenExpeditionPanel")
+                               ?? hud.GetType().GetMethod("ShowExpeditionControls");
+                    method?.Invoke(hud, null);
+                    Debug.Log("[BroadcasterPanel] 🧭 OnExpeditionClicked → BroadcasterDecisionHUD");
+                    return;
+                }
+                catch { /* fall through */ }
+            }
+            Debug.LogWarning("[BroadcasterPanel] OnExpeditionClicked：探险面板未就绪，D5 解锁后请 Setup 脚本补齐");
+            AnnouncementUI.Instance?.ShowAnnouncement("探险系统", "请稍候，探险面板加载中...", new Color(0.9f, 0.75f, 0.4f), 2f);
+        }
+
+        /// <summary>
+        /// 🤝 助威模式入口（§33，D6 解锁）。打开设置面板的 supporter tab；MVP 期 toast 占位。
+        /// </summary>
+        private void OnSupporterModeClicked()
+        {
+            var settings = FindObjectOfType<SettingsPanelUI>(true);
+            if (settings != null)
+            {
+                try
+                {
+                    var method = settings.GetType().GetMethod("OpenSupporterTab")
+                               ?? settings.GetType().GetMethod("Show");
+                    if (method != null)
+                    {
+                        method.Invoke(settings, null);
+                        Debug.Log("[BroadcasterPanel] 🤝 OnSupporterModeClicked → SettingsPanelUI");
+                        return;
+                    }
+                }
+                catch { /* fall through */ }
+            }
+            AnnouncementUI.Instance?.ShowAnnouncement("助威模式", "观众满员后可助威支持！", new Color(0.8f, 0.55f, 0.9f), 2f);
+            Debug.Log("[BroadcasterPanel] 🤝 OnSupporterModeClicked（MVP toast 占位）");
         }
 
         // ==================== 🆕 v1.22 §10 升级城门 ====================
@@ -553,12 +652,17 @@ namespace DrscfZ.UI
         }
 
         /// <summary>§17.15 主播话术卡三态切换。优先级：低血 > 入夜 > 默认。
-        /// gateHp 兜底：<= 0 视作首帧未就绪，不切换低血态。</summary>
+        /// gateHp 兜底：<= 0 视作首帧未就绪，不切换低血态。
+        /// audit-r6 P1-F6：阈值按 Gate.MaxHp × _tipLowGateRatio 动态计算；_tipLowGateThreshold 作为最终地板。</summary>
         private void RefreshBroadcasterTip(string phase, int gateHp)
         {
             if (_broadcasterTipText == null) return;
             string text;
-            if (gateHp > 0 && gateHp < _tipLowGateThreshold)
+            int threshold = _tipLowGateThreshold;
+            var gate = CityGateSystem.Instance;
+            if (gate != null && gate.MaxHp > 0 && _tipLowGateRatio > 0f)
+                threshold = Mathf.Max(_tipLowGateThreshold, Mathf.RoundToInt(gate.MaxHp * _tipLowGateRatio));
+            if (gateHp > 0 && gateHp < threshold)
                 text = _tipLowGate;
             else if (phase == "night")
                 text = _tipNight;

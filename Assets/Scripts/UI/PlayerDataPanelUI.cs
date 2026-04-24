@@ -16,6 +16,14 @@ namespace DrscfZ.UI
     /// </summary>
     public class PlayerDataPanelUI : MonoBehaviour
     {
+        // audit-r6 P0-F2：Legacy 角力游戏 PlayerDataPanelUI（含"阵营色条/阵营人数"旧 UI）已废弃
+        private void OnEnable()
+        {
+            Debug.LogWarning("[PlayerDataPanelUI] Legacy 角力游戏玩家数据面板已废弃，自动失活");
+            gameObject.SetActive(false);
+            enabled = false;
+        }
+
         [Header("Panel")]
         public Button btnOpen;         // BottomBar上的"玩家数据"按钮
         public Button btnClose;        // 面板关闭按钮

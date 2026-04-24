@@ -906,7 +906,7 @@ namespace DrscfZ.Survival
             _shieldCoroutine = StartCoroutine(ShieldVisualCoroutine(durationSec));
 
             // 占位音效（若 AudioManager 没该 SFX 则静默）
-            try { DrscfZ.Systems.AudioManager.Instance?.PlaySFX("sfx_worker_shield_activate"); }
+            try { DrscfZ.Systems.AudioManager.Instance?.PlaySFX(DrscfZ.Core.AudioConstants.SFX_WORKER_SHIELD_ACTIVATE); }
             catch { /* AudioManager 可能未初始化 */ }
         }
 
@@ -1121,6 +1121,96 @@ namespace DrscfZ.Survival
             {
                 Debug.LogError($"[WorkerController] SwapSkinModel Instantiate failed: {e.Message}");
             }
+        }
+
+        // ==================== audit-r6 P1-F4 / P1-F7：每日衰减 + 限时皮肤 ====================
+
+        private int _cachedTier = 0;         // 记录当前 tier，SetGiftSkin 结束后用于恢复
+        private string _activeGiftSkinId;    // G01 / G02 / G03 或 null
+
+        /// <summary>audit-r6 P1-F4：§30.4 每日不活跃等级衰减（服务端推送）。
+        /// 仅刷新头顶名牌 Lv 显示；实际等级数据以服务端 _playerStats 为准。
+        /// 通过反射兼容可选的 PlayerNameTag / NameTag 组件 SetLevel(int) 方法。</summary>
+        public void HandleDailyTierDecay(int oldLevel, int newLevel)
+        {
+            Debug.Log($"[WorkerController] daily_tier_decay playerId={PlayerId} {oldLevel}→{newLevel}");
+            // 反射兼容 name tag（若存在 SetLevel 则调）
+            try
+            {
+                var nameTag = GetComponentInChildren<MonoBehaviour>(true);
+                if (nameTag != null)
+                {
+                    var method = nameTag.GetType().GetMethod("SetLevel");
+                    method?.Invoke(nameTag, new object[] { newLevel });
+                }
+            }
+            catch { /* NameTag 组件可能未实现 SetLevel，降级为仅日志 */ }
+        }
+
+        /// <summary>audit-r6 P1-F7：§30.7 T4/G01 炽热 / T5/G02 战魂 / T6/G03 空投 限时皮肤激活。
+        /// 加载 WorkerSkins/Kuanggong_G{XX} Prefab，fallback 到默认 Kuanggong_01；
+        /// 实例化逻辑复用 SwapSkinModel 路径（子节点清理 + Animator 重绑）。</summary>
+        public void SetGiftSkin(string skinId)
+        {
+            if (string.IsNullOrEmpty(skinId)) return;
+
+            string skinPath     = $"WorkerSkins/Kuanggong_{skinId}";       // G01 / G02 / G03
+            string fallbackPath = "Prefabs/Characters/KuanggongWorker_01";
+
+            var prefab = Resources.Load<GameObject>(skinPath);
+            if (prefab == null)
+            {
+                prefab = Resources.Load<GameObject>(fallbackPath);
+                Debug.Log($"[WorkerController] SetGiftSkin: Skin Prefab not found for {skinId}, using fallback (美术清单 v5 §30.7 待交付)");
+            }
+            if (prefab == null)
+            {
+                Debug.LogWarning($"[WorkerController] SetGiftSkin: both {skinPath} and {fallbackPath} missing; keep current model");
+                return;
+            }
+
+            _activeGiftSkinId = skinId;
+
+            try
+            {
+                Transform modelRoot = transform;
+                var oldChildren = new System.Collections.Generic.List<GameObject>();
+                for (int i = 0; i < modelRoot.childCount; i++)
+                {
+                    var child = modelRoot.GetChild(i);
+                    if (child == null) continue;
+                    string cname = child.name.ToLowerInvariant();
+                    if (cname.Contains("canvas") || cname.Contains("nametag") || cname.Contains("hpbar") || cname.Contains("bubble") || cname.Contains("worktarget")) continue;
+                    if (cname.Contains("kuanggong") || cname.Contains("worker") || cname.Contains("mesh") || cname.Contains("model"))
+                        oldChildren.Add(child.gameObject);
+                }
+                foreach (var go in oldChildren) Destroy(go);
+
+                var inst = Instantiate(prefab, modelRoot);
+                inst.transform.localPosition = Vector3.zero;
+                inst.transform.localRotation = Quaternion.identity;
+                inst.transform.localScale    = Vector3.one;
+
+                _animator = GetComponentInChildren<Animator>();
+                CacheAnimatorParams();
+
+                Debug.Log($"[WorkerController] SetGiftSkin: applied {skinPath} (or fallback) to {gameObject.name}");
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[WorkerController] SetGiftSkin Instantiate failed: {e.Message}");
+            }
+        }
+
+        /// <summary>audit-r6 P1-F7：§30.7 限时皮肤到期，回滚到阶段皮肤。</summary>
+        public void ClearGiftSkin()
+        {
+            if (string.IsNullOrEmpty(_activeGiftSkinId)) return;
+            Debug.Log($"[WorkerController] ClearGiftSkin: {_activeGiftSkinId} expired, restoring tier skin");
+            _activeGiftSkinId = null;
+            // 恢复：若记录了 _cachedTier 使用之；否则默认 tier=1
+            int tier = _cachedTier > 0 ? _cachedTier : 1;
+            SwapSkinModel(tier);
         }
 
         /// <summary>重置Worker到Idle状态（归还对象池时调用）</summary>

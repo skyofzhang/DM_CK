@@ -54,7 +54,14 @@ namespace DrscfZ.UI
 
         private void OnEnable()
         {
+            // audit-r6 P0-F2：Legacy 角力游戏 PlayerJoinNotificationUI（含"香橙阵营/柚子阵营"旧文案）已废弃
+            Debug.LogWarning("[PlayerJoinNotificationUI] Legacy 角力游戏 UI 已废弃，自动失活");
+            gameObject.SetActive(false);
+            enabled = false;
+            return;
+#pragma warning disable CS0162
             TrySubscribe();
+#pragma warning restore CS0162
         }
 
         private void TrySubscribe()
