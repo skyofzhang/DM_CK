@@ -185,6 +185,32 @@ class SeasonManager {
                 themeId: this.themeId,
               },
             });
+            // §36.10 WaitingPhase：新赛季开局 30s 准备窗口（客户端主题预告 + 观众准备）
+            //   MVP：同帧广播 waiting_phase_started，30s 后自动 waiting_phase_ended
+            //   生效范围：仅作为 UI 层提示（A 类阻塞横幅），不干预服务端时钟 / 资源推进
+            room.broadcast({
+              type: 'waiting_phase_started',
+              timestamp: Date.now(),
+              data: {
+                durationSec:   30,
+                newSeasonId:   this.seasonId,
+                newThemeId:    this.themeId,
+              },
+            });
+            // 30s 后广播 waiting_phase_ended（兜底 UI 隐藏；客户端倒计时结束也可自关）
+            // 闭包捕获 room 引用，避免循环后 room 被篡改
+            const _room = room;
+            setTimeout(() => {
+              try {
+                if (_room && typeof _room.broadcast === 'function') {
+                  _room.broadcast({
+                    type: 'waiting_phase_ended',
+                    timestamp: Date.now(),
+                    data: {},
+                  });
+                }
+              } catch (_) { /* ignore single room errors */ }
+            }, 30000);
             // P0-A5 room_state 广播：season_changed（season_started）后推一次
             try {
               if (room.survivalEngine && typeof room.survivalEngine._broadcastRoomState === 'function') {

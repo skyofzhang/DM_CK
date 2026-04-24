@@ -161,6 +161,14 @@ namespace DrscfZ.Survival
         // §17.15 新手引导气泡（🆕 v1.27）
         public event Action<ShowOnboardingSequenceData> OnShowOnboardingSequence;
 
+        // §34 B7 新手引导（🆕 v1.27+ audit-r3/P1）
+        public event Action<NewbieWelcomeData> OnNewbieWelcome;   // 单播给本人（服务端已按 playerId 单播）
+        public event Action<FirstBarrageData>  OnFirstBarrage;    // 广播给全房（浅绿 toast 3s）
+
+        // §36.10 WaitingPhase（🆕 v1.27+ audit-r3/P1）
+        public event Action<WaitingPhaseStartedData> OnWaitingPhaseStarted;
+        public event Action<WaitingPhaseEndedData>   OnWaitingPhaseEnded;
+
         // §24.5 主播决策中心 HUD（🆕 v1.27）：resource_update 事件转发，供 HUD 触发推荐重算
         public event Action<ResourceUpdateData> OnResourceUpdate;
 
@@ -396,6 +404,28 @@ namespace DrscfZ.Survival
                 case "show_onboarding_sequence":
                     var sos = JsonUtility.FromJson<ShowOnboardingSequenceData>(dataJson);
                     if (sos != null) OnShowOnboardingSequence?.Invoke(sos);
+                    break;
+
+                // ----- §34 B7 新手引导（audit-r3/P1）-----
+                case "newbie_welcome":
+                    var nw = JsonUtility.FromJson<NewbieWelcomeData>(dataJson);
+                    if (nw != null) OnNewbieWelcome?.Invoke(nw);
+                    break;
+
+                case "first_barrage":
+                    var fb = JsonUtility.FromJson<FirstBarrageData>(dataJson);
+                    if (fb != null) OnFirstBarrage?.Invoke(fb);
+                    break;
+
+                // ----- §36.10 WaitingPhase（audit-r3/P1）-----
+                case "waiting_phase_started":
+                    var wps = JsonUtility.FromJson<WaitingPhaseStartedData>(dataJson);
+                    if (wps != null) OnWaitingPhaseStarted?.Invoke(wps);
+                    break;
+
+                case "waiting_phase_ended":
+                    var wpe = JsonUtility.FromJson<WaitingPhaseEndedData>(dataJson) ?? new WaitingPhaseEndedData();
+                    OnWaitingPhaseEnded?.Invoke(wpe);
                     break;
 
                 // ----- 怪物波次 -----

@@ -137,6 +137,8 @@ const GUARD_ATK_MULT      = 2;      // normal ATK × 2
 const GUARD_COUNT         = 2;
 const BOSS_ENRAGED_ATK_MULT = 1.3;
 // 同屏上限（§8.7 mini 也计入；客户端有同样的 15 上限）
+// 注：frenzy 主题时 +2（→17），由 _effectiveMaxAliveMonsters() 动态返回；
+//     请勿直接使用 MAX_ALIVE_MONSTERS 做 cap 判定，统一走 getter。
 const MAX_ALIVE_MONSTERS = 15;
 
 // ==================== §38 探险系统（Expedition） ====================
@@ -619,6 +621,10 @@ class SurvivalGameEngine {
     this._supporterAtkBuffTimer  = 0;
     this._afkCheckCounter        = 0;
     this._playerSlots            = {};
+
+    // ── §34 B7 新手引导（newbie_welcome / first_barrage）─────────────
+    // 本局首次发送 1-6 弹幕的 playerId 记录（reset() 时清空）
+    this._firstBarrageReceived   = new Set();
 
     // ── 矿工成长系统（策划案 §30）─────────────────────────────────
     // §30 持久化已接入 RoomPersistence（schemaVersion 3）：_lifetimeContrib / _playerLevel / _playerSkinId
@@ -1203,10 +1209,17 @@ class SurvivalGameEngine {
     this._guardsAlive        = 0;
     this._lastBossSpawnSide  = 'all';
 
+    // §34 B7 新手引导：每局清空首次发弹幕记录
+    if (this._firstBarrageReceived) this._firstBarrageReceived.clear();
+    else this._firstBarrageReceived = new Set();
+
     // §36 主题倍率（仅 night 生效）—— reset 时归默认；下次 _applyThemeRulesForNight 重新设置
-    this._themeHpMult        = 1.0;
-    this._themeCntMult       = 1.0;
-    this._themeMaxAliveBonus = 0;
+    this._themeHpMult         = 1.0;
+    this._themeCntMult        = 1.0;
+    this._themeMaxAliveBonus  = 0;
+    // §31 polar_night 主题：怪物 hp / atk 额外 ×1.2（非主题时 1.0）
+    this._themeMonsterHpMult  = 1.0;
+    this._themeMonsterAtkMult = 1.0;
 
     // §36 fortressDay / maxFortressDay / §36.5.1 每日 cap 字段 —— reset 不清零（跨局永续）
     //   持久化字段全部来自 _applyPersistedSnapshot 或 _onRoomSuccess/_onRoomFail 路径
@@ -1593,6 +1606,24 @@ class SurvivalGameEngine {
         }
         return;
       }
+    }
+
+    // §34 B7 新手引导：玩家本局首次发送有效 1-6 弹幕 → 广播 first_barrage 庆祝
+    //   位置在 F8 之后、助威者分流之前：确保守护者/助威者都能触发一次
+    //   cmd 1-4 任意阶段 / cmd 6 夜晚（cmd=5 和 cmd=6-白天 已在 F8 拦截）
+    //   Set.has 判断确保每个 playerId 每局只广播一次
+    if (playerId && cmd >= 1 && cmd <= 6 && !this._firstBarrageReceived.has(playerId)) {
+      this._firstBarrageReceived.add(playerId);
+      this.broadcast({
+        type: 'first_barrage',
+        timestamp: Date.now(),
+        data: {
+          playerId,
+          playerName: playerName || playerId,
+          cmd,
+        },
+      });
+      console.log(`[SurvivalEngine] first_barrage: ${playerName || playerId} cmd=${cmd}`);
     }
 
     // §33 助威模式分流：
@@ -2116,6 +2147,25 @@ class SurvivalGameEngine {
         },
       },
     });
+
+    // §34 B7 新手引导：单播欢迎横幅
+    //   触发条件：玩家无 _lifetimeContrib 记录（全新用户）或当前为赛季 1
+    //   注：仅单播给本人；失败（找不到 ws）时静默，不回退 broadcast（避免刷屏所有观众）
+    if (playerId) {
+      const isNewbie = !this._lifetimeContrib[playerId] || this._lifetimeContrib[playerId] === 0;
+      const isSeason1 = this.seasonMgr && this.seasonMgr.seasonId === 1;
+      if (isNewbie || isSeason1) {
+        this._sendToPlayer(playerId, {
+          type: 'newbie_welcome',
+          timestamp: Date.now(),
+          data: {
+            playerId,
+            hint: '发送弹幕 1/2/3/4 指挥矿工采集',
+            ttlSec: 30,
+          },
+        });
+      }
+    }
   }
 
   // ==================== §33 助威模式 ====================
@@ -3128,12 +3178,36 @@ class SurvivalGameEngine {
     this._themeHpMult = 1.0;
     this._themeCntMult = 1.0;
     this._themeMaxAliveBonus = 0;
+    // §31 怪物属性主题倍率（polar_night night modifier 额外 +20%，其他主题 1.0）
+    //   polar_night 虽为 night modifier 而非 season theme，但属性倍率在此统一管理，
+    //   后续 _spawnWave 读取 _themeMonsterHpMult/AtkMult 时会自动应用到新 spawn 的怪物。
+    this._themeMonsterHpMult  = 1.0;
+    this._themeMonsterAtkMult = 1.0;
     if (themeId === 'blood_moon') {
       this._themeHpMult = 1.2;
     } else if (themeId === 'frenzy') {
       this._themeMaxAliveBonus = 2;  // 15 → 17
     }
+    // §34.4 polar_night：night modifier 额外 +20%（应用到本夜所有 spawn 的怪物）
+    //   注：_currentNightModifier 由 _enterNight 在 _applyThemeRulesForNight 之后设置，
+    //   但 _applyNightModifier（case 'polar_night'）会 override 后调用这里；
+    //   稳妥方式：_spawnWave 运行时再查 _currentNightModifier（见 baseHp 计算），此处 getter 仅兜底。
+    if (this._currentNightModifier && this._currentNightModifier.id === 'polar_night') {
+      this._themeMonsterHpMult  = MODIFIER_POLAR_VARIANT_STAT_MULT;
+      this._themeMonsterAtkMult = MODIFIER_POLAR_VARIANT_STAT_MULT;
+    }
     // 其他主题 MVP 不改倍率
+  }
+
+  /**
+   * §31 同屏怪物上限 getter（含主题加成）
+   * 默认 MAX_ALIVE_MONSTERS=15；frenzy 主题下 _themeMaxAliveBonus=2 → 返回 17。
+   * 所有 cap 判定（spawn wave / summoner mini / 等）必须走此 getter，
+   * 避免硬编码 15 导致主题加成失效。
+   * @returns {number}
+   */
+  _effectiveMaxAliveMonsters() {
+    return MAX_ALIVE_MONSTERS + (this._themeMaxAliveBonus || 0);
   }
 
   // ==================== §36.5 堡垒日（fortressDay）升降 ====================
@@ -3590,15 +3664,17 @@ class SurvivalGameEngine {
   /**
    * §6.3 P5（方案 A）：能力药丸 / 666 弹幕效率加成合并倍率。
    * 两条轨道各自使用绝对时间戳判定过期（非 setTimeout，避免 clearTimeout 冲突）。
-   * 返回 pillMult * buzzMult —— 两者同时激活时为乘法（例：1.5 × 1.5 = 2.25×），
+   * 方案 A：两轨同时激活时取 Math.max（不叠加，避免 1.5 × 1.5 = 2.25× 双倍暴涨）。
    * 单方激活时另一轨回退 1.0，不互相覆盖。
    * 兼容：旧字段 efficiency666Bonus/Timer 保留为别名，此函数为计算新唯一入口。
+   * 注：总倍率另有 Math.min(3.0, ...) 上限，此处仅合并 pill/buzz 两轨。
    */
   _getEfficiencyBoostMult() {
     const now     = Date.now();
     const pillMult = (this._abilityPillExpireAt > now) ? (this._abilityPillBonus || 1.0) : 1.0;
     const buzzMult = (this._buzz666ExpireAt     > now) ? (this._buzz666Bonus     || 1.0) : 1.0;
-    return pillMult * buzzMult;
+    // 方案 A：两轨道独立 timer，合并时取 Math.max（策划案 §6.3）
+    return Math.max(1.0, pillMult, buzzMult);
   }
 
   _applyWorkEffect(commandId, playerId) {
@@ -3613,8 +3689,8 @@ class SurvivalGameEngine {
     const playerBonus      = 1.0 + (this._playerEfficiencyBonus[playerId] || 0); // 仙女棒加成
     const globalBoost      = this._playerTempBoost[playerId] || 1.0;             // 能量电池 per-player 加成
     const broadcasterBoost = this.broadcasterEfficiencyMultiplier || 1.0;         // 主播紧急加速
-    // §6.3 P5（方案 A）：能力药丸 / 666 弹幕两条独立轨道相乘（同时激活 → 1.5 × 1.5 = 2.25×）
-    const eff666Boost      = this._getEfficiencyBoostMult();                      // pillMult * buzzMult
+    // §6.3 P5（方案 A）：能力药丸 / 666 弹幕两条独立轨道合并取 Math.max（同时激活 → 1.5，不叠加）
+    const eff666Boost      = this._getEfficiencyBoostMult();                      // Math.max(1.0, pillMult, buzzMult)
     const auroraBoost      = this._auroraEffMult || 1.0;                          // §24.4 极光 ×1.5（60s）
     // §34.3 B3 ice_ground：矿工移动速度 ×0.8，折算为工作产出 ×0.8（30s）
     // Fix G (组 B Reviewer P1)：策划案原文"移动速度 -20%"，项目无移动速度概念，采用采矿产出 ×0.8 等效。
@@ -4162,6 +4238,11 @@ class SurvivalGameEngine {
    *   4. summoner  index===2 && day>=7（若 rush/ice 占据，post-process 迁移到下一 normal 槽）
    */
   _selectVariant(day, index) {
+    // §31.7 blood_moon 主题：仅 Boss + 2 精英护卫，§31 变体不出现 → 强制返 'normal'
+    //   护卫走独立 _spawnBossAndGuards 分支，normal wave 全量回退为普通怪物
+    const themeId = (this.seasonMgr && this.seasonMgr.themeId) || 'classic_frozen';
+    if (themeId === 'blood_moon') return 'normal';
+
     const diff = this._difficulty || 'normal';
     const dayOffset  = diff === 'easy' ? 2 : diff === 'hard' ? -1 : 0;
     const rushBonus  = diff === 'hard' ? 1 : 0;
@@ -4304,8 +4385,17 @@ class SurvivalGameEngine {
     //   rush 不进 _activeMonsters（直奔城门，客户端不展示为可攻击目标？
     //   ↑ 策划案 §31.7：T5 AOE 对所有变种照常命中 → rush 也要进 _activeMonsters
     //     所以 rush 也进 _activeMonsters，只是伤害路由跳过矿工均摊）
-    const baseHp       = Math.max(1, Math.round(cfg.normal ? cfg.normal.hp * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) : 50));
-    const baseAtk      = cfg.normal ? cfg.normal.atk : 3;
+    // §34.4 polar_night：hp / atk 额外 ×1.2（night modifier；运行时 re-check 确保跨 modifier 切换正确）
+    //   Fallback 读 _themeMonsterHpMult/AtkMult（_applyThemeRulesForNight 写入），
+    //   若 _currentNightModifier 为 polar_night 则强制 ×MODIFIER_POLAR_VARIANT_STAT_MULT。
+    let themeHpMult  = this._themeMonsterHpMult  || 1.0;
+    let themeAtkMult = this._themeMonsterAtkMult || 1.0;
+    if (this._currentNightModifier && this._currentNightModifier.id === 'polar_night') {
+      themeHpMult  = MODIFIER_POLAR_VARIANT_STAT_MULT;
+      themeAtkMult = MODIFIER_POLAR_VARIANT_STAT_MULT;
+    }
+    const baseHp       = Math.max(1, Math.round(cfg.normal ? cfg.normal.hp * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * themeHpMult : 50));
+    const baseAtk      = Math.max(1, Math.round((cfg.normal ? cfg.normal.atk : 3) * themeAtkMult));
     const baseSpd      = cfg.normal ? cfg.normal.spd : 2.0;
     const waveMonsters = [];
     let rushCountInWave     = 0;
@@ -4625,8 +4715,10 @@ class SurvivalGameEngine {
     const miniList = [];
     const cfgDay   = getWaveConfig(this.currentDay);
     const miniSpd  = +((cfgDay && cfgDay.normal ? cfgDay.normal.spd : 2.0) * (VARIANT_SPEED_MULT.mini || 1.0)).toFixed(2);
+    // §31 frenzy 主题下上限 17；走 getter 避免硬编码
+    const maxAlive = this._effectiveMaxAliveMonsters();
     for (let i = 0; i < SUMMONER_MINI_COUNT; i++) {
-      if (this._activeMonsters.size >= MAX_ALIVE_MONSTERS) break;
+      if (this._activeMonsters.size >= maxAlive) break;
       const id = `mini_${++this._monsterIdCounter}`;
       this._activeMonsters.set(id, {
         id,
@@ -8140,8 +8232,15 @@ class SurvivalGameEngine {
     if (!cfg) return false;
     const st = this.state;
     if (cfg.category === 'B') {
-      // B 类：day/night/settlement 均可（身份装备结算后也能买）
-      return st === 'day' || st === 'night' || st === 'settlement';
+      // §39.6 策划案：B 类全相位允许（让输了的局也能买头衔）
+      //   idle / loading / day / night / settlement / recovery 全部放行
+      //   恢复期 recovery 走 running 路径，服务端 state 仍为 'day'，此处显式列出兜底
+      return st === 'idle'
+          || st === 'loading'
+          || st === 'day'
+          || st === 'night'
+          || st === 'settlement'
+          || st === 'recovery';
     }
     // A 类：按 itemId 细分
     switch (itemId) {

@@ -1500,4 +1500,46 @@ namespace DrscfZ.Survival
         public string targetRoomId;
         public float  damageMultiplier;  // 1.5 if has beacon, 1.0 otherwise
     }
+
+    // ==================== §34 B7 新手引导（🆕 v1.27+ audit-r3/P1） ====================
+
+    /// <summary>新玩家加入单播欢迎横幅（type=newbie_welcome，S→C，仅发给新玩家本人）。
+    /// 触发条件：玩家 _lifetimeContrib 为 0 或当前赛季 id=1；UI 侧以 B 类 modal 显示 30s。</summary>
+    [Serializable]
+    public class NewbieWelcomeData
+    {
+        public string playerId;  // 目标玩家 id（客户端可据此过滤：只渲染自己为主角的弹幕）
+        public string hint;      // 欢迎文案（服务端固定："发送弹幕 1/2/3/4 指挥矿工采集"）
+        public int    ttlSec;    // 默认 30s，客户端倒计时自动隐藏
+    }
+
+    /// <summary>本局首次发送 1-6 有效弹幕的广播（type=first_barrage，S→C，房间广播）。
+    /// 每位 playerId 本局仅广播一次；UI 侧以浅绿 B 类 toast 显示 3s。</summary>
+    [Serializable]
+    public class FirstBarrageData
+    {
+        public string playerId;
+        public string playerName;
+        public int    cmd;       // 1-6（cmd=5 已在服务端静默拦截，此处不会出现）
+    }
+
+    // ==================== §36.10 WaitingPhase（🆕 v1.27+ audit-r3/P1） ====================
+
+    /// <summary>新赛季 30s 准备窗口开始（type=waiting_phase_started，S→C）。
+    /// 客户端显示主题预告大横幅 + 倒计时；使用 A 类阻塞 modal 独占。</summary>
+    [Serializable]
+    public class WaitingPhaseStartedData
+    {
+        public int    durationSec;   // 默认 30；客户端倒计时
+        public int    newSeasonId;
+        public string newThemeId;    // classic_frozen / blood_moon / snowstorm / dawn / frenzy / serene
+    }
+
+    /// <summary>准备窗口结束（type=waiting_phase_ended，S→C）。
+    /// 无字段（空 data 对象即可）；客户端用于兜底关闭 WaitingPhaseUI。</summary>
+    [Serializable]
+    public class WaitingPhaseEndedData
+    {
+        // 服务端下发空 data，客户端反序列化仍可生成空对象
+    }
 }
