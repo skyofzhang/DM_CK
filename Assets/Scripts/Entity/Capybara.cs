@@ -856,7 +856,7 @@ namespace DrscfZ.Entity
 
             // 加载中文字体
             if (_chineseFont == null)
-                _chineseFont = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+                _chineseFont = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
             if (_chineseFont != null)
                 _nameText.font = _chineseFont;
 

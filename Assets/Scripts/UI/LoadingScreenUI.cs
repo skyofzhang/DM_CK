@@ -28,7 +28,7 @@ namespace DrscfZ.UI
 
         private void Start()
         {
-            _chineseFont = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+            _chineseFont = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
 
             // 确保 UI 文字有字体
             if (_chineseFont != null)

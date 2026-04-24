@@ -18,7 +18,7 @@ namespace DrscfZ.Editor
     /// </summary>
     public static class FixTMPFonts
     {
-        private const string ChineseFontPath = "Assets/Resources/Fonts/ChineseFont SDF.asset";
+        private const string ChineseFontPath = "Assets/Resources/Fonts/AlibabaPuHuiTi-3-85-Bold SDF.asset";
         private const string LiberationSansPath =
             "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF.asset";
 

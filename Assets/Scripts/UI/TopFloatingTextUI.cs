@@ -55,7 +55,7 @@ namespace DrscfZ.UI
             Instance = this;
 
             // 绑定字体，确保中文显示（AI准则：字体统一用 ChineseFont SDF）
-            var font = Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
+            var font = Resources.Load<TMPro.TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
             foreach (var row in _rows)
             {
                 if (row?.text != null)

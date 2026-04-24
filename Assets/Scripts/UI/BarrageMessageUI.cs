@@ -100,7 +100,7 @@ namespace DrscfZ.UI
             rt.sizeDelta = new Vector2(0, _rowHeight);
 
             var tmp = rowGO.AddComponent<TextMeshProUGUI>();
-            var font = Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
+            var font = Resources.Load<TMPro.TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
             if (font != null) tmp.font = font;
             tmp.text      = text;
             tmp.fontSize  = _messageFontSz;

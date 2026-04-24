@@ -54,7 +54,7 @@ public class DamageNumber : MonoBehaviour
         _tmp = gameObject.AddComponent<TextMeshPro>();
 
         // R2：绑定中文字体，防止中文乱码
-        var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+        var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
         if (font != null) _tmp.font = font;
 
         _tmp.text      = text;

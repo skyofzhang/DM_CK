@@ -54,7 +54,7 @@ namespace DrscfZ.UI
 
         private void BuildPool()
         {
-            var font       = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+            var font       = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
             var outlineMat = Resources.Load<Material>("Fonts/ChineseFont SDF - Outline");
 
             for (int i = 0; i < _maxRows * 2; i++)

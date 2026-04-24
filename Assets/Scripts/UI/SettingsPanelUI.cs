@@ -43,7 +43,7 @@ namespace DrscfZ.UI
 
         private void Start()
         {
-            _chineseFont = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+            _chineseFont = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
             // 启动时从 PlayerPrefs 恢复静态开关状态，保证与 SurvivalSettingsUI 数据一致
             GiftVideoEnabled = PlayerPrefs.GetInt("gift_video_enabled", 1) == 1;
             VIPVideoEnabled  = PlayerPrefs.GetInt("vip_video_enabled",  1) == 1;

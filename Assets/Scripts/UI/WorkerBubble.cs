@@ -44,7 +44,7 @@ namespace DrscfZ.UI
             // 绑定中文字体，防止气泡文字乱码
             if (_iconText != null)
             {
-                var chineseFont = Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
+                var chineseFont = Resources.Load<TMPro.TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
                 if (chineseFont != null) _iconText.font = chineseFont;
                 if (_iconText.fontSize < 32f) _iconText.fontSize = 32f;
             }

@@ -160,7 +160,7 @@ namespace DrscfZ.UI
 
         private void BindFonts()
         {
-            var font    = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+            var font    = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
             var fontMat = Resources.Load<Material>("Fonts/ChineseFont SDF - Outline");
 
             BindTmp(_foodTitle, font, fontMat);
@@ -176,7 +176,7 @@ namespace DrscfZ.UI
         {
             if (tmp == null) return;
             tmp.text = text;
-            var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+            var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
             if (font != null) tmp.font = font;
             var mat = Resources.Load<Material>("Fonts/ChineseFont SDF - Outline");
             if (mat != null) tmp.fontSharedMaterial = mat;

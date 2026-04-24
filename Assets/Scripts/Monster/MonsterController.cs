@@ -142,7 +142,7 @@ namespace DrscfZ.Monster
                 if (hpText != null)
                 {
                     if (hpText.fontSize < 36f) hpText.fontSize = 36f;
-                    var font = Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
+                    var font = Resources.Load<TMPro.TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
                     if (font != null) hpText.font = font;
                 }
             }

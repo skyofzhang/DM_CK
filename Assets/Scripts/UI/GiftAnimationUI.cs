@@ -456,7 +456,7 @@ namespace DrscfZ.UI
                 displayName = displayName.Substring(0, 5);
 
             // 中文字体（提前加载，多处复用）
-            var chFont = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+            var chFont = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
 
             // === 外层垂直容器：上行=头像+名字+礼物名，下行=推力 ===
             var outerGo = new GameObject("PlayerInfoOuter", typeof(RectTransform));

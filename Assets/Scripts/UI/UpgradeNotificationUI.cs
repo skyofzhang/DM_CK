@@ -45,7 +45,7 @@ namespace DrscfZ.UI
 
         private void Start()
         {
-            _chineseFont = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+            _chineseFont = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
             if (container == null) container = transform;
         }
 

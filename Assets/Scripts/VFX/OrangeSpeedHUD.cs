@@ -53,7 +53,7 @@ namespace DrscfZ.VFX
             // 运行时字体 fallback 设置
             if (mainText != null)
             {
-                var cjkFont = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+                var cjkFont = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
                 if (mainText.font != null && cjkFont != null)
                 {
                     if (mainText.font.fallbackFontAssetTable == null)

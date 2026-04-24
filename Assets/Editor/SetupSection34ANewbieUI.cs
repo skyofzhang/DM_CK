@@ -34,7 +34,7 @@ namespace DrscfZ.Editor
     /// </summary>
     public static class SetupSection34ANewbieUI
     {
-        private const string ChineseFontPath = "Assets/Resources/Fonts/ChineseFont SDF.asset";
+        private const string ChineseFontPath = "Assets/Resources/Fonts/AlibabaPuHuiTi-3-85-Bold SDF.asset";
 
         [MenuItem("Tools/DrscfZ/Setup §34A Newbie UI")]
         public static void Run()
