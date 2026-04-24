@@ -28,7 +28,7 @@ public class Setup3DSceneUI
         // 父节点：SceneUI3D（始终激活，挂在根下）
         var root3D = EnsureRoot("SceneUI3D");
 
-        // 加载字体（优先 ChineseFont SDF，其次 Unity 内置 LiberationSans）
+        // audit-r7 §19：加载字体（AlibabaPuHuiTi 主 + ChineseFont fallback；LiberationSans 违规已禁用）
         var font = LoadFont();
 
         // ── 创建各标签 ──────────────────────────────────────────────────

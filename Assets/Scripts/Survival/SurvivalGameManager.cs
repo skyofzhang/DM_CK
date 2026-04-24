@@ -1969,7 +1969,9 @@ namespace DrscfZ.Survival
 
         // ==================== §10 v1.22 城门升级系统 v2 ====================
 
-        /// <summary>🆕 v1.22 §10 城门等级特性触发（Lv4反伤 / Lv5光环 / Lv6冲击波）</summary>
+        /// <summary>🆕 v1.22 §10 城门等级特性触发（Lv4反伤 / Lv5光环 / Lv6冲击波）
+        /// audit-r7 §19 扩展：优先使用 hitMonsters（legacy），退回 targets（通用别名）；
+        /// 位置优先 gatePos（nested），退回 flat x/y/z；durationMs 退回 freezeMs。</summary>
         private void HandleGateEffectTriggered(string dataJson)
         {
             var d = JsonUtility.FromJson<GateEffectTriggeredData>(dataJson);
@@ -1978,22 +1980,27 @@ namespace DrscfZ.Survival
             // §10.7 对外广播事件：CityGateSystem / VFX 层订阅，按 effect 分流播视觉/音效
             OnGateEffectTriggered?.Invoke(d);
 
+            // audit-r7 §19：hitMonsters 优先（legacy），为空时退回 targets 别名
+            string[] effectiveTargets = (d.hitMonsters != null && d.hitMonsters.Length > 0)
+                ? d.hitMonsters
+                : d.targets;
+
             switch (d.effect)
             {
                 case "thorns":
                 {
-                    // Lv4 反伤：服务端均分到全体活怪，遍历 hitMonsters 逐个飘字 damagePerMonster
+                    // Lv4 反伤：服务端均分到全体活怪，遍历 effectiveTargets 逐个飘字 damagePerMonster
                     int perMonster = d.damagePerMonster;
-                    if (perMonster > 0 && d.hitMonsters != null && monsterWaveSpawner != null)
+                    if (perMonster > 0 && effectiveTargets != null && monsterWaveSpawner != null)
                     {
-                        foreach (var mid in d.hitMonsters)
+                        foreach (var mid in effectiveTargets)
                         {
                             var mc = monsterWaveSpawner.FindById(mid);
                             if (mc != null)
                                 DamageNumber.Show(mc.transform.position + Vector3.up * 2f, perMonster, Color.yellow);
                         }
                     }
-                    Debug.Log($"[GateFX] thorns 反伤 total={d.totalDamage} perMonster={perMonster} × {(d.hitMonsters?.Length ?? 0)} 只");
+                    Debug.Log($"[GateFX] thorns 反伤 total={d.totalDamage} perMonster={perMonster} × {(effectiveTargets?.Length ?? 0)} 只");
                     break;
                 }
                 case "frost_aura":
@@ -2009,9 +2016,14 @@ namespace DrscfZ.Survival
                         DrscfZ.Monster.MonsterController.FrostAuraCenter = new Vector3(
                             d.gatePos.x, d.gatePos.y, d.gatePos.z);
                     }
+                    else if (d.x != 0f || d.y != 0f || d.z != 0f)
+                    {
+                        // audit-r7 §19：flat x/y/z 退路（服务端若下发扁平坐标）
+                        DrscfZ.Monster.MonsterController.FrostAuraCenter = new Vector3(d.x, d.y, d.z);
+                    }
                     else if (cityGateSystem != null)
                     {
-                        // 兜底：服务端未下发 gatePos 时用本地 CityGateSystem 位置
+                        // 兜底：服务端未下发任何位置时用本地 CityGateSystem 位置
                         DrscfZ.Monster.MonsterController.FrostAuraCenter = cityGateSystem.transform.position;
                     }
                     Debug.Log($"[GateFX] Frost aura {(d.active ? "ACTIVATED" : "DEACTIVATED")} " +
@@ -2023,12 +2035,14 @@ namespace DrscfZ.Survival
                 {
                     // Lv6 寒冰冲击波：屏幕震动 + 对命中怪物播放冻结闪烁
                     SurvivalCameraController.Shake(0.2f, 0.3f);
-                    if (d.hitMonsters != null && monsterWaveSpawner != null)
+                    if (effectiveTargets != null && monsterWaveSpawner != null)
                     {
                         // 🆕 P0-B7：写 FrozenUntil 让怪物停住；同时播放闪烁视觉
-                        float freezeDuration = d.freezeMs > 0 ? d.freezeMs / 1000f : 2f;
+                        // audit-r7 §19：freezeMs 优先（legacy），0 时退回 durationMs 别名
+                        int freezeMillis = d.freezeMs > 0 ? d.freezeMs : (int)d.durationMs;
+                        float freezeDuration = freezeMillis > 0 ? freezeMillis / 1000f : 2f;
                         float until = Time.time + freezeDuration;
-                        foreach (var id in d.hitMonsters)
+                        foreach (var id in effectiveTargets)
                         {
                             var target = monsterWaveSpawner.FindById(id);
                             if (target != null)
@@ -2039,7 +2053,7 @@ namespace DrscfZ.Survival
                         }
                     }
                     // TODO §10.7：FX_FrostPulse 环形冲击波 VFX + sfx_frost_pulse（美术资源待落地）
-                    Debug.Log($"[GateFX] Frost pulse ({(d.hitMonsters?.Length ?? 0)} monsters hit, freezeMs={d.freezeMs})");
+                    Debug.Log($"[GateFX] Frost pulse ({(effectiveTargets?.Length ?? 0)} monsters hit, freezeMs={d.freezeMs} durationMs={d.durationMs})");
                     break;
                 }
                 default:

@@ -386,7 +386,9 @@ namespace DrscfZ.Survival
         public int    blockedLevel;  // 阻止升级的等级边界（Lv1-4 vs Lv5-6 解锁分类）
     }
 
-    /// <summary>城门等级特性触发（Lv4反伤 / Lv5光环激活 / Lv6冲击波）🆕 v1.22</summary>
+    /// <summary>城门等级特性触发（Lv4反伤 / Lv5光环激活 / Lv6冲击波）🆕 v1.22
+    /// audit-r7 §19 扩展：补齐 x/y/z/durationMs/targets 通用字段（与 gatePos/hitMonsters 并存，互为 alias）。
+    /// JsonUtility 对服务端未下发的字段保持默认值 0/null，Handler 按字段优先级兜底（flat > nested）。</summary>
     [Serializable]
     public class GateEffectTriggeredData
     {
@@ -406,6 +408,13 @@ namespace DrscfZ.Survival
         public bool     active;            // true=激活（Lv5+ 升级时）/ false=关闭（降级时）
         public float    slowMult;          // 光环内速度倍率（默认 0.7）
         public GatePosData gatePos;        // 光环圆心（服务端 GATE_POS，{x,y,z}）
+
+        // 🆕 audit-r7 §19 v1.27 通用字段（与 gatePos / hitMonsters / freezeMs 互为 alias，兼容未来服务端扁平化）
+        public float    x;                 // 触发位置 X（相机/光环/冲击波原点，与 gatePos.x 等价；JsonUtility 默认 0）
+        public float    y;                 // 触发位置 Y（默认 0）
+        public float    z;                 // 触发位置 Z（默认 0）
+        public float    durationMs;        // 持续时长（毫秒；瞬时特效可为 0 或 300；与 freezeMs 语义部分重叠）
+        public string[] targets;           // 受影响 monsterId 数组（alias of hitMonsters；客户端 Handler 取 hitMonsters 优先，null 时退回 targets）
     }
 
     /// <summary>frost_aura 的 gatePos 嵌套结构（JsonUtility 需要显式 Serializable 子类）。🆕 P0-B6</summary>
