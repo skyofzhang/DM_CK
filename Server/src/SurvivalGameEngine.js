@@ -645,10 +645,12 @@ class SurvivalGameEngine {
     this._dynamicHpMult      = 1.0;  // 动态难度怪物HP倍率
     this._dynamicCountMult   = 1.0;  // 动态难度怪物数量倍率
 
-    // audit-r5 §30.4 每日衰减追踪（UTC+8 日期字符串，跨日触发 _applyDailyTierDecay 一次）
-    // MVP 版本：仅内存存在，服务器重启后当日首次 tick 触发一次衰减（可接受的副作用）
-    // TODO 持久化：待 RoomPersistence schemaVersion 4 时补 _lastDailyDecayDayKey 字段
+    // audit-r5/r7 §30.4 每日衰减追踪（UTC+8 日期字符串，跨日触发 _applyDailyTierDecay 一次）
+    // audit-r7 持久化已接入（RoomPersistence schemaVersion 4）：_lastDailyDecayDayKey / _playerLastActiveTs
+    //   snapshot / _applyPersistedSnapshot 负责序列化与恢复；构造函数初值仅在首次 load 前使用。
+    //   _playerLastActiveTs: playerId → ms；由 _trackContribution 更新，用于活跃 / 不活跃分档（48h 窗）
     this._lastDailyDecayDayKey = null;
+    this._playerLastActiveTs   = {};
 
     // ── §24.4 主播事件轮盘（Broadcaster Event Roulette）─────────────────
     this._roulette              = new BroadcasterRoulette(this);
@@ -1080,6 +1082,16 @@ class SurvivalGameEngine {
     // _dailyBuildVoteUsed：对象 seasonDay → bool
     if (snap._dailyBuildVoteUsed && typeof snap._dailyBuildVoteUsed === 'object') {
       this._dailyBuildVoteUsed = { ...snap._dailyBuildVoteUsed };
+    }
+
+    // audit-r7 v4 §30.4：每日衰减元数据恢复
+    //   _lastDailyDecayDayKey: 非空字符串才恢复（空/undefined 保留构造函数默认 null → 首次 tick 仅记录）
+    //   _playerLastActiveTs:  对象则浅拷贝；_applyDailyTierDecay 分档（48h 窗）输入
+    if (typeof snap._lastDailyDecayDayKey === 'string' && snap._lastDailyDecayDayKey) {
+      this._lastDailyDecayDayKey = snap._lastDailyDecayDayKey;
+    }
+    if (snap._playerLastActiveTs && typeof snap._playerLastActiveTs === 'object') {
+      this._playerLastActiveTs = { ...snap._playerLastActiveTs };
     }
     // SeasonManager 快照回填（仅当 seasonMgr 存在且为未初始化空状态；避免覆盖正在运行的全局时钟）
     if (this.seasonMgr && snap.seasonSnapshot && typeof snap.seasonSnapshot === 'object') {
@@ -3868,22 +3880,37 @@ class SurvivalGameEngine {
     const themeMiningMult = (this._themeDayMiningMult && this.state === 'day' && isMiningCmd)
       ? this._themeDayMiningMult : 1.0;
 
+    // audit-r7 §30.7 礼物限时皮肤被动数值：
+    //   G01（T4 炽热矿工）：每次发送工作指令（1-4）额外 +2 炉温
+    //   G03（T6 空投精英）：采矿产出（cmd 1/2/3）额外 +20%
+    //   与现有 totalMult / themeMiningMult / doubleMult 相乘（外层），与 Math.min(3.0) 钳位无关（钳位仅作用于 totalMult）
+    //   注：_applyGiftSkin 在发礼物路径是 _applyWorkEffect 的上游 → 此处读取到的 skinId 反映当前真实状态
+    const giftSkinId      = this._getActiveGiftSkinId(playerId);
+    const giftMiningMult  = (giftSkinId === 'G03' && isMiningCmd) ? 1.2 : 1.0; // T6 +20% 采矿
+    const giftHeatBonus   = (giftSkinId === 'G01')                ? 2   : 0;   // T4 每次工作指令 +2 炉温（额外，叠加于 cmd=4 的基础 +3℃）
+
     // 工作效果：每次评论小幅增加资源（基础值 × 综合倍率）
     switch (commandId) {
       case 1: // 采食物（丰收事件额外加成）
-        this.food = Math.min(2000, this.food + Math.round(5 * totalMult * (this.foodBonus || 1.0) * doubleMult * themeMiningMult));
+        this.food = Math.min(2000, this.food + Math.round(5 * totalMult * (this.foodBonus || 1.0) * doubleMult * themeMiningMult * giftMiningMult));
         break;
       case 2: // 挖煤
-        this.coal = Math.min(1500, this.coal + Math.round(3 * totalMult * doubleMult * themeMiningMult));
+        this.coal = Math.min(1500, this.coal + Math.round(3 * totalMult * doubleMult * themeMiningMult * giftMiningMult));
         break;
       case 3: // 采矿（矿脉事件额外加成）
-        this.ore = Math.min(800, this.ore + Math.round(2 * totalMult * (this.oreBonus || 1.0) * doubleMult * themeMiningMult));
+        this.ore = Math.min(800, this.ore + Math.round(2 * totalMult * (this.oreBonus || 1.0) * doubleMult * themeMiningMult * giftMiningMult));
         break;
       case 4: // 添柴升温：每次+3℃（策划案要求），消耗1煤炭
         this.furnaceTemp = Math.min(this.maxTemp, this.furnaceTemp + Math.round(3 * totalMult));
         this.coal = Math.max(0, this.coal - 1);
         break;
       // case 5 (修城门) 已从策划案 v2.0 移除
+    }
+
+    // audit-r7 §30.7 G01 炽热矿工：cmd 1/2/3/4 均额外 +2 炉温（叠加于 case 4 基础值之上）
+    //   策划案 §30.7 明示"每次发送工作指令（1-4）额外 +2 炉温" → cmd 1/2/3 也触发（采矿同时提供 +2℃）
+    if (giftHeatBonus > 0 && commandId >= 1 && commandId <= 4) {
+      this.furnaceTemp = Math.min(this.maxTemp, this.furnaceTemp + giftHeatBonus);
     }
 
     this._trackContribution(playerId, 1, 'barrage'); // 工作贡献值=1（弹幕来源，阶2被动 ×1.5）
@@ -3988,10 +4015,13 @@ class SurvivalGameEngine {
 
     // §30 等级攻击系数 (+0.8%/级) × §33 助威者全局攻击加成 (1 + buff, 0~0.20)
     //   × §34.4 E3b legend 里程碑全局效果 ×1.2（所有效果 +20%）
+    //   × audit-r7 §30.7 G02 战魂矿工（T5 爱的爆炸）：攻击力额外 ×1.3（叠加等级加成）
     const atkMult         = this._getWorkerLevelAtkMult(secOpenId);
     const supporterBuff   = 1 + (this._supporterAtkBuff || 0);
     const milestoneGlobal = this._milestoneGlobalMult || 1.0;
-    let damage = Math.max(1, Math.round(10 * atkMult * supporterBuff * milestoneGlobal));
+    const giftSkinId      = this._getActiveGiftSkinId(secOpenId);
+    const giftAtkMult     = (giftSkinId === 'G02') ? 1.3 : 1.0;
+    let damage = Math.max(1, Math.round(10 * atkMult * supporterBuff * milestoneGlobal * giftAtkMult));
 
     // §30.3 阶5+ 20% 概率重击（伤害 ×2）
     const attackerTier = this._getWorkerTier(secOpenId);
@@ -4361,36 +4391,70 @@ class SurvivalGameEngine {
     // 首波预告
     schedulePreview(effectiveBeginning, 0);
 
-    // audit-r6 P0-E1 §36.10 WaitingPhase 参数（仅 Boss/最后一波前插入，保护 nightDuration=120s）
-    //   MVP 策略：每夜的最后一波（视作 Boss 波）前强制插入 15s WaitingPhase 窗口。
-    //   - 15s 可收缩（原策划案要求 30s），避免与 nightDuration=120 冲突（留 ≥15s 夜尾打 Boss）
-    //   - 仅在 night 剩余时间 ≥ WAITING_PHASE_SEC + 10s 时才插入，否则直接 spawn，避免吞掉 Boss 出场时间
-    //   - 非 Boss 波（中间波）暂不插入（nightDuration 仅 120s 容纳不下多次 15s 窗口）
-    const WAITING_PHASE_SEC = 15;
+    // audit-r7 §36.10 WaitingPhase 扩展：每波间插入 30s 缓冲（非 Boss 波可压缩到 ≥10s）
+    //   策略依据：策划案 §36.10 原文 — 默认 30s，最短夜晚保证时 Boss 波前保 30s，其余 ≥10s
+    //   常量：
+    //     - WAITING_PHASE_SEC_NORMAL = 30（默认 / Boss 波前绝对值）
+    //     - WAITING_PHASE_SEC_MIN    = 10（压缩下限，非 Boss 波前用于挤出时间放 Boss）
+    //   行为：
+    //     1. 每波间都插入（首波前不插，第 1 波后 / 每个中间波后 / Boss 波前都插）
+    //     2. 最短夜晚保证：计算"若每个 waiting 都按 NORMAL" vs 夜晚总剩余，若不够则非 Boss 波前压缩到 MIN
+    //     3. 若夜晚剩余时间不足 MIN + 10 → 跳过 waiting 直接 spawn（保底让 spawn 能发生）
+    //     4. 兼容 r6：Boss 波（最后一波）前判定逻辑保留；首波若 = 唯一波（maxCount===1）仍视作 Boss 波
+    const WAITING_PHASE_SEC_NORMAL = 30;
+    const WAITING_PHASE_SEC_MIN    = 10;
     const _engineRef = this;
+
     /**
-     * 带 WaitingPhase 的 Boss 波 spawn 调度
+     * 根据夜晚剩余时间 + 后续波数计算本次 waiting 应采用的秒数
+     *   remainingSec：当前 remainingTime
+     *   remainingWavesAfter：本次 spawn 之后（含本次）还要 spawn 的波数
+     *   isBossWave：本次 spawn 的波是否是 Boss 波（最后一波）
+     * 返回：
+     *   >=MIN：使用此秒数插入 waiting
+     *   0：夜晚剩余不足，跳过 waiting 直接 spawn
+     */
+    const computeWaitingSec = (remainingSec, remainingWavesAfter, isBossWave) => {
+      if (remainingSec <= WAITING_PHASE_SEC_MIN + 10) return 0; // 不够 MIN+10s → 跳过
+      if (isBossWave) return WAITING_PHASE_SEC_NORMAL;          // Boss 波前绝对 30s（策划案硬约束）
+
+      // 非 Boss 波：估算"每波后 30s waiting + 10s spawn-to-spawn 最小执行" 需要的总时间
+      //   若 remainingSec >= 预估需求 → 本波用 NORMAL；否则压缩到 MIN
+      //   预估：剩余非 Boss 波数 × 30s（本波含）+ Boss 波前 30s + 10s 执行余量
+      const estNormal = remainingWavesAfter * WAITING_PHASE_SEC_NORMAL + 10;
+      if (remainingSec >= estNormal) return WAITING_PHASE_SEC_NORMAL;
+      return WAITING_PHASE_SEC_MIN;
+    };
+
+    /**
+     * 带 WaitingPhase 的 spawn 调度（每波通用）
      * @param {number} wIdx 即将 spawn 的 waveIndex
      * @param {Function} doSpawn () => this._spawnWave(cfg, day, wIdx)
+     * @param {boolean} isBossWave 本次 spawn 的波是否为 Boss 波（最后一波）
      */
-    const spawnWithWaitingPhase = (wIdx, doSpawn) => {
+    const spawnWithWaitingPhase = (wIdx, doSpawn, isBossWave) => {
       if (_engineRef.state !== 'night') return;
-      // 夜晚剩余时间不足 → 直接 spawn，不插入 WaitingPhase
-      if ((_engineRef.remainingTime || 0) < WAITING_PHASE_SEC + 10) {
+      const remainingSec = _engineRef.remainingTime || 0;
+      const remainingWavesAfter = Math.max(1, cfg.maxCount - wIdx); // 含本波
+      const waitSec = computeWaitingSec(remainingSec, remainingWavesAfter, !!isBossWave);
+
+      // 夜晚剩余不足 → 直接 spawn，不插入 WaitingPhase
+      if (waitSec <= 0) {
         doSpawn();
         return;
       }
-      // 广播 waiting_phase_started
+
+      // 广播 waiting_phase_started（allowVoteTypes 空数组占位，P1 §33 助威 / §34 体验投票接入后填充）
       _engineRef.broadcast({
         type: 'waiting_phase_started',
         timestamp: Date.now(),
         data: {
           waveIdx:        wIdx,
-          countdownSec:   WAITING_PHASE_SEC,
+          countdownSec:   waitSec,
           allowVoteTypes: [],
         },
       });
-      console.log(`[SurvivalEngine] waiting_phase_started: day=${day} waveIdx=${wIdx} countdown=${WAITING_PHASE_SEC}s (Boss wave)`);
+      console.log(`[SurvivalEngine] waiting_phase_started: day=${day} waveIdx=${wIdx} countdown=${waitSec}s (boss=${!!isBossWave})`);
       const waitTimer = setTimeout(() => {
         _engineRef.broadcast({
           type: 'waiting_phase_ended',
@@ -4399,21 +4463,21 @@ class SurvivalGameEngine {
         });
         if (_engineRef.state !== 'night') return;
         doSpawn();
-      }, WAITING_PHASE_SEC * 1000);
+      }, waitSec * 1000);
       _engineRef._waveTimers.push(waitTimer);
     };
 
-    // 首波延迟
+    // 首波延迟（首波前不插 waiting，夜晚刚开始已经有 3s+ 缓冲 cfg.beginning）
     const firstTimer = setTimeout(() => {
-      // audit-r6 P0-E1：首波若同时是最后一波（maxCount===1）→ 视为 Boss 波，插 WaitingPhase
+      // 首波若同时是 Boss 波（maxCount===1）→ 保留 audit-r6 既有行为：Boss 波前强插 waiting
       if (cfg.maxCount === 1) {
         const bossIdx = waveIndex++;
-        spawnWithWaitingPhase(bossIdx, () => this._spawnWave(cfg, day, bossIdx));
+        spawnWithWaitingPhase(bossIdx, () => this._spawnWave(cfg, day, bossIdx), true);
       } else {
         this._spawnWave(cfg, day, waveIndex++);
       }
 
-      // 后续波次
+      // 后续波次：每波前都插 waiting（audit-r7 §36.10 — 策划案要求"每波间"缓冲）
       const repeatTimer = setInterval(() => {
         if (this.state !== 'night') {
           clearInterval(repeatTimer);
@@ -4424,13 +4488,9 @@ class SurvivalGameEngine {
           return;
         }
         const wIdx = waveIndex++;
-        // audit-r6 P0-E1 §36.10：Boss 波（最后一波）前插 15s WaitingPhase
-        //   判定：wIdx === cfg.maxCount - 1（即将 spawn 的这一波是最后一波）
-        if (wIdx === cfg.maxCount - 1) {
-          spawnWithWaitingPhase(wIdx, () => this._spawnWave(cfg, day, wIdx));
-        } else {
-          this._spawnWave(cfg, day, wIdx);
-        }
+        const isBossWave = (wIdx === cfg.maxCount - 1);
+        // 每波前都插 waiting（非 Boss 波可被 computeWaitingSec 压缩到 MIN 或跳过）
+        spawnWithWaitingPhase(wIdx, () => this._spawnWave(cfg, day, wIdx), isBossWave);
       }, effectiveRefreshMs);
 
       this._waveTimers.push(repeatTimer);
@@ -7179,6 +7239,23 @@ class SurvivalGameEngine {
   }
 
   /**
+   * audit-r7 §30.7：查询当前有效的限时皮肤 id（过期条目被视为未激活，由 _scanGiftSkinExpiry 清理）
+   *   - 返回 'G01'（T4 炽热矿工 +2 炉温）/ 'G02'（T5 战魂矿工 +30% ATK）/ 'G03'（T6 空投精英 +20% 采矿）/ null
+   *   - 调用点：_applyWorkEffect（G01/G03 被动）/ _handleAttack（G02 被动）
+   *   - 惰性过期检查：避免依赖 _scanGiftSkinExpiry 的 1s 周期，_handleAttack / _applyWorkEffect
+   *     在 tick 间也可能被触发（broadcaster_fast_forward 等旁路），确保被动严格在 expireAt 内生效。
+   * @param {string} playerId
+   * @returns {'G01'|'G02'|'G03'|null}
+   */
+  _getActiveGiftSkinId(playerId) {
+    if (!playerId || !this._giftSkinExpiryMs) return null;
+    const rec = this._giftSkinExpiryMs[playerId];
+    if (!rec || !rec.skinId) return null;
+    if (Date.now() >= rec.expireAt) return null; // 过期但尚未被 scan 清理，此处视为 null
+    return rec.skinId;
+  }
+
+  /**
    * 应用限时皮肤（G01/G02/G03）并广播 gift_skin_applied
    * @param {string} playerId
    * @param {'G01'|'G02'|'G03'} skinId
@@ -7477,29 +7554,38 @@ class SurvivalGameEngine {
   }
 
   /**
-   * audit-r5 §30.4 每日衰减主逻辑：UTC+8 跨日时所有玩家 level × 0.95（向下取整）
-   *   MVP 简化版本：不区分活跃/不活跃，统一 0.95（策划案活跃玩家应为 0.975 — TODO 接入 _lastActiveTs）
+   * audit-r5/r7 §30.4 每日衰减主逻辑：UTC+8 跨日时所有玩家 level × 衰减系数（向下取整）
+   *   audit-r7 分档（策划案 §30.4 "活跃/不活跃"）：
+   *     - 活跃玩家（48h 内有贡献，_playerLastActiveTs[pid] 距今 ≤ 172800000ms）：×0.975
+   *     - 不活跃玩家：×0.95
    *   - level ≤ 1 时不再衰减（floor(1 * 0.95) = 0 会打破 1~100 区间约束）
-   *   - 广播 daily_tier_decay { playerId, oldLevel, newLevel }
+   *   - 广播 daily_tier_decay { playerId, oldLevel, newLevel, mode: 'active'|'inactive' }
    */
   _applyDailyTierDecay() {
+    const now = Date.now();
+    const ACTIVE_WINDOW_MS = 48 * 3600 * 1000; // 48h 活跃窗
     const decayed = [];
     for (const pid of Object.keys(this._playerLevel || {})) {
       const oldLevel = this._playerLevel[pid] || 1;
       if (oldLevel <= 1) continue;
-      const newLevel = Math.max(1, Math.floor(oldLevel * 0.95));
+      const lastTs   = (this._playerLastActiveTs && this._playerLastActiveTs[pid]) || 0;
+      const isActive = (lastTs > 0) && (now - lastTs <= ACTIVE_WINDOW_MS);
+      const coef     = isActive ? 0.975 : 0.95;
+      const newLevel = Math.max(1, Math.floor(oldLevel * coef));
       if (newLevel === oldLevel) continue;
       this._playerLevel[pid] = newLevel;
-      decayed.push({ playerId: pid, oldLevel, newLevel });
+      decayed.push({ playerId: pid, oldLevel, newLevel, mode: isActive ? 'active' : 'inactive' });
     }
     for (const d of decayed) {
       this._broadcast({
         type: 'daily_tier_decay',
-        data: { playerId: d.playerId, oldLevel: d.oldLevel, newLevel: d.newLevel },
+        data: { playerId: d.playerId, oldLevel: d.oldLevel, newLevel: d.newLevel, mode: d.mode },
       });
     }
     if (decayed.length > 0) {
-      console.log(`[SurvivalEngine] _applyDailyTierDecay: ${decayed.length} players decayed (×0.95)`);
+      const actCnt = decayed.filter(d => d.mode === 'active').length;
+      const inaCnt = decayed.length - actCnt;
+      console.log(`[SurvivalEngine] _applyDailyTierDecay: ${decayed.length} players decayed (active×0.975=${actCnt}, inactive×0.95=${inaCnt})`);
     }
   }
 
@@ -7592,6 +7678,13 @@ class SurvivalGameEngine {
    */
   _trackContribution(playerId, amount, source) {
     if (!playerId) return;
+
+    // audit-r7 §30.4：记录最近一次贡献 ts，供 _applyDailyTierDecay 分档（48h 活跃窗）
+    //   只要有正向贡献（礼物/弹幕/战斗）都算活跃；负值（罚分）不刷新
+    if (amount > 0) {
+      if (!this._playerLastActiveTs) this._playerLastActiveTs = {};
+      this._playerLastActiveTs[playerId] = Date.now();
+    }
 
     // 阶2 弹幕贡献 ×1.5（策划案 §30.3 阶2 专属被动）：仅作用于 contributions 与 _lifetimeContrib
     let finalAmount = amount;
