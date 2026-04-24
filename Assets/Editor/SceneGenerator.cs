@@ -2509,15 +2509,15 @@ namespace DrscfZ.Editor
                 mainText.outlineColor = new Color32(20, 10, 0, 230);
                 mainText.richText = true;
 
-                // audit-r6 P1 (字体规范)：改用 Alibaba 主 + ChineseFont fallback（替代 LiberationSans）
+                // audit-r7 §19 (字体规范)：仅 Alibaba 主 + ChineseFont fallback；删除 LiberationSans 违规兜底
                 var latinFont = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF")
                                ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
-                // 老 LiberationSans 保留硬盘 AssetDatabase fallback（若 Alibaba/ChineseFont 缺失仍可兜底）
-                if (latinFont == null)
-                    latinFont = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(
-                        "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF.asset");
                 var cjkFont = GetOrCreateChineseFontAsset();
-                if (latinFont != null)
+                if (latinFont == null && cjkFont == null)
+                {
+                    Debug.LogWarning("[SceneGenerator] Alibaba + ChineseFont 双 fallback 都缺失，跳过字体赋值");
+                }
+                else if (latinFont != null)
                 {
                     mainText.font = latinFont;
                     if (cjkFont != null)
@@ -2528,7 +2528,7 @@ namespace DrscfZ.Editor
                             latinFont.fallbackFontAssetTable.Add(cjkFont);
                     }
                 }
-                else if (cjkFont != null)
+                else // latinFont == null && cjkFont != null
                 {
                     mainText.font = cjkFont;
                 }
