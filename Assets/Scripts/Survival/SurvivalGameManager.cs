@@ -61,6 +61,9 @@ namespace DrscfZ.Survival
         public event Action<SurvivalGiftData> OnGiftReceived;    // 礼物效果
         public event Action<SurvivalPlayerJoinedData> OnPlayerJoined;
         public event Action<SurvivalGameEndedData> OnGameEnded;
+        /// <summary>§16.4 end_game 被服务端拒绝（仅 state !∈ {day,night} 时推送）
+        /// 订阅者：BroadcasterPanel / SettingsPanelUI 可据此在主播 HUD 显示"当前阶段不可结束"提示。</summary>
+        public event Action<EndGameFailedData> OnEndGameFailed;
         public event Action<PhaseChangedData> OnPhaseChanged;    // 🆕 §4.2 昼夜/恢复期切换（携带 variant）
         public event Action<string> OnPlayerActivityMessage;     // 弹幕消息文本
         public event Action<int> OnScorePoolUpdated;             // 积分池变动（实时推送）
@@ -466,7 +469,13 @@ namespace DrscfZ.Survival
                 case "end_game_failed":
                     var egf = JsonUtility.FromJson<EndGameFailedData>(dataJson);
                     Debug.LogWarning($"[SGM] end_game rejected: reason={egf?.reason} currentState={egf?.currentState}");
-                    // 主播可选：跑马灯提示（当前仅日志，不弹 toast 避免阻塞）
+                    // 主播反馈：跑马灯 + 事件分发。UI 侧订阅 OnEndGameFailed 可弹提示。
+                    if (egf != null)
+                    {
+                        string reasonCn = egf.reason == "wrong_phase" ? "当前阶段不可结束本次守护" : $"结束被拒:{egf.reason}";
+                        OnPlayerActivityMessage?.Invoke($"【提示】{reasonCn}（{egf.currentState}）");
+                        OnEndGameFailed?.Invoke(egf);
+                    }
                     break;
 
                 // ----- 兼容旧协议（游戏未重构服务器时先用旧的player_joined）-----
@@ -1740,10 +1749,13 @@ namespace DrscfZ.Survival
         private void HandleLegendReviveTriggered(LegendReviveData data)
         {
             WorkerManager.Instance?.HandleLegendRevive(data.playerId);
+            // 🆕 P0-B10：跑马灯 + 弹幕双通道（Marquee 是主视觉，BarrageMessage 是日志层兜底）
+            string displayName = string.IsNullOrEmpty(data.playerName) ? "传奇矿工" : data.playerName;
             UI.HorizontalMarqueeUI.Instance?.AddMessage(
-                data.playerName, null, "传奇之力！免于死亡！");
+                displayName, null, "传奇之力！免于死亡！");
+            OnPlayerActivityMessage?.Invoke($"[传奇] {displayName} 传奇之力触发，免于死亡！");
             OnLegendReviveTriggered?.Invoke(data);
-            Debug.Log($"[SGM] legend_revive_triggered: {data.playerName}");
+            Debug.Log($"[SGM] legend_revive_triggered: {displayName}");
         }
 
         private void HandleWorkerSkinChanged(WorkerSkinChangedData data)
@@ -1841,9 +1853,25 @@ namespace DrscfZ.Survival
                 }
                 case "frost_aura":
                 {
-                    // Lv5 冰霜光环：激活地面冰纹 Decal（美术资源待落地）
-                    // TODO §10.7：FX_FrostGround Decal 资源到位后在 CityGateSystem.transform 下激活
-                    Debug.Log("[GateFX] Frost aura activated");
+                    // 🆕 P0-B6 Lv5 冰霜光环：客户端减速 + 浅蓝 tint
+                    //   服务端下发 { active, radius, slowMult, gatePos:{x,y,z} }。
+                    //   写入 MonsterController 静态字段，所有活跃怪物每帧判定。
+                    DrscfZ.Monster.MonsterController.FrostAuraActive    = d.active;
+                    DrscfZ.Monster.MonsterController.FrostAuraRadius    = d.radius > 0 ? d.radius : 6f;
+                    DrscfZ.Monster.MonsterController.FrostAuraSlowMult  = d.slowMult > 0f ? d.slowMult : 0.7f;
+                    if (d.gatePos != null)
+                    {
+                        DrscfZ.Monster.MonsterController.FrostAuraCenter = new Vector3(
+                            d.gatePos.x, d.gatePos.y, d.gatePos.z);
+                    }
+                    else if (cityGateSystem != null)
+                    {
+                        // 兜底：服务端未下发 gatePos 时用本地 CityGateSystem 位置
+                        DrscfZ.Monster.MonsterController.FrostAuraCenter = cityGateSystem.transform.position;
+                    }
+                    Debug.Log($"[GateFX] Frost aura {(d.active ? "ACTIVATED" : "DEACTIVATED")} " +
+                              $"radius={DrscfZ.Monster.MonsterController.FrostAuraRadius}m " +
+                              $"slow×{DrscfZ.Monster.MonsterController.FrostAuraSlowMult}");
                     break;
                 }
                 case "frost_pulse":
@@ -1852,14 +1880,21 @@ namespace DrscfZ.Survival
                     SurvivalCameraController.Shake(0.2f, 0.3f);
                     if (d.hitMonsters != null && monsterWaveSpawner != null)
                     {
+                        // 🆕 P0-B7：写 FrozenUntil 让怪物停住；同时播放闪烁视觉
+                        float freezeDuration = d.freezeMs > 0 ? d.freezeMs / 1000f : 2f;
+                        float until = Time.time + freezeDuration;
                         foreach (var id in d.hitMonsters)
                         {
                             var target = monsterWaveSpawner.FindById(id);
-                            target?.PlayFreezeFlash();
+                            if (target != null)
+                            {
+                                target.FrozenUntil = until;
+                                target.PlayFreezeFlash();
+                            }
                         }
                     }
                     // TODO §10.7：FX_FrostPulse 环形冲击波 VFX + sfx_frost_pulse（美术资源待落地）
-                    Debug.Log($"[GateFX] Frost pulse ({(d.hitMonsters?.Length ?? 0)} monsters hit)");
+                    Debug.Log($"[GateFX] Frost pulse ({(d.hitMonsters?.Length ?? 0)} monsters hit, freezeMs={d.freezeMs})");
                     break;
                 }
                 default:

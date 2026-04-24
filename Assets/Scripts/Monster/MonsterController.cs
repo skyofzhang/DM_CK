@@ -70,6 +70,25 @@ namespace DrscfZ.Monster
         /// <summary>🆕 §34A B1 StatusLineBannerUI：当前 HP（只读）。供 UI 读取 Boss HP 展示。</summary>
         public int CurrentHp => _currentHp;
 
+        // ==================== 🆕 P0-B6 Lv5 冰霜光环（MonsterController 静态共享） ====================
+        // 服务端下发 gate_effect_triggered{effect:'frost_aura', active, radius, slowMult, gatePos}。
+        // SurvivalGameManager.HandleGateEffectTriggered 统一写入以下静态字段，
+        // 所有怪物每帧在 UpdateMoving 入口查一次距离判定，应用减速倍率。
+        /// <summary>Lv5 冰霜光环是否激活（城门 Lv5+ 时 true）。</summary>
+        public static bool    FrostAuraActive;
+        /// <summary>冰霜光环圆心（通常=城门位置）。</summary>
+        public static Vector3 FrostAuraCenter;
+        /// <summary>冰霜光环作用半径（米，来自服务端 radius 字段，默认 6）。</summary>
+        public static float   FrostAuraRadius = 6f;
+        /// <summary>光环内速度倍率（0~1，服务端 slowMult 字段，默认 0.7）。</summary>
+        public static float   FrostAuraSlowMult = 0.7f;
+
+        /// <summary>🆕 P0-B7 Lv6 冲击波冻结：到期时间戳（Time.time）。0 或小于当前时间 = 未冻结。</summary>
+        public float FrozenUntil;
+
+        /// <summary>光环内怪物是否应用浅蓝 tint（持续态，由 UpdateMoving 判定，UpdateHpBar 兄弟可直接读）。</summary>
+        private bool _frostAuraTintApplied;
+
         // ==================== 初始化 ====================
 
         /// <summary>由 WaveSpawner 调用，注入参数（旧签名委派到 variant 重载，默认 Normal）</summary>
@@ -170,6 +189,31 @@ namespace DrscfZ.Monster
 
         private void Update()
         {
+            // 死亡状态跳过所有 AI 与 tint 更新（等待 Destroy）
+            if (_state == MonsterState.Dead)
+            {
+                UpdateHpBarSmooth();
+                return;
+            }
+
+            // 🆕 P0-B7 Lv6 冲击波冻结：期间跳过所有 AI，播放冻结 tint（浅蓝 hold，不闪）
+            if (Time.time < FrozenUntil)
+            {
+                // 注：PlayFreezeFlash 协程末尾会 SetPropertyBlock(null)，可能擦除 hold tint。
+                //   每帧强制重写以对抗该清除（仅冻结期间；代价 = N SetPropertyBlock，可接受）。
+                _frozenTintApplied = false;
+                ApplyFrozenTint(true);
+                UpdateHpBarSmooth();
+                return;
+            }
+            else if (_frozenTintApplied)
+            {
+                ApplyFrozenTint(false);
+            }
+
+            // 🆕 P0-B6 Lv5 冰霜光环：常驻浅蓝 tint（在光环范围内的怪物）——与冻结 tint 不同，较淡
+            UpdateFrostAuraTint();
+
             switch (_state)
             {
                 case MonsterState.Moving:   UpdateMoving();   break;
@@ -177,6 +221,91 @@ namespace DrscfZ.Monster
             }
             // 血条平滑动画（每帧推进）
             UpdateHpBarSmooth();
+        }
+
+        // 🆕 P0-B6/B7 冰霜相关 tint 状态：避免每帧重复 SetPropertyBlock
+        private bool _frozenTintApplied;
+
+        private void UpdateFrostAuraTint()
+        {
+            // 只有光环激活时检查；否则清除 tint
+            bool shouldTint = false;
+            if (FrostAuraActive && FrostAuraRadius > 0f)
+            {
+                float dist = Vector3.Distance(transform.position, FrostAuraCenter);
+                shouldTint = dist <= FrostAuraRadius;
+            }
+            if (shouldTint == _frostAuraTintApplied) return;
+            _frostAuraTintApplied = shouldTint;
+            ApplyFrostAuraTintNow(shouldTint);
+        }
+
+        /// <summary>P0-B6 光环范围内怪物染浅蓝 tint（original × 0.7 + cyan × 0.3）。
+        /// 与 variant tint 叠加：variant tint 在 Initialize 设置后由 ApplyVariantTint 写入，
+        /// 这里覆写 _BaseColor/_Color → 退出光环时清 PropertyBlock 让 variant tint 重新生效（需 ApplyVariantTint 二次调用）。</summary>
+        private void ApplyFrostAuraTintNow(bool on)
+        {
+            var renderers = GetComponentsInChildren<Renderer>(true);
+            if (renderers == null || renderers.Length == 0) return;
+
+            if (on)
+            {
+                var block = new MaterialPropertyBlock();
+                // Color.Lerp(original, cyan, 0.3f)：浅蓝偏冷
+                // 使用固定 tint（与 variant tint 合并时略偏原变种色不是精确合成，但视觉够用）
+                Color tint = new Color(0.7f, 0.9f, 1.1f, 1f);
+                foreach (var r in renderers)
+                {
+                    if (r == null) continue;
+                    block.SetColor(PropBaseColor, tint);
+                    block.SetColor(PropColor, tint);
+                    r.SetPropertyBlock(block);
+                }
+            }
+            else
+            {
+                // 退出光环：清 PropertyBlock → 恢复 variant tint 或 shared material 原色
+                foreach (var r in renderers)
+                {
+                    if (r == null) continue;
+                    r.SetPropertyBlock(null);
+                }
+                // 重新应用 variant tint（因为清了 PropertyBlock）
+                ApplyVariantTint();
+            }
+        }
+
+        /// <summary>P0-B7 冻结 tint（更深的冰蓝白，持续显示直到 FrozenUntil 过期）。</summary>
+        private void ApplyFrozenTint(bool on)
+        {
+            if (_frozenTintApplied == on) return;
+            _frozenTintApplied = on;
+            var renderers = GetComponentsInChildren<Renderer>(true);
+            if (renderers == null) return;
+
+            if (on)
+            {
+                var block = new MaterialPropertyBlock();
+                Color frost = new Color(0.6f, 0.85f, 1f, 1f);
+                foreach (var r in renderers)
+                {
+                    if (r == null) continue;
+                    block.SetColor(PropBaseColor, frost);
+                    block.SetColor(PropColor, frost);
+                    r.SetPropertyBlock(block);
+                }
+            }
+            else
+            {
+                foreach (var r in renderers)
+                {
+                    if (r == null) continue;
+                    r.SetPropertyBlock(null);
+                }
+                // 退出冻结：重新应用 variant tint + 若还在光环内重新应用 aura tint
+                _frostAuraTintApplied = false;
+                ApplyVariantTint();
+            }
         }
 
         private void UpdateMoving()
@@ -345,7 +474,16 @@ namespace DrscfZ.Monster
             if (dir.sqrMagnitude > 0.01f)
             {
                 dir.Normalize();
-                Vector3 newPos = transform.position + dir * _moveSpeed * Time.deltaTime;
+                // 🆕 P0-B6 Lv5 冰霜光环：在光环范围内的怪物移速 × slowMult（默认 0.7）
+                float slowFactor = 1f;
+                if (FrostAuraActive && FrostAuraRadius > 0f)
+                {
+                    float distToCenter = Vector3.Distance(transform.position, FrostAuraCenter);
+                    if (distToCenter <= FrostAuraRadius)
+                        slowFactor = FrostAuraSlowMult;
+                }
+                float effectiveSpeed = _moveSpeed * slowFactor;
+                Vector3 newPos = transform.position + dir * effectiveSpeed * Time.deltaTime;
                 // 墙壁碰撞检测：阻止穿墙
                 newPos = Survival.WallBarrier.ClampMovement(transform.position, newPos);
                 transform.position = newPos;

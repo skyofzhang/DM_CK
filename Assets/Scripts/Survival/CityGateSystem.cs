@@ -156,18 +156,17 @@ namespace DrscfZ.Survival
         // ── §10.7 Lv5/Lv6 视觉占位 ────────────────────────────────────────────────
 
         /// <summary>按 effect 分流播视觉。
-        ///  - frost_aura：Lv5 城门周围常驻冰雾环（激活/失活靠服务端 active 字段）
+        ///  - frost_aura：Lv5 城门周围常驻冰雾环（active=true 激活 / false 关闭，🆕 P0-B6 服务端已下发 active 字段）
         ///  - frost_pulse：Lv6 冲击波展开动画（radius 0→radius/alpha 1→0，2s）
-        ///  - thorns：不在此处处理（SurvivalGameManager.HandleGateEffectTriggered 已做全体飘字）
-        /// 注：GateEffectTriggeredData 没有 active 字段（服务端仅在激活时发事件），
-        ///     以 effect=='frost_aura' 视为"激活一次常驻环"；后续 Lv 变低或 gate_upgraded 切 level 时自动关闭。</summary>
+        ///  - thorns：不在此处处理（SurvivalGameManager.HandleGateEffectTriggered 已做全体飘字）</summary>
         private void HandleGateEffect(GateEffectTriggeredData d)
         {
             if (d == null || string.IsNullOrEmpty(d.effect)) return;
             switch (d.effect)
             {
                 case "frost_aura":
-                    EnableFrostAuraRing(true);
+                    // 🆕 P0-B6：显式 active 字段（true=激活，false=关闭）
+                    EnableFrostAuraRing(d.active);
                     break;
                 case "frost_pulse":
                     float r = d.radius > 0 ? d.radius : 8f;

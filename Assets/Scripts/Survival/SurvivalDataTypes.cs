@@ -36,8 +36,28 @@ namespace DrscfZ.Survival
         public int  dailyCapMax;
         public long dailyResetAt;              // Unix ms，下次 UTC+8 05:00
         public bool dailyCapBlocked;
+        // 🆕 §19.1 P0-B3：矿工等级/皮肤/HP 批量同步（服务端 getFullState 输出）
+        //   每个元素对应一个矿工的当前运行态；缺失字段 JsonUtility 回落默认值。
+        //   与 worker_hp_update 独立消息配合：game_state 推送全量；hp_update 推送增量。
+        public WorkerStateData[] workers;
         // 注：服务端还发送 workerHp（dict），因 JsonUtility 不支持 Dictionary，
         //     由独立的 worker_hp_update 消息负责同步，此处忽略
+    }
+
+    /// <summary>🆕 §19.1 P0-B3：矿工运行态（embedded in SurvivalGameStateData.workers[]）
+    /// 服务端 getFullState 输出；每帧/每次 game_state 推送时覆盖客户端缓存。
+    /// 与 WorkerHpUpdateData.WorkerHpEntry 字段语义一致但更完整（含 level/skinTier/state）。</summary>
+    [Serializable]
+    public class WorkerStateData
+    {
+        public string playerId;
+        public string playerName;
+        public int    level;        // §30 矿工等级 1-100
+        public int    skinTier;     // §30 阶段 1-10（对应皮肤 T01-T10），传奇皮肤走 G01-G03
+        public string skinId;       // 皮肤资源路径 id（如 "T05" / "G01"），空 = 默认
+        public int    maxHp;
+        public int    currentHp;
+        public string state;        // "idle" | "working" | "combat" | "dead" | "frozen" | "expedition"
     }
 
     /// <summary>资源状态更新（服务器定时推送）</summary>
@@ -328,11 +348,19 @@ namespace DrscfZ.Survival
         public string   source;      // 'broadcaster' | 'gift_t6' | 'expedition_trader'
     }
 
-    /// <summary>城门升级失败（矿石不足 / 已满级 / 未解锁 / 已升过）</summary>
+    /// <summary>城门升级失败（矿石不足 / 已满级 / 未解锁 / 不在白天 / 每日限制 / Boss 战）</summary>
     [Serializable]
     public class GateUpgradeFailedData
     {
-        public string reason;        // "max_level" | "insufficient_ore" | "feature_locked" | "already_upgraded_today" | "phase_disallowed"
+        // P0-B5 修正：按服务端 _handleGateUpgrade 所有 emit 路径对照实际下发枚举：
+        //   "wrong_phase"      — 不在白天（非 day/night 态或 recovery）
+        //   "boss_fight"       — Boss 战期间禁止升级
+        //   "daily_limit"      — 当天已升过一次（gateDailyUpgraded=true）
+        //   "feature_locked"   — §36.12 分时段解锁未到（Lv5-6 需 D4+）
+        //   "max_level"        — 已达 Lv6
+        //   "insufficient_ore" — 矿石不足
+        // （历史注释里的 "already_upgraded_today" / "phase_disallowed" 服务端从不下发，以实际枚举为准）
+        public string reason;
         public int    currentLevel;  // 当前等级（max_level时）
         public int    required;      // 需要矿石数（insufficient_ore时）
         public int    available;     // 当前矿石数（insufficient_ore时）
@@ -348,14 +376,28 @@ namespace DrscfZ.Survival
         public string   effect;            // 'thorns' | 'frost_aura' | 'frost_pulse'
         // thorns：服务端 _spawnWave 批量结算反伤，均分到 _activeMonsters 全体怪物
         //   hitMonsters = 受反伤的所有怪物 ID；damagePerMonster = 每只怪物承担的反伤；totalDamage = 总反伤
+        // frost_aura：Lv5 常驻光环 on/off（active=true 激活、false 关闭）+ radius/slowMult/gatePos
         // frost_pulse：Lv6 寒冰冲击波 15s 周期
         //   hitMonsters = 被冲击波命中的怪物 ID 列表；radius/damage/freezeMs = 视觉参数
         public string[] hitMonsters;       // thorns / frost_pulse 共用
         public int      damagePerMonster;  // thorns 时的每只怪物反伤
         public int      totalDamage;       // thorns 时的总反伤
-        public int      radius;            // frost_pulse 时的视觉半径
+        public int      radius;            // frost_aura / frost_pulse 的视觉+判定半径
         public int      damage;            // frost_pulse 时的冲击波单次伤害
         public int      freezeMs;          // frost_pulse 时的冻结时长
+        // 🆕 P0-B6：frost_aura 专用字段
+        public bool     active;            // true=激活（Lv5+ 升级时）/ false=关闭（降级时）
+        public float    slowMult;          // 光环内速度倍率（默认 0.7）
+        public GatePosData gatePos;        // 光环圆心（服务端 GATE_POS，{x,y,z}）
+    }
+
+    /// <summary>frost_aura 的 gatePos 嵌套结构（JsonUtility 需要显式 Serializable 子类）。🆕 P0-B6</summary>
+    [Serializable]
+    public class GatePosData
+    {
+        public float x;
+        public float y;
+        public float z;
     }
 
     // ==================== §31 怪物多样性系统（🆕 v1.27）====================
@@ -1407,6 +1449,11 @@ namespace DrscfZ.Survival
         public int  dailyCapMax;
         public long dailyResetAt;              // Unix ms，下次 UTC+8 05:00
         public bool dailyCapBlocked;
+
+        // 🆕 P0-B4：上一次 fortressDay 变更的原因（与 FortressDayChangedData.reason + SurvivalGameEndedData.reason 同源枚举）
+        //   'gate_breached' | 'food_depleted' | 'temp_freeze' | 'all_dead' | 'survived' | 'none'
+        //   断线重连时 UI 可据此识别上次降级原因并回放 toast/动画；服务端不下发时 JsonUtility 回落 null/""。
+        public string fortressDayChangeReason;
     }
 
     /// <summary>room_state 兼容别名（部分模块在规范/审计中称为 RoomStateInProgressData，
