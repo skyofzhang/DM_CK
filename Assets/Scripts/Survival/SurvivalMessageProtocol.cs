@@ -185,5 +185,13 @@ namespace DrscfZ.Survival
         public const string FeatureUnlocked                    = "feature_unlocked";                       // S→C：§36.12 功能解锁单条事件（与 world_clock_tick.newlyUnlockedFeatures 互补）
         public const string TribeWarRetaliate                  = "tribe_war_retaliate";                    // C→S（反击请求）/ S→C（反击状态推送）：§35 P2 反击通道
         public const string BroadcasterRouletteEffectPrevented = "broadcaster_roulette_effect_prevented";  // S→C：§24.4 轮盘效果被阻止（unicast 发起方）
+
+        // ----- §34 B7 新手引导（🆕 v1.27+ audit-r3/P1） -----
+        public const string NewbieWelcome = "newbie_welcome"; // S→C：新玩家加入单播欢迎横幅（30s 浅色）
+        public const string FirstBarrage  = "first_barrage";  // S→C：本局首次发送 1-6 弹幕 → 全房广播庆祝
+
+        // ----- §36.10 WaitingPhase（🆕 v1.27+ audit-r3/P1） -----
+        public const string WaitingPhaseStarted = "waiting_phase_started"; // S→C：新赛季 30s 准备窗口开始
+        public const string WaitingPhaseEnded   = "waiting_phase_ended";   // S→C：准备窗口结束（兜底 UI 隐藏）
     }
 }

@@ -32,7 +32,7 @@ namespace DrscfZ.UI
             {
                 _speedLabel.text = Labels[_speedIndex];
                 // 绑定字体（防中文乱码）
-                var font = Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
+                var font = Resources.Load<TMPro.TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
                 if (font != null) _speedLabel.font = font;
             }
         }

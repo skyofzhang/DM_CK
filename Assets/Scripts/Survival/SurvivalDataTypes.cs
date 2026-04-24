@@ -36,8 +36,28 @@ namespace DrscfZ.Survival
         public int  dailyCapMax;
         public long dailyResetAt;              // Unix ms，下次 UTC+8 05:00
         public bool dailyCapBlocked;
+        // 🆕 §19.1 P0-B3：矿工等级/皮肤/HP 批量同步（服务端 getFullState 输出）
+        //   每个元素对应一个矿工的当前运行态；缺失字段 JsonUtility 回落默认值。
+        //   与 worker_hp_update 独立消息配合：game_state 推送全量；hp_update 推送增量。
+        public WorkerStateData[] workers;
         // 注：服务端还发送 workerHp（dict），因 JsonUtility 不支持 Dictionary，
         //     由独立的 worker_hp_update 消息负责同步，此处忽略
+    }
+
+    /// <summary>🆕 §19.1 P0-B3：矿工运行态（embedded in SurvivalGameStateData.workers[]）
+    /// 服务端 getFullState 输出；每帧/每次 game_state 推送时覆盖客户端缓存。
+    /// 与 WorkerHpUpdateData.WorkerHpEntry 字段语义一致但更完整（含 level/skinTier/state）。</summary>
+    [Serializable]
+    public class WorkerStateData
+    {
+        public string playerId;
+        public string playerName;
+        public int    level;        // §30 矿工等级 1-100
+        public int    skinTier;     // §30 阶段 1-10（对应皮肤 T01-T10），传奇皮肤走 G01-G03
+        public string skinId;       // 皮肤资源路径 id（如 "T05" / "G01"），空 = 默认
+        public int    maxHp;
+        public int    currentHp;
+        public string state;        // "idle" | "working" | "combat" | "dead" | "frozen" | "expedition"
     }
 
     /// <summary>资源状态更新（服务器定时推送）</summary>
@@ -328,11 +348,19 @@ namespace DrscfZ.Survival
         public string   source;      // 'broadcaster' | 'gift_t6' | 'expedition_trader'
     }
 
-    /// <summary>城门升级失败（矿石不足 / 已满级 / 未解锁 / 已升过）</summary>
+    /// <summary>城门升级失败（矿石不足 / 已满级 / 未解锁 / 不在白天 / 每日限制 / Boss 战）</summary>
     [Serializable]
     public class GateUpgradeFailedData
     {
-        public string reason;        // "max_level" | "insufficient_ore" | "feature_locked" | "already_upgraded_today" | "phase_disallowed"
+        // P0-B5 修正：按服务端 _handleGateUpgrade 所有 emit 路径对照实际下发枚举：
+        //   "wrong_phase"      — 不在白天（非 day/night 态或 recovery）
+        //   "boss_fight"       — Boss 战期间禁止升级
+        //   "daily_limit"      — 当天已升过一次（gateDailyUpgraded=true）
+        //   "feature_locked"   — §36.12 分时段解锁未到（Lv5-6 需 D4+）
+        //   "max_level"        — 已达 Lv6
+        //   "insufficient_ore" — 矿石不足
+        // （历史注释里的 "already_upgraded_today" / "phase_disallowed" 服务端从不下发，以实际枚举为准）
+        public string reason;
         public int    currentLevel;  // 当前等级（max_level时）
         public int    required;      // 需要矿石数（insufficient_ore时）
         public int    available;     // 当前矿石数（insufficient_ore时）
@@ -348,14 +376,28 @@ namespace DrscfZ.Survival
         public string   effect;            // 'thorns' | 'frost_aura' | 'frost_pulse'
         // thorns：服务端 _spawnWave 批量结算反伤，均分到 _activeMonsters 全体怪物
         //   hitMonsters = 受反伤的所有怪物 ID；damagePerMonster = 每只怪物承担的反伤；totalDamage = 总反伤
+        // frost_aura：Lv5 常驻光环 on/off（active=true 激活、false 关闭）+ radius/slowMult/gatePos
         // frost_pulse：Lv6 寒冰冲击波 15s 周期
         //   hitMonsters = 被冲击波命中的怪物 ID 列表；radius/damage/freezeMs = 视觉参数
         public string[] hitMonsters;       // thorns / frost_pulse 共用
         public int      damagePerMonster;  // thorns 时的每只怪物反伤
         public int      totalDamage;       // thorns 时的总反伤
-        public int      radius;            // frost_pulse 时的视觉半径
+        public int      radius;            // frost_aura / frost_pulse 的视觉+判定半径
         public int      damage;            // frost_pulse 时的冲击波单次伤害
         public int      freezeMs;          // frost_pulse 时的冻结时长
+        // 🆕 P0-B6：frost_aura 专用字段
+        public bool     active;            // true=激活（Lv5+ 升级时）/ false=关闭（降级时）
+        public float    slowMult;          // 光环内速度倍率（默认 0.7）
+        public GatePosData gatePos;        // 光环圆心（服务端 GATE_POS，{x,y,z}）
+    }
+
+    /// <summary>frost_aura 的 gatePos 嵌套结构（JsonUtility 需要显式 Serializable 子类）。🆕 P0-B6</summary>
+    [Serializable]
+    public class GatePosData
+    {
+        public float x;
+        public float y;
+        public float z;
     }
 
     // ==================== §31 怪物多样性系统（🆕 v1.27）====================
@@ -1407,6 +1449,11 @@ namespace DrscfZ.Survival
         public int  dailyCapMax;
         public long dailyResetAt;              // Unix ms，下次 UTC+8 05:00
         public bool dailyCapBlocked;
+
+        // 🆕 P0-B4：上一次 fortressDay 变更的原因（与 FortressDayChangedData.reason + SurvivalGameEndedData.reason 同源枚举）
+        //   'gate_breached' | 'food_depleted' | 'temp_freeze' | 'all_dead' | 'survived' | 'none'
+        //   断线重连时 UI 可据此识别上次降级原因并回放 toast/动画；服务端不下发时 JsonUtility 回落 null/""。
+        public string fortressDayChangeReason;
     }
 
     /// <summary>room_state 兼容别名（部分模块在规范/审计中称为 RoomStateInProgressData，
@@ -1452,5 +1499,47 @@ namespace DrscfZ.Survival
     {
         public string targetRoomId;
         public float  damageMultiplier;  // 1.5 if has beacon, 1.0 otherwise
+    }
+
+    // ==================== §34 B7 新手引导（🆕 v1.27+ audit-r3/P1） ====================
+
+    /// <summary>新玩家加入单播欢迎横幅（type=newbie_welcome，S→C，仅发给新玩家本人）。
+    /// 触发条件：玩家 _lifetimeContrib 为 0 或当前赛季 id=1；UI 侧以 B 类 modal 显示 30s。</summary>
+    [Serializable]
+    public class NewbieWelcomeData
+    {
+        public string playerId;  // 目标玩家 id（客户端可据此过滤：只渲染自己为主角的弹幕）
+        public string hint;      // 欢迎文案（服务端固定："发送弹幕 1/2/3/4 指挥矿工采集"）
+        public int    ttlSec;    // 默认 30s，客户端倒计时自动隐藏
+    }
+
+    /// <summary>本局首次发送 1-6 有效弹幕的广播（type=first_barrage，S→C，房间广播）。
+    /// 每位 playerId 本局仅广播一次；UI 侧以浅绿 B 类 toast 显示 3s。</summary>
+    [Serializable]
+    public class FirstBarrageData
+    {
+        public string playerId;
+        public string playerName;
+        public int    cmd;       // 1-6（cmd=5 已在服务端静默拦截，此处不会出现）
+    }
+
+    // ==================== §36.10 WaitingPhase（🆕 v1.27+ audit-r3/P1） ====================
+
+    /// <summary>新赛季 30s 准备窗口开始（type=waiting_phase_started，S→C）。
+    /// 客户端显示主题预告大横幅 + 倒计时；使用 A 类阻塞 modal 独占。</summary>
+    [Serializable]
+    public class WaitingPhaseStartedData
+    {
+        public int    durationSec;   // 默认 30；客户端倒计时
+        public int    newSeasonId;
+        public string newThemeId;    // classic_frozen / blood_moon / snowstorm / dawn / frenzy / serene
+    }
+
+    /// <summary>准备窗口结束（type=waiting_phase_ended，S→C）。
+    /// 无字段（空 data 对象即可）；客户端用于兜底关闭 WaitingPhaseUI。</summary>
+    [Serializable]
+    public class WaitingPhaseEndedData
+    {
+        // 服务端下发空 data，客户端反序列化仍可生成空对象
     }
 }

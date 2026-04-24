@@ -48,7 +48,7 @@ namespace DrscfZ.UI
         private void Start()
         {
             // 绑定字体
-            var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+            var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
             if (font != null)
             {
                 if (_titleText       != null) _titleText.font       = font;

@@ -566,7 +566,7 @@ namespace DrscfZ.UI
             if (rankings == null || rankings.Length == 0) return;
 
             if (_scrollFont == null)
-                _scrollFont = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+                _scrollFont = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
 
             float headerHeight = 36f;
             float rowHeight = 40f;

@@ -33,7 +33,7 @@ namespace DrscfZ.Editor
     /// </summary>
     public static class SetupSection33SupporterUI
     {
-        private const string ChineseFontPath = "Assets/Resources/Fonts/ChineseFont SDF.asset";
+        private const string ChineseFontPath = "Assets/Resources/Fonts/AlibabaPuHuiTi-3-85-Bold SDF.asset";
 
         [MenuItem("Tools/DrscfZ/Setup Section 33 Supporter UI")]
         public static void Execute()

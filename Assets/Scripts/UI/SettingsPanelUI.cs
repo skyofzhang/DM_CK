@@ -43,7 +43,7 @@ namespace DrscfZ.UI
 
         private void Start()
         {
-            _chineseFont = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+            _chineseFont = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
             // 启动时从 PlayerPrefs 恢复静态开关状态，保证与 SurvivalSettingsUI 数据一致
             GiftVideoEnabled = PlayerPrefs.GetInt("gift_video_enabled", 1) == 1;
             VIPVideoEnabled  = PlayerPrefs.GetInt("vip_video_enabled",  1) == 1;
@@ -155,18 +155,18 @@ namespace DrscfZ.UI
             yPos -= SECTION_GAP + 10f;
 
             // ═══════════════ Section 3: 操作 ═══════════════
-            // 结束本局按钮
+            // 🆕 P0-B8 §28.8：文字改 "结束本次守护" → 走 end_game（非 reset_game），不降级进恢复期
             var endBtnGo = new GameObject("BtnEndGame");
             endBtnGo.transform.SetParent(panel.transform, false);
             var endBtnRT = endBtnGo.AddComponent<RectTransform>();
             endBtnRT.anchoredPosition = new Vector2(0, yPos - 10f);
-            endBtnRT.sizeDelta = new Vector2(260, 58);
+            endBtnRT.sizeDelta = new Vector2(300, 58);
             var endBtnImg = endBtnGo.AddComponent<Image>();
             endBtnImg.color = new Color(0.72f, 0.18f, 0.18f);
             var endBtn = endBtnGo.AddComponent<Button>();
             endBtn.targetGraphic = endBtnImg;
             endBtn.onClick.AddListener(ShowConfirmDialog);
-            CreateTMP(endBtnGo.transform, "Text", "结束本局", 28,
+            CreateTMP(endBtnGo.transform, "Text", "结束本次守护", 28,
                 Vector2.zero, Vector2.zero,
                 TextAlignmentOptions.Center, Color.white,
                 FontStyles.Bold, true);
@@ -360,9 +360,10 @@ namespace DrscfZ.UI
             outline.effectColor = new Color(1f, 0.84f, 0f, 0.7f);
             outline.effectDistance = new Vector2(2, 2);
 
+            // 🆕 P0-B8 §28.8 v1.26 规则：end_game 进入临时休息（recovery），不触发堡垒日降级
             CreateTMP(dialog.transform, "WarningText",
-                "提前退出将不结算，本局所有数据丢失。\n确定退出？", 26,
-                new Vector2(0, 35), new Vector2(500, 110),
+                "提前结束当前守护，进入临时休息（不触发堡垒日降级）", 24,
+                new Vector2(0, 35), new Vector2(540, 110),
                 TextAlignmentOptions.Center, Color.white);
 
             // 确认按钮
@@ -378,9 +379,12 @@ namespace DrscfZ.UI
 
         private void OnConfirmEnd()
         {
-            Debug.Log("[SettingsPanelUI] 用户确认结束本局");
-            // 修复Bug：使用 SurvivalGameManager 而非旧的 GameManager
-            DrscfZ.Survival.SurvivalGameManager.Instance?.RequestResetGame();
+            Debug.Log("[SettingsPanelUI] 用户确认结束本次守护 → end_game（§28.8 / §16.4）");
+            // 🆕 P0-B8：§28.8 规则改为发 end_game 而非 reset_game
+            //   - end_game：进入 recovery，不降级堡垒日（主播主动休息）
+            //   - reset_game：清空房间到 Idle（退出到大厅，过去旧逻辑）
+            //   服务端校验：仅 state ∈ {day, night} 时受理；其他态推 end_game_failed，由 SurvivalGameManager 兜底提示
+            DrscfZ.Core.NetworkManager.Instance?.SendMessage("end_game");
             Close();
         }
 

@@ -34,14 +34,87 @@ class SeasonManager {
   }
 
   /**
-   * §36.4 v1.27：计算下一赛季主题（幂等，由 GlobalClock D7 夜晚启动 BossRush 时调用）
-   * 规则：按 SEASON_THEMES 顺序轮换（与 advanceDay 里的推进一致）
+   * §36.4 v1.27 / §36.6 首 2 赛季固定主题：计算下一赛季主题（幂等，由 GlobalClock D7 夜晚启动 BossRush 时调用）
+   *
+   * §36.6 决策 2 + 决策 3：
+   *   - next seasonId === 1 → 强制 'classic_frozen'
+   *   - next seasonId === 2 → 强制 'blood_moon'
+   *   - next seasonId >= 3  → 从 SEASON_THEMES 中**排除当前 themeId（lastThemeId）** 后随机
+   *                           （防止连续两赛季同主题）
    *
    * @returns {string} 下一赛季的 themeId
    */
   computeNextThemeId() {
     // 推进后的 seasonId 就是下一赛季；由 seasonId+1 决定主题
-    return SEASON_THEMES[this.seasonId % SEASON_THEMES.length];
+    const nextSeasonId = this.seasonId + 1;
+    if (nextSeasonId === 1) return 'classic_frozen';
+    if (nextSeasonId === 2) return 'blood_moon';
+    // seasonId >= 3 → 排除 lastThemeId（即当前 this.themeId）后随机
+    const lastThemeId = this.themeId;
+    const pool = SEASON_THEMES.filter(t => t !== lastThemeId);
+    const pickFrom = pool.length > 0 ? pool : SEASON_THEMES; // 极端兜底（不可能为空）
+    const idx = Math.floor(Math.random() * pickFrom.length);
+    return pickFrom[idx];
+  }
+
+  /**
+   * §36.6 新赛季主题 resolver：
+   *   seasonId === 1 → 'classic_frozen'
+   *   seasonId === 2 → 'blood_moon'
+   *   seasonId >= 3  → 排除 lastThemeId 后随机
+   */
+  _resolveThemeForSeason(seasonId, lastThemeId) {
+    if (seasonId === 1) return 'classic_frozen';
+    if (seasonId === 2) return 'blood_moon';
+    const pool = SEASON_THEMES.filter(t => t !== lastThemeId);
+    const pickFrom = pool.length > 0 ? pool : SEASON_THEMES;
+    return pickFrom[Math.floor(Math.random() * pickFrom.length)];
+  }
+
+  /**
+   * §36 P0-A3：聚合跨房间 topContributors Top10 + survivingRooms
+   *   - survivingRooms：当前注册房间中 fortressDay > 0 的房间数
+   *   - topContributors[]：跨房间按 _lifetimeContrib 汇总（同玩家跨房间取最大值），取 Top10
+   *     每项 { playerId, playerName, contribution }
+   */
+  _buildSeasonSettlementExtras(rooms) {
+    let survivingRooms = 0;
+    const contribByPid = new Map();      // pid -> contribution（最大值）
+    const nameByPid    = new Map();      // pid -> playerName（first-write wins）
+
+    if (rooms && typeof rooms[Symbol.iterator] === 'function') {
+      for (const room of rooms) {
+        if (!room) continue;
+        const engine = room.survivalEngine;
+        if (!engine) continue;
+        const fd = engine.fortressDay || 0;
+        if (fd > 0) survivingRooms += 1;
+
+        const lc = engine._lifetimeContrib || {};
+        const names = engine.playerNames || {};
+        for (const pid of Object.keys(lc)) {
+          if (!pid) continue;
+          const val = Number(lc[pid]) || 0;
+          if (val <= 0) continue;
+          const prev = contribByPid.get(pid) || 0;
+          if (val > prev) contribByPid.set(pid, val);
+          if (!nameByPid.has(pid)) {
+            nameByPid.set(pid, names[pid] || pid);
+          }
+        }
+      }
+    }
+
+    const topContributors = Array.from(contribByPid.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([pid, contribution]) => ({
+        playerId:     pid,
+        playerName:   nameByPid.get(pid) || pid,
+        contribution,
+      }));
+
+    return { survivingRooms, topContributors };
   }
 
   /**
@@ -61,15 +134,20 @@ class SeasonManager {
       // （保证客户端在 D7 夜晚就看到下一赛季主题预告；否则 fallback 到计算值）
       const settlementNextTheme = this._nextThemeId || this.computeNextThemeId();
 
+      // §36 P0-A3：聚合跨房间 topContributors + survivingRooms（在新赛季开始前采集，
+      //   此时各房引擎的 _lifetimeContrib 仍为上一赛季的最终值）
+      const extras = this._buildSeasonSettlementExtras(rooms);
+
       // 新赛季
       this.seasonId += 1;
       this.seasonDay = 1;
-      this.themeId = SEASON_THEMES[(this.seasonId - 1) % SEASON_THEMES.length];
+      // §36.6 首 2 赛季固定主题；S>=3 排除 lastThemeId 随机
+      this.themeId = this._resolveThemeForSeason(this.seasonId, oldThemeId);
 
       // 清理预告（新赛季开始）
       this._nextThemeId = null;
 
-      console.log(`[SeasonManager] Season ${oldSeasonId} ended (${oldThemeId}) → Season ${this.seasonId} started (${this.themeId})`);
+      console.log(`[SeasonManager] Season ${oldSeasonId} ended (${oldThemeId}) → Season ${this.seasonId} started (${this.themeId}); survivingRooms=${extras.survivingRooms} topN=${extras.topContributors.length}`);
 
       // §36 赛季切换强制断开 Tribe War：复用 rooms 里任一 room 的 tribeWarMgr 引用（单例），幂等调用 stopAllSessions
       if (rooms && rooms.size > 0) {
@@ -87,13 +165,15 @@ class SeasonManager {
         for (const room of rooms) {
           try {
             if (!room || typeof room.broadcast !== 'function') continue;
-            // season_settlement（MVP 空占位）——携带 D7 夜晚就决定好的 nextThemeId
+            // §36 P0-A3 season_settlement：携带 nextThemeId + survivingRooms + topContributors[]
             room.broadcast({
               type: 'season_settlement',
               timestamp: Date.now(),
               data: {
-                seasonId: oldSeasonId,
-                nextThemeId: settlementNextTheme,
+                seasonId:         oldSeasonId,
+                nextThemeId:      settlementNextTheme,
+                survivingRooms:   extras.survivingRooms,
+                topContributors:  extras.topContributors,
               },
             });
             // season_started
@@ -105,6 +185,38 @@ class SeasonManager {
                 themeId: this.themeId,
               },
             });
+            // §36.10 WaitingPhase：新赛季开局 30s 准备窗口（客户端主题预告 + 观众准备）
+            //   MVP：同帧广播 waiting_phase_started，30s 后自动 waiting_phase_ended
+            //   生效范围：仅作为 UI 层提示（A 类阻塞横幅），不干预服务端时钟 / 资源推进
+            room.broadcast({
+              type: 'waiting_phase_started',
+              timestamp: Date.now(),
+              data: {
+                durationSec:   30,
+                newSeasonId:   this.seasonId,
+                newThemeId:    this.themeId,
+              },
+            });
+            // 30s 后广播 waiting_phase_ended（兜底 UI 隐藏；客户端倒计时结束也可自关）
+            // 闭包捕获 room 引用，避免循环后 room 被篡改
+            const _room = room;
+            setTimeout(() => {
+              try {
+                if (_room && typeof _room.broadcast === 'function') {
+                  _room.broadcast({
+                    type: 'waiting_phase_ended',
+                    timestamp: Date.now(),
+                    data: {},
+                  });
+                }
+              } catch (_) { /* ignore single room errors */ }
+            }, 30000);
+            // P0-A5 room_state 广播：season_changed（season_started）后推一次
+            try {
+              if (room.survivalEngine && typeof room.survivalEngine._broadcastRoomState === 'function') {
+                room.survivalEngine._broadcastRoomState('season_started');
+              }
+            } catch (_) { /* ignore */ }
           } catch (e) {
             // 单房异常不影响其他房
           }

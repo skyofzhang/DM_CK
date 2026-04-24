@@ -1,14 +1,19 @@
-﻿using UnityEngine;
+using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using System.Collections;
 using DrscfZ.Core;
+using DrscfZ.Survival;
 
 namespace DrscfZ.UI
 {
     /// <summary>
     /// 全屏公告UI - 比赛开始/结束等重要提示
     /// 居中大字 + 渐入渐出动画
+    ///
+    /// 🆕 P0-B9：订阅切到 SurvivalGameManager（永续模式），移除旧的"香橙/柚子"阵营文案。
+    /// - `SurvivalState.Running` 进入 → 显示当天 / 当夜公告
+    /// - `OnGameEnded` → "堡垒失守！重建中..."（若 newbieProtected 则"新手保护：堡垒日不变"）
     /// </summary>
     public class AnnouncementUI : MonoBehaviour
     {
@@ -23,6 +28,10 @@ namespace DrscfZ.UI
         [SerializeField] private float fadeInDuration = 0.3f;
         [SerializeField] private float fadeOutDuration = 0.5f;
 
+        // 🆕 P0-B9：字体改用阿里巴巴普惠 SDF；找不到时 fallback 到 ChineseFont SDF
+        private const string AlibabaFontPath = "Fonts/AlibabaPuHuiTi-3-85-Bold SDF";
+        private const string ChineseFontPath = "Fonts/ChineseFont SDF";
+
         private Coroutine _currentAnnouncement;
 
         private void Awake()
@@ -34,12 +43,21 @@ namespace DrscfZ.UI
 
         private void OnEnable()
         {
-            var gm = GameManager.Instance;
-            if (gm != null)
+            // 🆕 P0-B9：切到 SurvivalGameManager（永续模式）；原 GameManager 是旧角力游戏的遗留单例
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm != null)
             {
-                gm.OnStateChanged += HandleStateChanged;
-                gm.OnGameEnded += HandleGameEnded;
+                sgm.OnStateChanged += HandleSurvivalStateChanged;
+                sgm.OnGameEnded    += HandleSurvivalGameEnded;
+                sgm.OnDifficultySet += HandleDifficultySet;
             }
+        }
+
+        private TMP_FontAsset LoadBestFont()
+        {
+            var f = Resources.Load<TMP_FontAsset>(AlibabaFontPath);
+            if (f != null) return f;
+            return Resources.Load<TMP_FontAsset>(ChineseFontPath);
         }
 
         /// <summary>如果引用丢失，运行时自动创建必要组件</summary>
@@ -71,8 +89,7 @@ namespace DrscfZ.UI
                 // 描边
                 mainText.outlineWidth = 0.4f;
                 mainText.outlineColor = new Color32(0, 0, 0, 255);
-                // 尝试加载中文字体
-                var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+                var font = LoadBestFont();
                 if (font != null) mainText.font = font;
             }
 
@@ -92,27 +109,27 @@ namespace DrscfZ.UI
                 var rt = go.GetComponent<RectTransform>();
                 rt.anchoredPosition = new Vector2(0, -50);
                 rt.sizeDelta = new Vector2(600, 60);
-                var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+                var font = LoadBestFont();
                 if (font != null) subText.font = font;
             }
         }
 
         private void OnDisable()
         {
-            var gm = GameManager.Instance;
-            if (gm != null)
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm != null)
             {
-                gm.OnStateChanged -= HandleStateChanged;
-                gm.OnGameEnded -= HandleGameEnded;
+                sgm.OnStateChanged  -= HandleSurvivalStateChanged;
+                sgm.OnGameEnded     -= HandleSurvivalGameEnded;
+                sgm.OnDifficultySet -= HandleDifficultySet;
             }
         }
 
-        private void HandleStateChanged(GameManager.GameState oldState, GameManager.GameState newState)
+        /// <summary>P0-B9：SurvivalGameManager 状态切换 → 公告（替代旧的 GameManager 订阅）</summary>
+        private void HandleSurvivalStateChanged(SurvivalGameManager.SurvivalState state)
         {
-            if (newState == GameManager.GameState.Running && oldState != GameManager.GameState.Running)
+            if (state == SurvivalGameManager.SurvivalState.Running)
             {
-                // 延迟0.1秒显示，确保UIManager已切换到游戏界面
-                // 并检查gameUIPanel是否可见，避免在主菜单界面显示"比赛开始"
                 StartCoroutine(DelayedStartAnnouncement());
             }
         }
@@ -120,33 +137,74 @@ namespace DrscfZ.UI
         private IEnumerator DelayedStartAnnouncement()
         {
             yield return new WaitForSeconds(0.1f);
-            // 确认仍然在Running状态且游戏面板可见
-            var gm = GameManager.Instance;
-            var uiMgr = UIManager.Instance;
-            if (gm != null && gm.CurrentState == GameManager.GameState.Running
-                && uiMgr != null && uiMgr.gameUIPanel != null && uiMgr.gameUIPanel.activeSelf)
-            {
-                ShowAnnouncement("比赛开始！", "", new Color(1f, 0.85f, 0.2f), 2.0f);
-            }
+            // 确认仍然在 Running 状态
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm == null || sgm.State != SurvivalGameManager.SurvivalState.Running) yield break;
+            ShowAnnouncement("守护开始", "坚持到黎明！", new Color(1f, 0.85f, 0.2f), 2.0f);
         }
 
-        private void HandleGameEnded(GameEndedData data)
+        /// <summary>P0-B9：永续模式失败公告 —— 没有胜负阵营，只有堡垒日升降。</summary>
+        private void HandleSurvivalGameEnded(SurvivalGameEndedData data)
         {
-            // 先弹出获胜公告，延迟后再让结算面板显示
-            string winner = data.winner;
-            string campName = winner == "left" ? "香橙" : winner == "right" ? "柚子" : "";
-            Color color = winner == "left"
-                ? new Color(1f, 0.55f, 0f)      // 橙色
-                : new Color(0.68f, 1f, 0.18f);  // 绿色
+            if (data == null) { HideVisual(); return; }
 
-            if (winner == "draw")
+            // v1.26 永续模式：无胜利分支，只有失败降级 / 主动 end_game 临时休息
+            Color color;
+            string main;
+            string sub;
+
+            if (data.reason == "manual")
             {
-                ShowAnnouncement("比赛结束", "平局！", Color.white, 4.0f);
+                // §28.8 end_game：主播主动休息，不降级
+                main = "临时休息";
+                sub  = "不触发堡垒日降级";
+                color = new Color(0.25f, 0.55f, 1.0f);  // 蓝色
+            }
+            else if (data.newbieProtected)
+            {
+                // 新手保护期：堡垒日不变
+                main = "堡垒失守！重建中...";
+                sub  = $"新手保护：堡垒日不变（{data.fortressDayBefore}）";
+                color = new Color(0.30f, 1.00f, 0.55f);  // 浅绿
+            }
+            else if (data.fortressDayAfter < data.fortressDayBefore)
+            {
+                // 降级
+                main = "堡垒失守！重建中...";
+                sub  = $"当前堡垒日 {data.fortressDayBefore} → {data.fortressDayAfter}";
+                color = new Color(1.00f, 0.35f, 0.25f);  // 橙红（警示）
             }
             else
             {
-                string reason = data.reason == "reached_end" ? "推到终点！" : "时间到！";
-                ShowAnnouncement($"恭喜 {campName}阵营 获胜！", reason, color, 4.0f);
+                // 失败但未降级（理论不会出现，兜底）
+                main = "堡垒失守！重建中...";
+                sub  = $"原因: {LocalizeReason(data.reason)}";
+                color = new Color(0.85f, 0.55f, 0.25f);
+            }
+
+            ShowAnnouncement(main, sub, color, 4.0f);
+        }
+
+        /// <summary>P0-B9：难度选择确认。</summary>
+        private void HandleDifficultySet(SurvivalGameManager.DifficultyLevel d)
+        {
+            string label = d == SurvivalGameManager.DifficultyLevel.Easy   ? "简单"
+                         : d == SurvivalGameManager.DifficultyLevel.Normal ? "普通"
+                         : d == SurvivalGameManager.DifficultyLevel.Hard   ? "困难"
+                         : "未设置";
+            ShowAnnouncement("难度已设置", label, new Color(0.8f, 0.9f, 1f), 1.5f);
+        }
+
+        private static string LocalizeReason(string reason)
+        {
+            switch (reason)
+            {
+                case "food_depleted": return "食物耗尽";
+                case "temp_freeze":   return "炉温冻结";
+                case "gate_breached": return "城门被攻破";
+                case "all_dead":      return "全员阵亡";
+                case "manual":        return "主播结束";
+                default:              return reason ?? "未知";
             }
         }
 
@@ -163,13 +221,13 @@ namespace DrscfZ.UI
         private IEnumerator AnnouncementRoutine(string main, string sub, Color color, float duration)
         {
             // 确保字体正确加载（解决乱码问题）
-            var chineseFont = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
-            if (chineseFont != null)
+            var preferred = LoadBestFont();
+            if (preferred != null)
             {
-                if (mainText != null && mainText.font != chineseFont)
-                    mainText.font = chineseFont;
-                if (subText != null && subText.font != chineseFont)
-                    subText.font = chineseFont;
+                if (mainText != null && mainText.font != preferred)
+                    mainText.font = preferred;
+                if (subText != null && subText.font != preferred)
+                    subText.font = preferred;
             }
 
             // 设置内容

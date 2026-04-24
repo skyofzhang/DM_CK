@@ -71,7 +71,7 @@ namespace DrscfZ.UI
             _cam = Camera.main?.transform;
 
             // 绑定中文字体，防止乱码（Rule R2）
-            var chineseFont = Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
+            var chineseFont = Resources.Load<TMPro.TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
             var outlineMat  = Resources.Load<Material>("Fonts/ChineseFont SDF - Outline");
             if (iconText != null)
             {

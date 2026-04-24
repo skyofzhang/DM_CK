@@ -31,7 +31,7 @@ namespace DrscfZ.UI
             // 确保字体绑定（R2规则）
             if (_nameText != null)
             {
-                var font = Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
+                var font = Resources.Load<TMPro.TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
                 if (font != null) _nameText.font = font;
                 _nameText.fontSize = 36f;
                 _nameText.fontStyle = FontStyles.Bold;

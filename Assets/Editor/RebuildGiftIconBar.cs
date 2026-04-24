@@ -32,7 +32,7 @@ public class RebuildGiftIconBar
     };
 
     // 中文字体路径
-    private const string ChineseFontPath = "Assets/Resources/Fonts/ChineseFont SDF.asset";
+    private const string ChineseFontPath = "Assets/Resources/Fonts/AlibabaPuHuiTi-3-85-Bold SDF.asset";
 
     [MenuItem("Tools/DrscfZ/Rebuild Gift Icon Bar")]
     public static void Execute()

@@ -188,7 +188,7 @@ namespace DrscfZ.UI
         private static TMP_FontAsset GetFont()
         {
             if (_cachedFont == null)
-                _cachedFont = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+                _cachedFont = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
             return _cachedFont;
         }
         private static void BindFont(TMP_Text t)

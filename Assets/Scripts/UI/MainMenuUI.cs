@@ -27,7 +27,7 @@ namespace DrscfZ.UI
         private void Start()
         {
             // 加载中文字体
-            _chineseFont = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+            _chineseFont = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
 
             // 绑定按钮事件
             if (btnStartGame) btnStartGame.onClick.AddListener(OnStartGameClicked);

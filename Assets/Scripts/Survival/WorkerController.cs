@@ -988,6 +988,55 @@ namespace DrscfZ.Survival
         {
             var tag = GetComponentInChildren<PlayerNameTag>(true);
             if (tag != null) tag.SetTier(tier);
+            // §30 皮肤模型切换骨架（audit-r3/P1 E7）
+            //   TODO 13 套皮肤 Prefab 待美术交付（见美术清单 v3 §30）
+            //   当前仅做 Prefab 查找 + log，不做实际 Instantiate（避免 WorkerSkins/ 目录不存在时 NPE 泛滥）
+            SwapSkinModel(tier);
+        }
+
+        /// <summary>
+        /// §30.11 皮肤模型切换骨架（audit-r3/P1 E7）
+        /// 流程：
+        ///   1. 尝试加载 `Resources/WorkerSkins/Kuanggong_T{tier:D2}`（阶段皮肤 T01~T10）
+        ///   2. 找不到 → 尝试 fallback `Prefabs/Characters/KuanggongWorker_01`（默认矿工 Prefab）
+        ///   3. 仍找不到 → log warning，保留当前模型（不做 Instantiate，避免大量空引用错误）
+        /// 实际 Instantiate 到 _modelRoot 的逻辑待美术交付完成后打开；当前版本仅做骨架 + 诊断日志。
+        ///
+        /// 参数：tier = 1~10；传奇皮肤 G01~G03 本函数暂不支持（需更高层决策使用 Kuanggong_G{0X}）
+        /// </summary>
+        public void SwapSkinModel(int tier)
+        {
+            if (tier < 1 || tier > 10)
+            {
+                Debug.Log($"[WorkerController] SwapSkinModel: invalid tier={tier}, skip");
+                return;
+            }
+
+            string skinPath     = $"WorkerSkins/Kuanggong_T{tier:D2}";
+            string fallbackPath = "Prefabs/Characters/KuanggongWorker_01";
+
+            // 1) 尝试加载阶段皮肤 Prefab
+            var prefab = Resources.Load<GameObject>(skinPath);
+            if (prefab == null)
+            {
+                // 2) Fallback：默认矿工 Prefab（避免 NPE；美术未交付期间这是常态）
+                prefab = Resources.Load<GameObject>(fallbackPath);
+                Debug.Log($"[WorkerController] SwapSkinModel: Skin Prefab not found for T{tier:D2}, using fallback (美术清单 v3 §30 待交付)");
+            }
+
+            if (prefab == null)
+            {
+                // 3) 两条路径均失败 —— 保留当前模型（绝不中断游戏）
+                Debug.LogWarning($"[WorkerController] SwapSkinModel: both skin ({skinPath}) and fallback ({fallbackPath}) missing; keep current model");
+                return;
+            }
+
+            // TODO §30 当美术交付 WorkerSkins/ 目录后打开以下 Instantiate 逻辑：
+            //   - 保存当前 Transform（position/rotation/localScale）
+            //   - Destroy 旧 _modelRoot 子节点
+            //   - Instantiate(prefab, _modelRoot) 并同步 Transform
+            //   - 重新缓存 Animator / SMR 等子组件（CacheAnimatorParams）
+            //   当前版本仅做骨架 + 日志，等美术落地后启用实际切换。
         }
 
         /// <summary>重置Worker到Idle状态（归还对象池时调用）</summary>

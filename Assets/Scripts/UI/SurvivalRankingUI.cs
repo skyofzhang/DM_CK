@@ -323,7 +323,7 @@ namespace DrscfZ.UI
                         filteredTexts.Add(t);
                 }
 
-                var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+                var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
                 foreach (var t in filteredTexts)
                     if (t != null && font != null) t.font = font;
 
@@ -373,7 +373,7 @@ namespace DrscfZ.UI
                         filteredTexts.Add(t);
                 }
 
-                var font = Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+                var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
                 foreach (var t in filteredTexts)
                     if (t != null && font != null) t.font = font;
 
