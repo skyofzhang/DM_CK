@@ -1011,7 +1011,9 @@ namespace DrscfZ.Survival
                     break;
 
                 // ----- audit-r6 客户端补齐（🆕 v1.27+） -----
-                // §34.4 E9 主播切换难度失败（not_broadcaster/wrong_phase/unknown_difficulty/season_frozen）
+                // §34.4 E9 主播切换难度失败：r13 GAP-A2 — 对齐服务端实际 reason
+                //   服务端 SurvivalGameEngine.handleChangeDifficulty 实发：not_broadcaster / invalid_difficulty / invalid_args
+                //   旧 reason（wrong_phase/unknown_difficulty/season_frozen）保留作向后兼容
                 case SurvivalMessageProtocol.ChangeDifficultyFailed:
                     var cdf = JsonUtility.FromJson<ChangeDifficultyFailedData>(dataJson);
                     if (cdf != null)
@@ -1021,6 +1023,9 @@ namespace DrscfZ.Survival
                         var reasonText = cdf.reason switch
                         {
                             "not_broadcaster"     => "仅主播可切换难度",
+                            "invalid_difficulty"  => "难度无效（仅支持 easy / normal / hard）",
+                            "invalid_args"        => "参数错误（applyAt 仅支持 next_night / next_season）",
+                            // 向后兼容旧服务端版本
                             "wrong_phase"         => "当前不可切换（非 day/night）",
                             "unknown_difficulty"  => "未知难度",
                             "season_frozen"       => $"赛季末冻结（第 {cdf.unlockDay} 天解锁）",
@@ -2644,11 +2649,18 @@ namespace DrscfZ.Survival
             Debug.Log($"[SGM] shop_equip_changed: {data.playerId} slot={data.slot} itemId={data.itemId}");
         }
 
-        /// <summary>装备切换失败（unicast）：MVP 仅 Log</summary>
+        /// <summary>装备切换失败（unicast）：r13 GAP-A1 — 加 toast 反馈（之前仅 Debug.Log，用户无感知）。
+        /// 复用 FailureToastLocale 中央化映射（slot_mismatch / not_owned / too_frequent 已覆盖 §17.17）。</summary>
         private void HandleShopEquipFailed(ShopEquipFailedData data)
         {
             OnShopEquipFailed?.Invoke(data);
-            Debug.Log($"[SGM] shop_equip_failed: slot={data.slot} itemId={data.itemId} reason={data.reason}");
+            string reasonText  = DrscfZ.UI.FailureToastLocale.Get(data?.reason);
+            string itemDisplay = string.IsNullOrEmpty(data?.itemId) ? "" : GetShopItemDisplayName(data.itemId);
+            string msg = string.IsNullOrEmpty(itemDisplay)
+                ? $"装备失败：{reasonText}"
+                : $"装备 {itemDisplay} 失败：{reasonText}";
+            OnPlayerActivityMessage?.Invoke(msg);
+            Debug.Log($"[SGM] shop_equip_failed: slot={data?.slot} itemId={data?.itemId} reason={data?.reason}");
         }
 
         /// <summary>进房/重连时的背包 + 装备快照：路由到 ShopUI 渲染；若是自己则更新本地缓存</summary>
