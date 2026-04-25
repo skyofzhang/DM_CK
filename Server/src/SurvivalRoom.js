@@ -1068,7 +1068,7 @@ class SurvivalRoom {
   }
 
   /**
-   * 处理抖音点赞（策划案 §9：每次点赞+2积分；每50次点赞食物+10）
+   * 处理抖音点赞（策划案 §15.1：每次点赞+2积分；每50次点赞食物+10）— r14 GAP-A14-A7 修：原 §9
    */
   handleDouyinLike(secOpenId, nickname, avatarUrl, likeNum) {
     this.lastActiveAt = Date.now();

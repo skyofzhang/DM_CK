@@ -224,8 +224,9 @@ namespace DrscfZ.Survival
         public string playerId;
         public string playerName;
         public string avatarUrl;
-        public int    commandId;   // 1=食物 2=煤炭 3=矿石 4=添柴 5=修城门
-        public string commandName; // "food"|"coal"|"ore"|"heat"|"repair"
+        // r14 GAP-A14-A4：cmd=5 修城门已 v2.0 移除（策划案 §6.1 L359）
+        public int    commandId;   // 1=食物 2=煤炭 3=矿石 4=添柴 6=打怪（cmd=5 已移除）
+        public string commandName; // "food"|"coal"|"ore"|"heat"|"attack"
         // 🆕 §34 Layer 2 组 A B9：服务端在 work_command 广播附带触发者的 playerStats 快照
         //   服务端 _calcPlayerStats(playerId) 返回 { contribution, rank, fairyWandBonus }；
         //   未注册守护者（匿名/助威者）时为 {0,0,0}。
@@ -1592,6 +1593,10 @@ namespace DrscfZ.Survival
         public string playerId;
         public string playerName;
         public int    cmd;       // 1-6（cmd=5 已在服务端静默拦截，此处不会出现）
+        // r14 GAP-B-MAJOR-03 / r12 GAP-D01：服务端 _getWorkerIndex(playerId) 派生
+        // 客户端 NewbieHintUI / WorkerVisual 据此挂金色光柱到对应矿工（§32.2.1 L4005 / §34 B7 L5145）
+        // -1 表示玩家未绑定矿工（助威者第 13+ 自动分流）；JsonUtility 不支持 nullable，用 -1 占位
+        public int    workerId;
     }
 
     // ==================== §36.10 WaitingPhase（🆕 v1.27+ audit-r3/P1） ====================
@@ -1612,6 +1617,11 @@ namespace DrscfZ.Survival
         public int      waveIdx;         // 即将到来的波次 index（0 及以下视为 SeasonManager 源）
         public int      countdownSec;    // 波次窗口倒计时（默认 15）
         public string[] allowVoteTypes;  // ['support','experience','tribe_war'] 等；MVP 可空数组
+
+        // r14 GAP-B-MAJOR-02 / r12 GAP-D03：服务端透传 _currentNightModifier
+        // 客户端 WaitingPhaseUI 在 30s 投票窗口可显示"今晚血月 Boss HP×3"等氛围信息（§36.10 L6253 / §34 B10b L5191）
+        // 复用 NightModifierData（与 PhaseChangedData.nightModifier 同源）；服务端无修饰符时为 null
+        public NightModifierData nightModifier;
     }
 
     /// <summary>准备窗口结束（type=waiting_phase_ended，S→C）。
@@ -1664,23 +1674,25 @@ namespace DrscfZ.Survival
     // ==================== audit-r6 客户端补齐 Batch ====================
 
     /// <summary>§34.4 E9 主播切换难度失败（type=change_difficulty_failed，S→C，单播）。
-    /// 服务端 4 路径：not_broadcaster / wrong_phase / unknown_difficulty / season_frozen。
-    /// 字段对齐 SurvivalGameEngine.js:7131。</summary>
+    /// r13 修复后服务端实发：not_broadcaster / invalid_difficulty / invalid_args
+    /// 旧 reason（wrong_phase / unknown_difficulty / season_frozen）保留向后兼容（客户端 switch 仍含），但服务端不再发。
+    /// 字段对齐 SurvivalGameEngine.js:7561/7578/7586（r13 audit-r13 GAP-A2 修复）。</summary>
     [Serializable]
     public class ChangeDifficultyFailedData
     {
-        public string   reason;             // not_broadcaster / wrong_phase / unknown_difficulty / season_frozen
+        public string   reason;             // not_broadcaster / invalid_difficulty / invalid_args（r13）
         public int      unlockDay;          // 用于 season_frozen 兜底回答（0 表示无）
-        public string[] supported;          // unknown_difficulty 时附带支持列表
+        public string[] supported;          // invalid_difficulty 时附带支持列表
     }
 
     /// <summary>§34.4 E9 主播切换难度已排队（type=change_difficulty_accepted，S→C，单播）。
-    /// 字段对齐 SurvivalGameEngine.js:7148。</summary>
+    /// 字段对齐 SurvivalGameEngine.js:7593-7595。</summary>
     [Serializable]
     public class ChangeDifficultyAcceptedData
     {
         public string difficulty;   // 请求值
-        public long   applyAt;      // Unix ms（生效时间点）
+        // r14 GAP-B-MINOR-01：原 long 类型反序列化字符串失败（SurvivalGameEngine.js:7593-7595 实发 'next_night' | 'next_season'）
+        public string applyAt;      // "next_night" | "next_season"（生效时机）
     }
 
     /// <summary>§30.4 每日不活跃玩家等级衰减 ×0.95（type=daily_tier_decay，S→C，广播）。

@@ -17,7 +17,7 @@ namespace DrscfZ.Survival
     ///   2. 移动改为协程 + EaseOutCubic，替代 Vector3.MoveTowards（T004）
     ///   3. 新增 HomePosition：工作结束后平滑返回待机位（T007）
     ///   4. 新增 OnWorkComplete 事件：通知 WorkerManager 释放槽位
-    ///   5. Animator 状态同步：复用 AC_Kpbl.controller 参数（Speed/IsPushing），优雅降级（T010）
+    ///   5. Animator 状态同步：复用 AC_DrscfZ_Worker / kuanggong controller 参数（Speed/IsPushing），优雅降级（T010）
     ///
     /// 挂载规则：挂在Worker GameObject上（与WorkerVisual同级）。
     /// </summary>
@@ -112,7 +112,7 @@ namespace DrscfZ.Survival
 
         private Animator _animator;
 
-        // --- 参数集 A：AC_Kpbl / AC_DrscfZ_Worker（Speed float + IsPushing bool）---
+        // --- 参数集 A：AC_DrscfZ_Worker / kuanggong controller（Speed float + IsPushing bool）---
         private bool _hasSpeed;
         private bool _hasIsPushing;
         private static readonly int Hash_Speed     = Animator.StringToHash("Speed");
@@ -1243,8 +1243,8 @@ namespace DrscfZ.Survival
         // ==================== Animator 辅助（T010）====================
 
         /// <summary>
-        /// 缓存 AC_Kpbl.controller 的参数，优雅降级（参数不存在时静默忽略）。
-        /// 与 Capybara.cs 保持一致的模式。
+        /// 缓存 Animator controller 的参数，优雅降级（参数不存在时静默忽略）。
+        /// 兼容两套参数集：集A（AC_DrscfZ_Worker / kuanggong: Speed/IsPushing）+ 集B（kuanggong_05: IsRunning/IsMining/IsCarrying/IsIdle）。
         /// </summary>
         private void CacheAnimatorParams()
         {
@@ -1267,7 +1267,7 @@ namespace DrscfZ.Survival
 
         /// <summary>
         /// 同步 Animator 参数到当前状态（兼容两套参数集）。
-        /// 集A：Speed(float) + IsPushing(bool) → 用于 AC_Kpbl / AC_DrscfZ_Worker
+        /// 集A：Speed(float) + IsPushing(bool) → 用于 AC_DrscfZ_Worker / kuanggong controller
         /// 集B：IsRunning/IsMining/IsIdle(bool) → 用于 kuanggong_05.controller（CowWorker 默认）
         /// isMoving=true  → 行走动画
         /// isWorking=true → 工作动画（IsMining）

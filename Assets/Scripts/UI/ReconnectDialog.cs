@@ -53,7 +53,8 @@ namespace DrscfZ.UI
         {
             gameObject.SetActive(true);
             if (_titleText != null) _titleText.text = "检测到本次堡垒守护进行中";
-            if (_descText  != null) _descText.text  = "发现未完成的堡垒守护，是否继续？";
+            // r14 GAP-A14-A8：对齐策划案 §15.6 L1491 文案
+            if (_descText  != null) _descText.text  = "发现未结束的守护，是否继续守护这座堡垒？";
         }
 
         private void OnReconnect()

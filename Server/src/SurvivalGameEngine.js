@@ -272,10 +272,10 @@ const ROULETTE_AUTO_APPLY_MS = 10 * 1000;   // 10s 未 apply 自动兜底
 // ==================== §39 商店系统（Shop System，MVP） ====================
 // 策划案 §39.2 商品清单 / §39.3 双轨货币体系 / §39.5 装备槽
 // PM 决策（MVP）：
-//   - §36.12 `shop.minDay=2` 跳过（全局允许，不做 feature_locked）
+//   - §36.12 `shop.minDay=2` 已实装（SurvivalRoom.js:774/788/797/810 isFeatureUnlocked('shop')）
 //   - §36 赛季末 5 min `season_locked` 跳过
-//   - B9/B10 赛季限定 SKU 跳过（`currentSeasonShopPool` 始终空；`买B9/10` 返 `item_not_found`）
-//   - 持久化跳过：所有新字段仅内存，重启清零（TODO RoomPersistence schemaVersion 2→3 迁移）
+//   - B9/B10 赛季限定 SKU 已接通（r14 GAP-E14-1：弹幕路径查 _seasonShopPool；HUD 路径在 handleShopList/Purchase）
+//   - 持久化已落地：RoomPersistence.js v1→v2 迁移序列化 _contribBalance/_playerShopInventory/_playerShopEquipped
 //   - `_roomCreatorId` 鉴权放开（与 §24.4 / §37 一致）
 //   - `shop_effect_triggered` 广播照做（客户端响应由另一 Agent 负责）
 //   - LiveRankingEntry 扩展 `equipped` 字段（_broadcastLiveRanking 填充）
@@ -710,7 +710,7 @@ class SurvivalGameEngine {
 
     // ── §39 商店系统（Shop System，MVP）─────────────────────────────────
     // 双轨货币：_lifetimeContrib（§30，仍为终身累计水位）+ _contribBalance（新增可消费余额）
-    // MVP 持久化：全部内存存储，重启清零（TODO 接入 RoomPersistence schemaVersion 1→2）
+    // 持久化已落地：RoomPersistence.js v1→v2 迁移序列化（r14 GAP-E stale 注释清理）
     this._contribBalance              = {};  // {playerId: number} 可消费余额
     this._playerShopInventory         = {};  // {playerId: string[]} 已购 B 类 itemId
     this._playerShopEquipped          = {};  // {playerId: {title?, frame?, entrance?, barrage?}} 当前装备
@@ -1554,10 +1554,17 @@ class SurvivalGameEngine {
       } else if (cat === 'B' && idx >= 1 && idx <= 8) {
         itemId = SHOP_B_INDEX[idx - 1];
       } else if (cat === 'B' && (idx === 9 || idx === 10)) {
-        // PM MVP 决策：B9/B10 赛季限定 SKU 跳过，currentSeasonShopPool 始终空 → item_not_found
-        // P0-A8 单播：barrage 路径也尽量按 playerId 单播；_sendToPlayer 在未找到 ws 时回退 broadcast
-        this._shopFailPurchase('item_not_found', `买${cat}${idx}`, null, playerId);
-        return;
+        // r14 GAP-E14-1：弹幕路径接通赛季限定 SKU pool（HUD 路径 handleShopList/Purchase 已实装）
+        // §39.4 L6807-6808 cat='B' && idx ∈ [9,10] → 查 currentSeasonShopPool[idx-9]
+        // _seasonShopPool 由 SeasonManager.loadSeason(seasonId) 加载（season_shop/season_*.json）
+        const _seasonItem = (this._seasonShopPool || [])[idx - 9];
+        if (_seasonItem && _seasonItem.id) {
+          itemId = _seasonItem.id;
+        } else {
+          // _sendToPlayer 在未找到 ws 时回退 broadcast
+          this._shopFailPurchase('item_not_found', `买${cat}${idx}`, null, playerId);
+          return;
+        }
       }
       if (itemId) {
         this.handleShopPurchase(playerId, playerName, itemId, null);
@@ -1703,7 +1710,8 @@ class SurvivalGameEngine {
           playerId,
           playerName: playerName || playerId,
           cmd,
-          workerId: wIdx >= 0 ? wIdx : null,
+          // r14 GAP-B-MAJOR-03 后续：原 null 在 C# JsonUtility 反序列化为 int=0，与"绑定 worker 0"冲突；统一发整数 -1 sentinel
+          workerId: wIdx >= 0 ? wIdx : -1,
         },
       });
       console.log(`[SurvivalEngine] first_barrage: ${playerName || playerId} cmd=${cmd} workerId=${wIdx}`);
@@ -2972,12 +2980,14 @@ class SurvivalGameEngine {
       // §31 Boss 刷新侧随机选（供首领卫兵同侧刷新参考；'all' 亦允许）
       const sides = ['left', 'right', 'top', 'all'];
       this._lastBossSpawnSide = sides[Math.floor(Math.random() * sides.length)];
+      // r14 GAP-A14-A2：boss_appeared 与实际 spawn (L4138) 用相同乘数，避免 Hard 难度下客户端血条 fillRatio 错位
+      const _bossSpawnHp = Math.max(1, Math.round(cfg.boss.hp * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * (this._themeBossHpMult || 1.0)));
       this.broadcast({
         type: 'boss_appeared',
         timestamp: Date.now(),
         data: {
           day,
-          bossHp:  cfg.boss.hp,
+          bossHp:  _bossSpawnHp,
           bossAtk: cfg.boss.atk,
         }
       });
@@ -7929,7 +7939,7 @@ class SurvivalGameEngine {
     // 该字段独立于 contributions（本局）与 _lifetimeContrib（终身水位）：
     //   - B 类购买仅扣 _contribBalance，_lifetimeContrib 不变（等级/皮肤/豁免不受影响）
     //   - 不可为负（购买前 handleShopPurchase 校验）
-    // TODO §39.10 持久化：目前 MVP 内存存储，重启清零；等 RoomPersistence schemaVersion 1→2 落地
+    // §39.10 持久化已落地：RoomPersistence v1→v2 已迁移 _contribBalance（r14 GAP-E stale 注释清理）
     this._contribBalance[playerId] = (this._contribBalance[playerId] || 0) + finalAmount * catchUpMult;
 
     // 首次玩家初始等级为 Lv.1
@@ -9447,21 +9457,22 @@ class SurvivalGameEngine {
   handleShopEquip(playerId, slot, itemId) {
     if (!playerId) return;
     const validSlots = ['title', 'frame', 'entrance', 'barrage'];
+    // r14 GAP-B-MAJOR-01：§19.2 L2370 shop_equip_failed unicast；以前 5 处用 _broadcast 会让所有观众看到失败 toast
+    const _failEquip = (reason, _slot, _itemId) => {
+      const _msg = { type: 'shop_equip_failed', data: { playerId, reason, slot: _slot || '', itemId: _itemId || '' } };
+      if (!this._sendToPlayer(playerId, _msg)) this._broadcast(_msg);
+    };
     if (!validSlots.includes(slot)) {
-      return this._broadcast({
-        type: 'shop_equip_failed',
-        data: { playerId, reason: 'slot_mismatch', slot: slot || '', itemId: itemId || '' },
-      });
+      _failEquip('slot_mismatch', slot, itemId);
+      return;
     }
 
     // 2s 冷却（卸下也走同冷却）
     const now = Date.now();
     const last = this._shopLastEquipAt[playerId] || 0;
     if (now - last < SHOP_EQUIP_COOLDOWN_MS) {
-      return this._broadcast({
-        type: 'shop_equip_failed',
-        data: { playerId, reason: 'too_frequent', slot, itemId: itemId || '' },
-      });
+      _failEquip('too_frequent', slot, itemId);
+      return;
     }
 
     if (itemId === null || itemId === undefined || itemId === '') {
@@ -9475,26 +9486,20 @@ class SurvivalGameEngine {
       });
     }
 
-    // 装上：owned 校验 + slot 匹配
+    // 装上：owned 校验 + slot 匹配（r14 GAP-B-MAJOR-01：单播失败原因）
     const cfg = SHOP_CATALOG[itemId];
     if (!cfg) {
-      return this._broadcast({
-        type: 'shop_equip_failed',
-        data: { playerId, reason: 'not_owned', slot, itemId },
-      });
+      _failEquip('not_owned', slot, itemId);
+      return;
     }
     if (cfg.slot !== slot) {
-      return this._broadcast({
-        type: 'shop_equip_failed',
-        data: { playerId, reason: 'slot_mismatch', slot, itemId },
-      });
+      _failEquip('slot_mismatch', slot, itemId);
+      return;
     }
     const owned = this._playerShopInventory[playerId] || [];
     if (!owned.includes(itemId)) {
-      return this._broadcast({
-        type: 'shop_equip_failed',
-        data: { playerId, reason: 'not_owned', slot, itemId },
-      });
+      _failEquip('not_owned', slot, itemId);
+      return;
     }
 
     // 成功：更新装备 + 冷却

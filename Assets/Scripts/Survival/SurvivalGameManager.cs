@@ -2182,7 +2182,8 @@ namespace DrscfZ.Survival
                 "全力防守！集中火力击杀BOSS！",
                 new Color(1f, 0.2f, 0.2f), 4f);
             SurvivalCameraController.Shake(0.3f, 0.8f);
-            Systems.AudioManager.Instance?.PlaySFX("sfx_gate_alarm");
+            // r14 GAP-C14-02：原字面量 "sfx_gate_alarm" → AudioConstants.SFX_GATE_ALARM 常量
+            Systems.AudioManager.Instance?.PlaySFX(AudioConstants.SFX_GATE_ALARM);
             Debug.Log("[SurvivalGM] BOSS出现！全员备战！");
         }
 
@@ -2915,6 +2916,8 @@ namespace DrscfZ.Survival
                 case "not_under_attack":            return "未被攻击，无法反击";
                 case "wrong_phase":                 return "当前阶段不允许发起";
                 case "feature_locked":              return "功能未解锁";
+                // r14 GAP-B-MINOR-03：补 room_not_found（SurvivalRoom.js:901/937 + TribeWarManager.js:87/111 实发）
+                case "room_not_found":              return "目标房间不存在";
                 default:                            return reason;
             }
         }

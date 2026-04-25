@@ -199,9 +199,9 @@ namespace DrscfZ.UI
             // 抖动效果
             yield return ShakeAnimation(rt, endX, yPos);
 
-            // 播放升级音效
+            // 播放升级音效（r14 GAP-C14-03：原字面量 "upgrade" → AudioConstants.SFX_UPGRADE 常量）
             if (Systems.AudioManager.Instance != null)
-                Systems.AudioManager.Instance.PlaySFX("upgrade");
+                Systems.AudioManager.Instance.PlaySFX(AudioConstants.SFX_UPGRADE);
 
             // 停留
             yield return new WaitForSeconds(displayDuration);
