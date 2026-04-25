@@ -113,8 +113,32 @@ namespace DrscfZ.UI
             if (data == null) return;
             int durationSec = data.durationSec > 0 ? data.durationSec : 30;
 
-            if (_titleLabel != null) _titleLabel.text = "新赛季即将开始...";
-            if (_themeLabel != null) _themeLabel.text = $"赛季 {data.newSeasonId} 主题：{LocalizeTheme(data.newThemeId)}";
+            // r15 GAP-B-MAJOR-04 / GAP-D-MAJOR-02：消费 waveIdx + nightModifier 区分两种触发源
+            //   waveIdx > 0 → audit-r6 §36.10 夜晚 Boss 波前窗口（显示倒计时 + nightModifier 氛围信息）
+            //   waveIdx <= 0 → SeasonManager 赛季切换（显示新主题）
+            if (data.waveIdx > 0)
+            {
+                if (_titleLabel != null) _titleLabel.text = "下一波倒计时";
+                // 显示 nightModifier 氛围（r12 D03 服务端透传 / r15 GAP-D-MAJOR-03 字段对齐为 {id, name, description}）
+                if (_themeLabel != null)
+                {
+                    if (data.nightModifier != null && !string.IsNullOrEmpty(data.nightModifier.id) && data.nightModifier.id != "normal")
+                    {
+                        string nmName = string.IsNullOrEmpty(data.nightModifier.name) ? data.nightModifier.id : data.nightModifier.name;
+                        string nmDesc = data.nightModifier.description ?? "";
+                        _themeLabel.text = string.IsNullOrEmpty(nmDesc) ? $"今晚：{nmName}" : $"今晚：{nmName}（{nmDesc}）";
+                    }
+                    else
+                    {
+                        _themeLabel.text = "请准备迎接下一波怪物";
+                    }
+                }
+            }
+            else
+            {
+                if (_titleLabel != null) _titleLabel.text = "新赛季即将开始...";
+                if (_themeLabel != null) _themeLabel.text = $"赛季 {data.newSeasonId} 主题：{LocalizeTheme(data.newThemeId)}";
+            }
 
             // 请求 A 类 modal（可能被更高优先级抢占；被抢占则 OnReplaced 清理）
             bool ok = ModalRegistry.Request(MODAL_A_ID, MODAL_A_PRIORITY, OnReplaced);

@@ -78,8 +78,8 @@ namespace DrscfZ.UI
 
         // 活跃动画实例（礼物弹窗）
         private List<GiftAnimInstance> _activeAnims = new List<GiftAnimInstance>();
-        private GiftHandler _giftHandler;
-        private bool _subscribed;
+        // r15 Legacy 阶段 A 解耦：删除 _giftHandler / _subscribed 字段（旧角力游戏 GiftHandler 路径）
+        // 保留 _survivalSubscribed（SurvivalGameManager.OnGiftReceived 是当前唯一活跃路径）
         private bool _survivalSubscribed;
 
         // VIP 入场队列
@@ -128,18 +128,8 @@ namespace DrscfZ.UI
 
         private void TrySubscribe()
         {
-            // 旧版卡皮巴拉对决 GiftHandler（gift_received）
-            if (!_subscribed)
-            {
-                _giftHandler = FindObjectOfType<GiftHandler>();
-                if (_giftHandler != null)
-                {
-                    _giftHandler.OnGiftReceived += OnGiftReceived;
-                    _subscribed = true;
-                }
-            }
-
-            // 生存模式 SurvivalGameManager（survival_gift）
+            // r15 Legacy 阶段 A 解耦：移除旧 GiftHandler（卡皮巴拉对决 gift_received）订阅块
+            // 仅保留 SurvivalGameManager（survival_gift）— 当前唯一活跃路径
             if (!_survivalSubscribed)
             {
                 var sgm = SurvivalGameManager.Instance;
@@ -155,9 +145,7 @@ namespace DrscfZ.UI
         {
             if (Instance == this) Instance = null;
 
-            if (_giftHandler != null)
-                _giftHandler.OnGiftReceived -= OnGiftReceived;
-
+            // r15 Legacy 阶段 A 解耦：移除旧 GiftHandler 解订阅块；仅保留 SurvivalGameManager
             var sgm = SurvivalGameManager.Instance;
             if (sgm != null)
                 sgm.OnGiftReceived -= OnSurvivalGiftReceived;
@@ -213,23 +201,9 @@ namespace DrscfZ.UI
 
         // ==================== 礼物触发 ====================
 
-        private void OnGiftReceived(GiftReceivedData gift)
-        {
-            if (!gameObject.activeInHierarchy) return;
-            if (!SettingsPanelUI.GiftVideoEnabled) return; // 设置面板关闭了礼物视频
-
-            int tier = MapGiftToTier(gift);
-
-            // 超过上限，移除最早的
-            while (_activeAnims.Count >= maxSimultaneous && _activeAnims.Count > 0)
-            {
-                CleanupInstance(_activeAnims[0]);
-                if (_activeAnims[0].go != null) Destroy(_activeAnims[0].go);
-                _activeAnims.RemoveAt(0);
-            }
-
-            ShowGiftPopup(gift, tier, gift.camp);
-        }
+        // r15 Legacy 阶段 A 解耦：删除 OnGiftReceived(GiftReceivedData) 旧角力游戏入口
+        // 该函数仅由 GiftHandler.OnGiftReceived 触发，删除 GiftHandler 订阅后即变孤儿；
+        // 当前所有礼物动画统一走 OnSurvivalGiftReceived → ShowGiftPopup 路径
 
         /// <summary>
         /// 生存模式礼物事件适配器：将 SurvivalGiftData 转换为 GiftReceivedData 后触发动画

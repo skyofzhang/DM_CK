@@ -2907,6 +2907,11 @@ namespace DrscfZ.Survival
             if (string.IsNullOrEmpty(reason)) return "未知原因";
             switch (reason)
             {
+                // r15 GAP-D-MAJOR-04：服务端 TribeWarManager 实发 self_target/attacker_busy/target_busy（非 cannot_attack_self/already_attacking/target_already_under_attack）
+                // 旧 case 保留作向后兼容（若有上游统一改名再清理）
+                case "self_target":                 return "不能攻击自己";
+                case "attacker_busy":               return "已在攻击目标";
+                case "target_busy":                 return "目标已被其他房间攻击";
                 case "cannot_attack_self":          return "不能攻击自己";
                 case "in_cooldown":                 return "冷却中（60s）";
                 case "already_attacking":           return "已在攻击目标";
@@ -2916,18 +2921,23 @@ namespace DrscfZ.Survival
                 case "not_under_attack":            return "未被攻击，无法反击";
                 case "wrong_phase":                 return "当前阶段不允许发起";
                 case "feature_locked":              return "功能未解锁";
-                // r14 GAP-B-MINOR-03：补 room_not_found（SurvivalRoom.js:901/937 + TribeWarManager.js:87/111 实发）
                 case "room_not_found":              return "目标房间不存在";
                 default:                            return reason;
             }
         }
 
-        /// <summary>§35.10 attack_ended.reason → 中文</summary>
+        /// <summary>§35.10 attack_ended.reason → 中文（r15 GAP-D-MAJOR-05：与服务端 TribeWarManager.js:180 / TribeWarSession.js:58 实发 reason 对齐）</summary>
         private static string FormatTribeWarEndReason(string reason)
         {
             if (string.IsNullOrEmpty(reason)) return "结束";
             switch (reason)
             {
+                // r15 GAP-D-MAJOR-05：服务端实发 manual / no_energy / settlement / season_reset
+                case "manual":              return "手动停止";
+                case "no_energy":           return "3 分钟无能量自动断开";
+                case "settlement":          return "游戏结算";
+                case "season_reset":        return "赛季切换";
+                // 旧 case 保留作向后兼容
                 case "manual_stop":         return "手动停止";
                 case "zero_energy_timeout": return "3 分钟无能量自动断开";
                 case "game_ended":          return "游戏结算";

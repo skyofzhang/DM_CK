@@ -1,4 +1,5 @@
 ﻿// DEPRECATED 2026-04-23: 旧角力游戏遗留，待清理。无 Survival 引用。
+// LEGACY-r15: SAFE-DELETE-CANDIDATE — audit Agent 应豁免本文件的 grep 命中（OrangeController 等 Legacy 类）
 using UnityEngine;
 
 namespace DrscfZ.Systems

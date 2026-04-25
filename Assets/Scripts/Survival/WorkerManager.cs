@@ -678,8 +678,8 @@ namespace DrscfZ.Survival
             }
         }
 
-        /// <summary>按playerId查找活跃Worker</summary>
-        private WorkerController FindWorkerByPlayerId(string playerId)
+        /// <summary>按playerId查找活跃Worker（r15 GAP-D-MAJOR-01：改 public 供 UI 层复用，如 NewbieHintUI 触发金色光柱）</summary>
+        public WorkerController FindWorkerByPlayerId(string playerId)
         {
             foreach (var w in _activeWorkers)
                 if (w != null && w.PlayerId == playerId) return w;

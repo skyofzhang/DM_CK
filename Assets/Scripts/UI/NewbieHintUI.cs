@@ -147,6 +147,24 @@ namespace DrscfZ.UI
 
             if (_barrageRun != null) StopCoroutine(_barrageRun);
             _barrageRun = StartCoroutine(BarrageHoldAndFade());
+
+            // r15 GAP-D-MAJOR-01：消费 data.workerId / data.playerId，触发对应矿工头顶金色光柱（§32.2.1 L4007 / §34 B7 L5147）
+            //   r14 服务端 first_barrage 已透传 workerId（_getWorkerIndex 派生）+ -1 sentinel
+            //   优先按 playerId 查（r12 助威者分流后 workerId 可能为 -1），fallback 按 workerId
+            var wm = DrscfZ.Survival.WorkerManager.Instance;
+            if (wm != null)
+            {
+                var worker = wm.FindWorkerByPlayerId(data.playerId);
+                if (worker == null && data.workerId >= 0 && data.workerId < wm.WorkerCount)
+                {
+                    worker = wm.ActiveWorkers[data.workerId];
+                }
+                if (worker != null)
+                {
+                    var visual = worker.GetComponent<DrscfZ.Survival.WorkerVisual>();
+                    if (visual != null) visual.TriggerAssignmentFlash();
+                }
+            }
         }
 
         // ── 协程 ──────────────────────────────────────────────────────

@@ -652,6 +652,18 @@ class SurvivalRoom {
         if (!this._requireBroadcaster(ws, action || 'broadcaster_action')) break;
         // §36.12 broadcaster_boost 门槛（seasonDay ≥ 2）；失败带 action 子动作名
         if (!this._checkFeatureOrFail('broadcaster_boost', 'broadcaster_action_failed', { action }, ws)) break;
+        // r15 GAP-B-MAJOR-01：策划案 §24.3 L2675 明示 broadcaster_action 仅 day/night 受理，恢复期/其他状态拒绝
+        const _engineState = this.survivalEngine && this.survivalEngine.state;
+        if (_engineState !== 'day' && _engineState !== 'night') {
+          try {
+            ws.send(JSON.stringify({
+              type: 'broadcaster_action_failed',
+              timestamp: Date.now(),
+              data: { action, reason: 'wrong_phase' },
+            }));
+          } catch (_) { /* ws closed */ }
+          break;
+        }
         this._handleBroadcasterAction(ws, data);
         break;
       }

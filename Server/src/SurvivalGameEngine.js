@@ -2260,9 +2260,10 @@ class SurvivalGameEngine {
 
     // §39 商店:玩家首次加入/重连时推送其 owned + equipped 快照(ShopUI 背包 Tab 依赖)
     // 整体复核 Critical #2:原实现缺此广播,导致重连后 B 类装备不可见
+    // r15 GAP-E15-4：unicast 给发起方（原 broadcast 会让其他客户端 MyEquipped 被他人数据覆盖）
     const owned    = this._playerShopInventory[playerId] || [];
     const equipped = this._playerShopEquipped[playerId]  || {};
-    this.broadcast({
+    const _invMsg = {
       type: 'shop_inventory_data',
       timestamp: Date.now(),
       data: {
@@ -2275,7 +2276,8 @@ class SurvivalGameEngine {
           barrage:  equipped.barrage  || '',
         },
       },
-    });
+    };
+    if (!this._sendToPlayer(playerId, _invMsg)) this.broadcast(_invMsg);
 
     // §34 B7 新手引导：单播欢迎横幅
     //   触发条件：玩家无 _lifetimeContrib 记录（全新用户）或当前为赛季 1
@@ -2980,8 +2982,12 @@ class SurvivalGameEngine {
       // §31 Boss 刷新侧随机选（供首领卫兵同侧刷新参考；'all' 亦允许）
       const sides = ['left', 'right', 'top', 'all'];
       this._lastBossSpawnSide = sides[Math.floor(Math.random() * sides.length)];
-      // r14 GAP-A14-A2：boss_appeared 与实际 spawn (L4138) 用相同乘数，避免 Hard 难度下客户端血条 fillRatio 错位
-      const _bossSpawnHp = Math.max(1, Math.round(cfg.boss.hp * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * (this._themeBossHpMult || 1.0)));
+      // r14 GAP-A14-A2 / r15 GAP-A15-A1：boss_appeared 与实际 spawn (L4148) 用相同乘数链
+      //   L4109 hpMult = _monsterHpMult × _dynamicHpMult × _themeHpMult
+      //   L4148 Boss = cfg.boss.hp × hpMult × _themeBossHpMult
+      //   完整乘数 = _monsterHpMult × _dynamicHpMult × _themeHpMult × _themeBossHpMult
+      //   r14 修复时漏 _themeHpMult（blood_moon 主题 ×1.2），r15 补齐
+      const _bossSpawnHp = Math.max(1, Math.round(cfg.boss.hp * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0) * (this._themeBossHpMult || 1.0)));
       this.broadcast({
         type: 'boss_appeared',
         timestamp: Date.now(),
@@ -4652,10 +4658,15 @@ class SurvivalGameEngine {
         if (!inTribeWar) allowVoteTypes.push('tribe_war');
       } catch (e) { /* 兜底：派生失败保持空数组 */ }
 
-      // audit-r12 GAP-D03：透传 nightModifier（策划案 §36.10 L6253 + §34 B10b L5191
-      //   Boss 波前 30s 投票窗口需显示"今晚血月 Boss HP×3"等氛围信息）
+      // audit-r12 GAP-D03 / r15 GAP-D-MAJOR-03：透传 nightModifier（策划案 §36.10 L6253 + §34 B10b L5191）
+      //   r15 修字段对齐：原 emit {id, label} 与客户端 NightModifierData {id, name, description} 不匹配，name/description 永远为 null
+      //   修后 emit {id, name, description}（NIGHT_MODIFIERS 表实际字段 m.id / m.name / m.desc）
       const nightModifierForWaiting = this._currentNightModifier
-        ? { id: this._currentNightModifier.id, label: this._currentNightModifier.label || this._currentNightModifier.id }
+        ? {
+            id:          this._currentNightModifier.id,
+            name:        this._currentNightModifier.name || this._currentNightModifier.id,
+            description: this._currentNightModifier.desc || '',
+          }
         : null;
       _engineRef.broadcast({
         type: 'waiting_phase_started',
@@ -8023,7 +8034,12 @@ class SurvivalGameEngine {
    */
   handleBroadcasterRouletteSpin(playerId) {
     // TODO: if (this._roomCreatorId && playerId !== this._roomCreatorId) { broadcast roulette_forbidden; return; }
-    if (this.state !== 'day' && this.state !== 'night') return;
+    // r15 GAP-B-MAJOR-02：策划案 §24.3 L2676 明示 spin 在 recovery/idle/loading/settlement 应回 roulette_spin_failed { wrong_phase }
+    if (this.state !== 'day' && this.state !== 'night') {
+      const _failMsg = { type: 'roulette_spin_failed', data: { reason: 'wrong_phase' } };
+      if (!this._sendToPlayer(playerId, _failMsg)) this._broadcast(_failMsg);
+      return;
+    }
     const ok = this._roulette.spin(Date.now());
     if (!ok) {
       console.log(`[SurvivalEngine] Roulette spin rejected (ready=${this._roulette._readyAt}, pending=${!!this._roulette._pending})`);
@@ -9149,10 +9165,13 @@ class SurvivalGameEngine {
       expiresAt,
     });
 
-    this._broadcast({
+    // r15 GAP-E15-3：shop_purchase_confirm_prompt 单播给发起方（§39.7 step 2 "回推"）
+    //   原 _broadcast 会让全房观众都弹出双确认窗（虽然 server 校验 pendingId 阻止冒名提交，但 UI 撕裂）
+    const _confirmMsg = {
       type: 'shop_purchase_confirm_prompt',
       data: { playerId, pendingId, itemId, price: cfg.price, expiresAt },
-    });
+    };
+    if (!this._sendToPlayer(playerId, _confirmMsg)) this._broadcast(_confirmMsg);
     console.log(`[Shop] prepare: player=${this._getPlayerName(playerId)} itemId=${itemId} price=${cfg.price} pending=${pendingId}`);
   }
 
@@ -9475,19 +9494,28 @@ class SurvivalGameEngine {
       return;
     }
 
+    // r15 GAP-B-MAJOR-03：shop_equip_changed §19.2 L2375 unicast（仅回发起方，不全房广播私人装备切换）
+    const _emitEquipChanged = (msgItemId) => {
+      const _msg = { type: 'shop_equip_changed', data: { playerId, slot, itemId: msgItemId } };
+      if (!this._sendToPlayer(playerId, _msg)) this._broadcast(_msg);
+    };
+
     if (itemId === null || itemId === undefined || itemId === '') {
       // 卸下该槽位
       if (!this._playerShopEquipped[playerId]) this._playerShopEquipped[playerId] = {};
       delete this._playerShopEquipped[playerId][slot];
       this._shopLastEquipAt[playerId] = now;
-      return this._broadcast({
-        type: 'shop_equip_changed',
-        data: { playerId, slot, itemId: '' },
-      });
+      _emitEquipChanged('');
+      return;
     }
 
-    // 装上：owned 校验 + slot 匹配（r14 GAP-B-MAJOR-01：单播失败原因）
-    const cfg = SHOP_CATALOG[itemId];
+    // 装上：owned 校验 + slot 匹配（r14 GAP-B-MAJOR-01：失败 unicast / r15 GAP-E15-1：fallback _seasonShopPool）
+    let cfg = SHOP_CATALOG[itemId];
+    if (!cfg && Array.isArray(this._seasonShopPool)) {
+      // r15 GAP-E15-1：跨赛季限定 SKU（b9_*/b10_*）装备时 fallback _seasonShopPool 查询
+      const seasonItem = this._seasonShopPool.find(it => it && it.id === itemId);
+      if (seasonItem) cfg = seasonItem;
+    }
     if (!cfg) {
       _failEquip('not_owned', slot, itemId);
       return;
@@ -9502,15 +9530,12 @@ class SurvivalGameEngine {
       return;
     }
 
-    // 成功：更新装备 + 冷却
+    // 成功：更新装备 + 冷却（r15 GAP-B-MAJOR-03：unicast）
     if (!this._playerShopEquipped[playerId]) this._playerShopEquipped[playerId] = {};
     this._playerShopEquipped[playerId][slot] = itemId;
     this._shopLastEquipAt[playerId] = now;
 
-    this._broadcast({
-      type: 'shop_equip_changed',
-      data: { playerId, slot, itemId },
-    });
+    _emitEquipChanged(itemId);
 
     // 若装上 entrance_spark → 触发入场特效（若 VIP 广播路径存在则复用；MVP log 占位）
     if (itemId === 'entrance_spark') {

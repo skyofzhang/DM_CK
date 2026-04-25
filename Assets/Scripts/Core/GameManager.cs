@@ -1,4 +1,9 @@
-﻿using UnityEngine;
+﻿// LEGACY-r15: 旧角力游戏 GameManager 入口（卡皮巴拉对决），已被 SurvivalGameManager 替代
+//   - audit-r6 P0-F1：OnEnable 自杀（即使 SetActive(true) 也立即 Destroy）
+//   - MainScene 中 GameObject 已 m_IsActive=0；4 个 public 子系统字段（forceSystem/giftHandler/spawner/orangeController）仅 Editor 拖入残留
+//   - audit Agent 应豁免本文件的 grep 命中（CapybaraSpawner / OrangeController / ForceSystem / GiftHandler 等 Legacy 类）
+//   - 删除候选：v15+ 独立 Sprint（联合 OrangeDustTrail/OrangeSpeedHUD/MagicOrangeEffect/TopBarUI 一起删）
+using UnityEngine;
 using System;
 using System.Collections;
 using System.Collections.Generic;

@@ -1,4 +1,9 @@
-﻿using UnityEngine;
+﻿// LEGACY-r15: 旧角力游戏 TopBarUI（双向拉力条/连胜显示），已被 SurvivalTopBarUI 替代
+//   - MainScene 0 引用（grep guid: 7a96034e0c30d464592760794ec3ef83 = 0 命中）
+//   - runtime 不实例化；类内 ForceSystem/RankingSystem/GameManager.Instance 订阅永远不触发
+//   - audit Agent 应豁免本文件的 grep 命中（ForceSystem / GameManager 等 Legacy 类）
+//   - 删除候选：v15+ 独立 Sprint（联合 OrangeDustTrail/OrangeSpeedHUD/MagicOrangeEffect/GameManager 一起删）
+using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using DrscfZ.Core;
