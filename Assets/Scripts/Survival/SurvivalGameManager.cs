@@ -1550,7 +1550,7 @@ namespace DrscfZ.Survival
                 DrscfZ.Systems.AudioManager.Instance?.CrossfadeBGM(DrscfZ.Core.AudioConstants.BGM_LOSE, 1.5f);
             }
 
-            // 直接通知SettlementUI（它可能处于inactive状态，无法通过事件收到）
+            // 直接通知 SurvivalSettlementUI（它可能处于 inactive 状态，无法通过事件收到）
             if (_settlementUI != null)
             {
                 // 将服务器排行映射到结算 UI 数据结构

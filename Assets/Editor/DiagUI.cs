@@ -33,7 +33,7 @@ public static class DiagUI
         foreach (var u in allIdleUIs)
             Debug.Log($"[DiagUI] SurvivalIdleUI 挂在: {GetPath(u.gameObject)} (activeInHierarchy={u.gameObject.activeInHierarchy})");
 
-        // ── 3. SettlementUI 挂在哪个 GameObject ──
+        // ── 3. SurvivalSettlementUI 挂在哪个 GameObject ──
         var allSettlementUIs = Resources.FindObjectsOfTypeAll<DrscfZ.UI.SurvivalSettlementUI>();
         if (allSettlementUIs.Length == 0)
             Debug.LogError("[DiagUI] 找不到 SurvivalSettlementUI");

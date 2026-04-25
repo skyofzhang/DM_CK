@@ -27,7 +27,7 @@ namespace DrscfZ.UI
     {
         public static TribeWarLobbyUI Instance { get; private set; }
 
-        // §17.16 audit-r11 GAP-B01：A 类阻塞 modal — 与 SettlementUI / GateUpgradeConfirmUI 互斥
+        // §17.16 audit-r11 GAP-B01：A 类阻塞 modal — 与 SurvivalSettlementUI / GateUpgradeConfirmUI 互斥
         private const string MODAL_A_ID = "tribe_war_lobby";
 
         // ==================== Inspector 字段（Prefab 绑定由人工） ====================
@@ -73,7 +73,7 @@ namespace DrscfZ.UI
         // ==================== 对外接口 ====================
 
         /// <summary>打开面板并请求最新房间列表。
-        /// §17.16 audit-r11：申请 A 类 modal（priority=70），与 SettlementUI(85) / GateUpgradeConfirmUI(75) 互斥。</summary>
+        /// §17.16 audit-r11：申请 A 类 modal（priority=70），与 SurvivalSettlementUI(85) / GateUpgradeConfirmUI(75) 互斥。</summary>
         public void OpenPanel()
         {
             if (_panel == null)
