@@ -4948,7 +4948,10 @@ class SurvivalGameEngine {
       themeHpMult  = MODIFIER_POLAR_VARIANT_STAT_MULT;
       themeAtkMult = MODIFIER_POLAR_VARIANT_STAT_MULT;
     }
-    const baseHp       = Math.max(1, Math.round(cfg.normal ? cfg.normal.hp * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * themeHpMult : 50));
+    // r16 GAP-R16-PM-02：补 _themeHpMult（赛季主题层）
+    //   原仅含 themeHpMult（夜间修饰符 polar_night 层），漏 _themeHpMult（赛季主题 blood_moon=1.2 层）
+    //   完整链与 _initActiveMonsters L4115 对齐：_monsterHpMult × _dynamicHpMult × _themeHpMult × _themeMonsterHpMult
+    const baseHp       = Math.max(1, Math.round(cfg.normal ? cfg.normal.hp * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0) * themeHpMult : 50));
     const baseAtk      = Math.max(1, Math.round((cfg.normal ? cfg.normal.atk : 3) * themeAtkMult));
     const baseSpd      = cfg.normal ? cfg.normal.spd : 2.0;
     const waveMonsters = [];
@@ -5198,7 +5201,9 @@ class SurvivalGameEngine {
   _spawnBossGuards(day) {
     const cfg = getWaveConfig(day);
     if (!cfg || !cfg.boss) return;
-    const guardHpRaw = Math.floor(cfg.boss.hp * GUARD_HP_RATIO * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0));
+    // r16 GAP-R16-PM-03：补 _themeHpMult / _themeBossHpMult（与 boss_appeared L2990 4 乘数链对齐）
+    //   guard 派生自 Boss HP（×30%），应跟随相同主题倍率链；blood_moon 主题（_themeHpMult=1.2）下 guard HP 不再错位 ×1.2
+    const guardHpRaw = Math.floor(cfg.boss.hp * GUARD_HP_RATIO * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0) * (this._themeBossHpMult || 1.0));
     const guardHp    = Math.max(1, guardHpRaw);
     const guardAtk   = (cfg.normal ? cfg.normal.atk : 3) * GUARD_ATK_MULT;
     const guardSpd   = +((cfg.normal ? cfg.normal.spd : 2.0) * (VARIANT_SPEED_MULT.guard || 1.0)).toFixed(2);
@@ -9568,8 +9573,11 @@ class SurvivalGameEngine {
     const equipped = this._playerShopEquipped[playerId]  || {};
     const balance  = this._contribBalance[playerId]      || 0;
     const lifetime = this._lifetimeContrib[playerId]     || 0;
-    this._broadcast({
+    // r16 GAP-R16-PM-01：r15 GAP-E15-4 同形态遗漏 — 主动刷新路径也应 unicast
+    //   防其他客户端 MyEquipped/contribBalance 被该玩家数据覆盖（§39.9 / §19.2 L2375 unicast 规范）
+    const _invMsg = {
       type: 'shop_inventory_data',
+      timestamp: Date.now(),
       data: {
         playerId,
         owned: Array.isArray(owned) ? owned.slice() : [],
@@ -9582,7 +9590,8 @@ class SurvivalGameEngine {
         contribBalance:  Math.round(balance),
         lifetimeContrib: Math.round(lifetime),
       },
-    });
+    };
+    if (!this._sendToPlayer(playerId, _invMsg)) this._broadcast(_invMsg);
   }
 
   /**
