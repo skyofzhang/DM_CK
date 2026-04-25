@@ -6999,7 +6999,9 @@ class SurvivalGameEngine {
     if (!cfg.boss) return;
     const themeHpMult = this._themeHpMult || 1.0;
     const hpMult  = (this._monsterHpMult  || 1.0) * (this._dynamicHpMult   || 1.0) * themeHpMult;
-    const hp = Math.max(1, Math.round(cfg.boss.hp * hpMult));
+    // r17 GAP-R17-PM-01：补 _themeBossHpMult（与 boss_appeared L2990 / _initActiveMonsters L4154 / _spawnBossGuards L5206 / _scheduleActEndMiniBossRush L7031 4 乘数链对齐）
+    //   serene 主题（_themeBossHpMult=0.9）下 act1 双 Boss 第 2 只原本错位 ×1.11；blood_moon 影响小（_themeBossHpMult=1.0）但仍属设计不一致
+    const hp = Math.max(1, Math.round(cfg.boss.hp * hpMult * (this._themeBossHpMult || 1.0)));
     const id = `b_${day}_actend_${++this._monsterIdCounter}`;
     this._activeMonsters.set(id, {
       id,
@@ -7283,7 +7285,9 @@ class SurvivalGameEngine {
         const cfg = getWaveConfig(day);
         this._activeMonsters.clear();
         if (cfg.boss) {
-          const bossHp = Math.max(1, Math.round(cfg.boss.hp * MODIFIER_BLOOD_MOON_BOSS_HP_MULT));
+          // r17 GAP-R17-PM-02：补 4 乘数链 _monsterHpMult × _dynamicHpMult × _themeHpMult × _themeBossHpMult（与 boss_appeared L2990 4 乘数链对齐）
+          //   原仅 cfg.boss.hp × MODIFIER_BLOOD_MOON_BOSS_HP_MULT 单乘数 — Hard 难度 × 高动态难度下错位 ×2.25
+          const bossHp = Math.max(1, Math.round(cfg.boss.hp * MODIFIER_BLOOD_MOON_BOSS_HP_MULT * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0) * (this._themeBossHpMult || 1.0)));
           const id = `b_${day}_bm_${++this._monsterIdCounter}`;
           this._activeMonsters.set(id, {
             id, type: 'boss', variant: 'normal',
@@ -7296,7 +7300,9 @@ class SurvivalGameEngine {
           });
         }
         if (cfg.elite) {
-          const eliteHp = Math.max(1, Math.round(cfg.elite.hp * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0)));
+          // r17 GAP-R17-PM-03：补 _themeHpMult（赛季主题层）— 与 _initActiveMonsters L4138 / _spawnWave L4954 elite 同形态对齐
+          //   原仅 _monsterHpMult × _dynamicHpMult，blood_moon 主题下错位 ×1.2（注：elite 不叠 _themeBossHpMult，那只用于 Boss 派生层）
+          const eliteHp = Math.max(1, Math.round(cfg.elite.hp * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0)));
           for (let i = 0; i < MODIFIER_BLOOD_MOON_ELITE_COUNT; i++) {
             const id = `e_${day}_bm_${++this._monsterIdCounter}`;
             this._activeMonsters.set(id, {

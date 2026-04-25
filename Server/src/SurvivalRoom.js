@@ -832,7 +832,9 @@ class SurvivalRoom {
         const pidI = ws._playerId || (data && data.playerId) || '';
         this._refreshVeteranStatus();
         if (!isFeatureUnlocked(this, 'shop')) {
-          this.broadcast({
+          // r17 GAP-R17-PM-04：locked 路径 broadcast → unicast（与 r15 GAP-E15-4 / r16 GAP-R16-PM-01 同形态延伸）
+          //   shop_inventory_data 含 owned/equipped/contribBalance 私有数据，必须 unicast 避免他客户端 MyEquipped 被该玩家空数据覆盖
+          const _lockedMsg = {
             type: 'shop_inventory_data',
             timestamp: Date.now(),
             data: {
@@ -842,7 +844,12 @@ class SurvivalRoom {
               contribBalance: 0,
               lifetimeContrib: 0,
             },
-          });
+          };
+          if (ws && typeof ws.send === 'function') {
+            try { ws.send(JSON.stringify(_lockedMsg)); } catch (_e) { this.broadcast(_lockedMsg); }
+          } else {
+            this.broadcast(_lockedMsg);
+          }
           break;
         }
         this.survivalEngine.handleShopInventory(pidI);
