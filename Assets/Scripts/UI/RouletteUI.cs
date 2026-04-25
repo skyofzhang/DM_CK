@@ -403,8 +403,11 @@ namespace DrscfZ.UI
             if (net != null && net.IsConnected)
             {
                 long ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                net.SendJson($"{{\"type\":\"broadcaster_roulette_apply\",\"data\":{{}},\"timestamp\":{ts}}}");
-                Debug.Log($"[RouletteUI] 发送 broadcaster_roulette_apply (cardId={_currentResult?.cardId})");
+                // audit-r12 GAP-B03：携带 cardId（策划案 §19.1 L2216；服务端用 _pending.cardId 比对，不一致静默忽略防伪造）
+                string cardIdStr = _currentResult?.cardId ?? "";
+                string esc = cardIdStr.Replace("\\", "\\\\").Replace("\"", "\\\"");
+                net.SendJson($"{{\"type\":\"broadcaster_roulette_apply\",\"data\":{{\"cardId\":\"{esc}\"}},\"timestamp\":{ts}}}");
+                Debug.Log($"[RouletteUI] 发送 broadcaster_roulette_apply (cardId={cardIdStr})");
             }
 
             // 关闭面板，回到充能阶段（服务端随后会推 RouletteReady 启动新一轮计时）；§17.16 走 ModalRegistry

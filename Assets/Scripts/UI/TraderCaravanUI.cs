@@ -29,6 +29,10 @@ namespace DrscfZ.UI
     {
         public static TraderCaravanUI Instance { get; private set; }
 
+        // audit-r12 GAP-B02：§17.16 互斥组 A 阻塞型 modal id（priority=65 比 TraderOffer 低,因后者是主播主动邀约）
+        private const string MODAL_A_ID = "trader_caravan";
+        private const int    MODAL_PRIO = 65;
+
         // ==================== Inspector 字段 ====================
 
         [Header("面板根（初始 inactive）")]
@@ -66,6 +70,7 @@ namespace DrscfZ.UI
 
         private void OnDestroy()
         {
+            ModalRegistry.Release(MODAL_A_ID);  // audit-r12 GAP-B02 兜底释放
             if (Instance == this) Instance = null;
         }
 
@@ -105,6 +110,12 @@ namespace DrscfZ.UI
             if (_descText != null)
                 _descText.text = "主播决定：\n<color=#FFC020>接受</color> 200食物 + 50矿石 → 城门立即 Lv+1\n<color=#AAAAAA>拒绝</color> 放弃本次交易";
 
+            // audit-r12 GAP-B02：§17.16 互斥组 A 注册
+            if (!ModalRegistry.Request(MODAL_A_ID, MODAL_PRIO, OnModalReplaced))
+            {
+                Debug.LogWarning($"[TraderCaravanUI] ModalRegistry.Request 被拒（更高优先级 modal 在前）");
+            }
+
             _panel.SetActive(true);
 
             // 启动超时自动关闭
@@ -112,6 +123,15 @@ namespace DrscfZ.UI
             _timeoutCoroutine = StartCoroutine(AutoCloseOnExpiry());
 
             Debug.Log($"[TraderCaravanUI] 显示商队交易面板 expeditionId={data.expeditionId} eventEndsAt={data.eventEndsAt}");
+        }
+
+        // audit-r12 GAP-B02：被高优先级 modal 抢占时关闭自身
+        private void OnModalReplaced()
+        {
+            if (_timeoutCoroutine != null) { StopCoroutine(_timeoutCoroutine); _timeoutCoroutine = null; }
+            if (_panel != null) _panel.SetActive(false);
+            _expeditionId    = null;
+            _expiresAtUnixMs = 0;
         }
 
         // ==================== 按钮回调 ====================
@@ -159,6 +179,7 @@ namespace DrscfZ.UI
             if (_panel != null) _panel.SetActive(false);
             _expeditionId    = null;
             _expiresAtUnixMs = 0;
+            ModalRegistry.Release(MODAL_A_ID);  // audit-r12 GAP-B02
         }
 
         // ==================== 工具 ====================

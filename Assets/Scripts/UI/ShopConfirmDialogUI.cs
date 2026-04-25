@@ -22,6 +22,9 @@ namespace DrscfZ.UI
     {
         public static ShopConfirmDialogUI Instance { get; private set; }
 
+        // audit-r12 GAP-B02：§17.16 互斥组 B 短时弹窗 modal id（5s TTL,排队不阻塞）
+        private const string MODAL_B_ID = "shop_confirm_dialog";
+
         // ==================== Inspector 字段 ====================
 
         [Header("面板根（初始 inactive）")]
@@ -58,6 +61,7 @@ namespace DrscfZ.UI
 
         private void OnDestroy()
         {
+            ModalRegistry.ReleaseB(MODAL_B_ID);  // audit-r12 GAP-B02 兜底释放
             if (Instance == this) Instance = null;
         }
 
@@ -82,6 +86,9 @@ namespace DrscfZ.UI
             if (_titleText != null) _titleText.text = $"确认购买 {itemName}？";
             if (_priceText != null) _priceText.text = $"价格：{data.price}";
             if (_timerText != null) _timerText.text = ComputeRemainSecText();
+
+            // audit-r12 GAP-B02：§17.16 互斥组 B 短时弹窗注册（B 类 FIFO 不抢占）
+            ModalRegistry.RequestB(MODAL_B_ID, null);
 
             _panel.SetActive(true);
 
@@ -144,6 +151,7 @@ namespace DrscfZ.UI
             _pendingId       = null;
             _itemId          = null;
             _expiresAtUnixMs = 0;
+            ModalRegistry.ReleaseB(MODAL_B_ID);  // audit-r12 GAP-B02
         }
     }
 }

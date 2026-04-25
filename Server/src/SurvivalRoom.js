@@ -670,8 +670,10 @@ class SurvivalRoom {
         if (!this._requireBroadcaster(ws, 'roulette_apply')) break;
         if (!this._checkFeatureOrFail('roulette', 'roulette_spin_failed', {}, ws)) break;
         const pid = ws._playerId || '';
-        this.survivalEngine.handleBroadcasterRouletteApply(pid);
-        this._gmAudit(ws, 'roulette_apply', {});
+        // audit-r12 GAP-B03：透传 cardId 给 engine 做防伪造比对
+        const clientCardId = (data && typeof data.cardId === 'string') ? data.cardId : null;
+        this.survivalEngine.handleBroadcasterRouletteApply(pid, clientCardId);
+        this._gmAudit(ws, 'roulette_apply', { cardId: clientCardId });
         break;
       }
       case 'broadcaster_trader_accept': {

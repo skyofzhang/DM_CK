@@ -954,6 +954,10 @@ namespace DrscfZ.Survival
             if (_state != State.Dead) return;
             _respawnAt = 0;
             TransitionTo(State.Idle);
+
+            // audit-r12 GAP-C01：§29.2 矿工派遣/复活到工位（unit_spawn）
+            DrscfZ.Systems.AudioManager.Instance?.PlaySFX(DrscfZ.Core.AudioConstants.SFX_UNIT_SPAWN);
+
             // 复活后自动参与战斗（若夜晚还有怪）
             var monster = FindNearestActiveMonster();
             if (monster != null)

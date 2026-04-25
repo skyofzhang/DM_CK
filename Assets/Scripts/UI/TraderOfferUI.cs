@@ -25,6 +25,10 @@ namespace DrscfZ.UI
     {
         public static TraderOfferUI Instance { get; private set; }
 
+        // audit-r12 GAP-B02：§17.16 互斥组 A 阻塞型 modal id（priority=70 与 TribeWarLobbyUI 同档）
+        private const string MODAL_A_ID  = "trader_offer";
+        private const int    MODAL_PRIO  = 70;
+
         // ==================== Inspector 字段 ====================
 
         [Header("面板根（初始 inactive）")]
@@ -63,7 +67,12 @@ namespace DrscfZ.UI
 
         private void OnEnable()  { TrySubscribe(); }
         private void OnDisable() { Unsubscribe();  }
-        private void OnDestroy() { Unsubscribe(); if (Instance == this) Instance = null; }
+        private void OnDestroy()
+        {
+            Unsubscribe();
+            ModalRegistry.Release(MODAL_A_ID);  // audit-r12 GAP-B02 兜底释放
+            if (Instance == this) Instance = null;
+        }
 
         private void Update()
         {
@@ -122,6 +131,12 @@ namespace DrscfZ.UI
             if (_cardAText != null) _cardAText.text = $"A：{FormatCard(data.cardA)}";
             if (_cardBText != null) _cardBText.text = $"B：{FormatCard(data.cardB)}";
 
+            // audit-r12 GAP-B02：§17.16 互斥组 A 注册（被更高优先级抢占时回调关面板）
+            if (!ModalRegistry.Request(MODAL_A_ID, MODAL_PRIO, OnModalReplaced))
+            {
+                Debug.LogWarning($"[TraderOfferUI] ModalRegistry.Request 被拒（更高优先级 modal 在前），降级为后台等待");
+            }
+
             _panel.SetActive(true);
             Debug.Log($"[TraderOfferUI] 显示交易邀约：A={FormatCard(data.cardA)} B={FormatCard(data.cardB)}");
 
@@ -157,6 +172,15 @@ namespace DrscfZ.UI
         }
 
         private void ClosePanel()
+        {
+            if (_timeoutCoroutine != null) { StopCoroutine(_timeoutCoroutine); _timeoutCoroutine = null; }
+            if (_panel != null) _panel.SetActive(false);
+            _expiresAtUnixMs = 0;
+            ModalRegistry.Release(MODAL_A_ID);  // audit-r12 GAP-B02
+        }
+
+        // audit-r12 GAP-B02：被高优先级 modal（如结算）抢占时关闭自身，避免叠层
+        private void OnModalReplaced()
         {
             if (_timeoutCoroutine != null) { StopCoroutine(_timeoutCoroutine); _timeoutCoroutine = null; }
             if (_panel != null) _panel.SetActive(false);

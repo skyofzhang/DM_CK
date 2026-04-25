@@ -1689,8 +1689,13 @@ class SurvivalGameEngine {
     //   位置在 F8 之后、助威者分流之前：确保守护者/助威者都能触发一次
     //   cmd 1-4 任意阶段 / cmd 6 夜晚（cmd=5 和 cmd=6-白天 已在 F8 拦截）
     //   Set.has 判断确保每个 playerId 每局只广播一次
+    //   audit-r12 GAP-D01：补 workerId 字段（策划案 §32.2.1 L4005 + §34 B7 L5145 协议规范，
+    //                     客户端 NewbieHintUI/WorkerVisual 据此挂金色光柱到正确矿工）
     if (playerId && cmd >= 1 && cmd <= 6 && !this._firstBarrageReceived.has(playerId)) {
       this._firstBarrageReceived.add(playerId);
+      const wIdx = (typeof this._getWorkerIndex === 'function')
+        ? this._getWorkerIndex(playerId)
+        : -1;
       this.broadcast({
         type: 'first_barrage',
         timestamp: Date.now(),
@@ -1698,9 +1703,10 @@ class SurvivalGameEngine {
           playerId,
           playerName: playerName || playerId,
           cmd,
+          workerId: wIdx >= 0 ? wIdx : null,
         },
       });
-      console.log(`[SurvivalEngine] first_barrage: ${playerName || playerId} cmd=${cmd}`);
+      console.log(`[SurvivalEngine] first_barrage: ${playerName || playerId} cmd=${cmd} workerId=${wIdx}`);
     }
 
     // §33 助威模式分流：
@@ -4636,6 +4642,11 @@ class SurvivalGameEngine {
         if (!inTribeWar) allowVoteTypes.push('tribe_war');
       } catch (e) { /* 兜底：派生失败保持空数组 */ }
 
+      // audit-r12 GAP-D03：透传 nightModifier（策划案 §36.10 L6253 + §34 B10b L5191
+      //   Boss 波前 30s 投票窗口需显示"今晚血月 Boss HP×3"等氛围信息）
+      const nightModifierForWaiting = this._currentNightModifier
+        ? { id: this._currentNightModifier.id, label: this._currentNightModifier.label || this._currentNightModifier.id }
+        : null;
       _engineRef.broadcast({
         type: 'waiting_phase_started',
         timestamp: Date.now(),
@@ -4643,9 +4654,10 @@ class SurvivalGameEngine {
           waveIdx:        wIdx,
           countdownSec:   waitSec,
           allowVoteTypes,
+          nightModifier:  nightModifierForWaiting,
         },
       });
-      console.log(`[SurvivalEngine] waiting_phase_started: day=${day} waveIdx=${wIdx} countdown=${waitSec}s (boss=${!!isBossWave}) allowVoteTypes=[${allowVoteTypes.join(',')}]`);
+      console.log(`[SurvivalEngine] waiting_phase_started: day=${day} waveIdx=${wIdx} countdown=${waitSec}s (boss=${!!isBossWave}) allowVoteTypes=[${allowVoteTypes.join(',')}] nightModifier=${nightModifierForWaiting ? nightModifierForWaiting.id : 'null'}`);
       const waitTimer = setTimeout(() => {
         _engineRef.broadcast({
           type: 'waiting_phase_ended',
@@ -8011,10 +8023,16 @@ class SurvivalGameEngine {
   /**
    * 客户端动画结束回调：执行对应卡片效果
    * cardId 由服务端 pending.cardId 确定，不信任客户端参数
+   * audit-r12 GAP-B03：客户端 cardId 仅作防伪比对，与 _pending.cardId 不一致静默忽略
    */
-  handleBroadcasterRouletteApply(playerId) {
+  handleBroadcasterRouletteApply(playerId, clientCardId) {
     // TODO: 主播鉴权（同 Spin）
     if (this.state !== 'day' && this.state !== 'night') return;
+    if (clientCardId && this._roulette._pending && this._roulette._pending.cardId &&
+        clientCardId !== this._roulette._pending.cardId) {
+      console.warn(`[SurvivalEngine] Roulette apply: client cardId='${clientCardId}' mismatches pending '${this._roulette._pending.cardId}', silently ignore (防伪造)`);
+      return;
+    }
     const ok = this._roulette.apply(Date.now());
     if (!ok) {
       console.log(`[SurvivalEngine] Roulette apply rejected (no pending)`);

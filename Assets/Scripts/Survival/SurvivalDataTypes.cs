@@ -9,7 +9,7 @@ namespace DrscfZ.Survival
     [Serializable]
     public class SurvivalGameStateData
     {
-        public string state;         // "idle" | "day" | "night" | "settlement"
+        public string state;         // "idle" | "day" | "night" | "settlement"（recovery 期由服务端归一为 "day"+variant="recovery"，audit-r12 GAP-A12-04）
         public int    day;           // 当前天数（1-N）
         public float  remainingTime; // 本阶段剩余秒数
         public int    food;
@@ -1514,7 +1514,10 @@ namespace DrscfZ.Survival
         public bool dailyCapBlocked;
 
         // 🆕 P0-B4：上一次 fortressDay 变更的原因（与 FortressDayChangedData.reason + SurvivalGameEndedData.reason 同源枚举）
-        //   'gate_breached' | 'food_depleted' | 'temp_freeze' | 'all_dead' | 'survived' | 'none'
+        //   audit-r12 GAP-B09 注释精化：实际服务端 _lastFortressDayChangeReason 枚举为
+        //   'none' | 'promoted' | 'cap_blocked' | 'cap_reset' | 'newbie_protected' | 'demoted' | 'gate_breached'
+        //   | 'food_depleted' | 'temp_freeze' | 'all_dead' | 'manual'（注：'survived' 字符串实际未发，
+        //   r10 之前注释保留作历史向后兼容）
         //   断线重连时 UI 可据此识别上次降级原因并回放 toast/动画；服务端不下发时 JsonUtility 回落 null/""。
         public string fortressDayChangeReason;
 
@@ -1557,13 +1560,16 @@ namespace DrscfZ.Survival
     }
 
     // ---- A12. §35 P2 反击/攻击扩展 ----
-    /// <summary>攻防战反击/主动攻击（type=tribe_war_retaliate，C→S 或 S→C 反击状态推送）。
+    /// <summary>攻防战反击/主动攻击（type=tribe_war_retaliate）。
+    /// audit-r12 GAP-B10 注释精化：本类型同时承载两个方向：
+    ///   - C→S（客户端发起反击请求）：客户端**仅传** targetRoomId；damageMultiplier **不传**（服务端忽略客户端入参，防伪造）
+    ///   - S→C（服务端推送反击状态/战报）：服务端填 targetRoomId + damageMultiplier
     /// damageMultiplier 由服务端依据攻击方是否有 beacon 建筑决定（1.5 有 / 1.0 无）。</summary>
     [Serializable]
     public class TribeWarRetaliateData
     {
         public string targetRoomId;
-        public float  damageMultiplier;  // 1.5 if has beacon, 1.0 otherwise
+        public float  damageMultiplier;  // S→C only: 1.5 if has beacon, 1.0 otherwise (C→S 客户端不传)
     }
 
     // ==================== §34 B7 新手引导（🆕 v1.27+ audit-r3/P1） ====================

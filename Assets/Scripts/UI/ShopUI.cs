@@ -27,6 +27,10 @@ namespace DrscfZ.UI
     {
         public static ShopUI Instance { get; private set; }
 
+        // audit-r12 GAP-B02：§17.16 互斥组 A 阻塞型 modal id（priority=50 商店主面板,可被结算/升级抢占）
+        private const string MODAL_A_ID = "shop_panel";
+        private const int    MODAL_PRIO = 50;
+
         // ==================== Inspector 字段（Prefab 绑定由人工） ====================
 
         [Header("面板根（初始 inactive）")]
@@ -87,6 +91,7 @@ namespace DrscfZ.UI
                 sgm.OnShopPurchaseFailed  -= HandleShopPurchaseFailedToast;
                 sgm.OnShopPurchaseConfirm -= HandleShopPurchaseConfirmRefresh;
             }
+            ModalRegistry.Release(MODAL_A_ID);  // audit-r12 GAP-B02 兜底释放
             if (Instance == this) Instance = null;
         }
 
@@ -117,11 +122,24 @@ namespace DrscfZ.UI
                 Debug.LogWarning("[ShopUI] OpenPanel：_panel 未绑定（MVP 占位 Log）");
                 return;
             }
+            // audit-r12 GAP-B02：§17.16 互斥组 A 注册
+            if (!ModalRegistry.Request(MODAL_A_ID, MODAL_PRIO, OnModalReplaced))
+            {
+                Debug.LogWarning($"[ShopUI] ModalRegistry.Request 被拒（结算/升级在前），不打开商店");
+                return;
+            }
             _panel.SetActive(true);
             SwitchTab(string.IsNullOrEmpty(category) ? "A" : category);
         }
 
         public void ClosePanel()
+        {
+            if (_panel != null) _panel.SetActive(false);
+            ModalRegistry.Release(MODAL_A_ID);  // audit-r12 GAP-B02
+        }
+
+        // audit-r12 GAP-B02：被结算/升级等高优先级 modal 抢占时关闭自身
+        private void OnModalReplaced()
         {
             if (_panel != null) _panel.SetActive(false);
         }

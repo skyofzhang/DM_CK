@@ -1543,6 +1543,13 @@ namespace DrscfZ.Survival
             dayNightManager?.HandleSettlement();
             OnGameEnded?.Invoke(data);
 
+            // audit-r12 GAP-C03 / Agent-C：§29.1 BGM_LOSE 接入周期性失败结算（manual 主动终止不切）
+            //   v1.26 永续模式 → 任何非 manual 的 game_ended 都视作失败降级
+            if (data != null && data.reason != "manual")
+            {
+                DrscfZ.Systems.AudioManager.Instance?.CrossfadeBGM(DrscfZ.Core.AudioConstants.BGM_LOSE, 1.5f);
+            }
+
             // 直接通知SettlementUI（它可能处于inactive状态，无法通过事件收到）
             if (_settlementUI != null)
             {

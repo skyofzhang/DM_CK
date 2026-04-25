@@ -459,6 +459,9 @@ namespace DrscfZ.Monster
             PlayAnim("Attack");
             // 城门HP由服务器resource_update权威管理，禁止客户端扣血
             // Survival.CityGateSystem.Instance?.TakeDamage(_attack);
+
+            // audit-r12 GAP-C01：§29.2 怪物攻击撞击声（AudioManager 内部去重，多怪同时攻击不刷爆）
+            DrscfZ.Systems.AudioManager.Instance?.PlaySFX(DrscfZ.Core.AudioConstants.SFX_MONSTER_ATTACK);
         }
 
         private void MoveToward(Vector3 target)
@@ -502,6 +505,9 @@ namespace DrscfZ.Monster
 
             // 子任务2/6：伤害飘字
             DamageNumber.Show(transform.position, dmg, new Color(1f, 0.3f, 0.3f));
+
+            // audit-r12 GAP-C01：§29.2 怪物受击/嚎叫
+            DrscfZ.Systems.AudioManager.Instance?.PlaySFX(DrscfZ.Core.AudioConstants.SFX_MONSTER_HIT);
 
             if (_currentHp <= 0)
                 Die();
