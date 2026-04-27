@@ -96,9 +96,15 @@ namespace DrscfZ.UI
             if (_nameText != null) _nameText.text = data.name;
             if (_subText  != null)
             {
-                _subText.text = (data.startDay > 0 && data.endDay > 0)
+                // 🔴 audit-r25 GAP-A25-02：r24 加 endNote + seasonDay 但 UI 0 消费 → 半成品延续第 5 轮
+                //   §34.4 E2 幕终事件文案（"首个精英怪来袭！"/"双 Boss 同时出现！"等）从 r24 加字段至今从未触发
+                //   修复：拼接 endNote 到副标题（若有）
+                string range = (data.startDay > 0 && data.endDay > 0)
                     ? $"第 {data.startDay} 天 — 第 {data.endDay} 天"
                     : "";
+                _subText.text = !string.IsNullOrEmpty(data.endNote)
+                    ? (string.IsNullOrEmpty(range) ? data.endNote : $"{range} · {data.endNote}")
+                    : range;
             }
 
             if (_bannerRoot != null) _bannerRoot.gameObject.SetActive(true);

@@ -242,7 +242,8 @@ const RANDOM_EVENT_INTERVAL_MAX_SEC = 90;
 // 5 种建筑：watchtower / market / hospital / altar / beacon
 // 投票窗口 45s；每日 1 次（跨日重置）；建造时长 3–5 min
 // PM 决策（MVP）：
-//   - §36.12 feature_locked 跳过（暂不门槛）
+//   - §36.12 feature_locked 已实装（SurvivalRoom.js:752 _checkFeatureOrFail('building', 'build_propose_failed')；FEATURE_UNLOCK_DAY.building.minDay=3）
+//   - 🔴 audit-r25 GAP-E25-03 修正：之前注释 "feature_locked 跳过（暂不门槛）" 失真
 //   - §35 tribeWar 远征怪攻击骨架逻辑跳过（beacon 仅存 state，TODO §35）
 //   - Altar 对 666 弹幕触发值由 1.15→1.25（§6.3 P5 已按方案 A 拆分 _abilityPillBonus / _buzz666Bonus 独立轨道，合并取 Math.max 不相乘）
 //   - Hospital 通过 §30 _getWorkerRespawnSec 接入，公式 max(5, 30 - 10*hasLv31 - 15*hasHospital)
@@ -2389,10 +2390,18 @@ class SurvivalGameEngine {
     // 助威者贡献值 +1（与正式守护者一致），计入 live_ranking
     this._trackContribution(playerId, 1);
 
+    // 🔴 audit-r25 GAP-D25-06: emit 加 atkBuffPct/atkBuffTimer，让客户端 UI 显示
+    //   "助威者 +X% 攻击力（剩 Ys）"实时反馈（夜晚 cmd=6 才有效）
     this.broadcast({
       type: 'supporter_action',
       timestamp: Date.now(),
-      data: { playerId, playerName: playerName || playerId, cmd },
+      data: {
+        playerId,
+        playerName: playerName || playerId,
+        cmd,
+        atkBuffPct:   this._supporterAtkBuff,        // 当前累积百分比（0~0.20）
+        atkBuffTimer: this._supporterAtkBuffTimer,   // 剩余生效秒数（0~5）
+      },
     });
   }
 
@@ -4574,6 +4583,7 @@ class SurvivalGameEngine {
             waveIndex:     wIdx,
             spawnsAt,
             firstAttackAt: spawnsAt + FIRST_ATTACK_OFFSET_MS,
+            leadSec:       PREVIEW_LEAD_MS / 1000,  // 🔴 audit-r25 GAP-E25-02: 显式 emit leadSec=10，与 emergency_alert 路径对齐
           },
         });
       }, previewDelay);
@@ -4739,6 +4749,7 @@ class SurvivalGameEngine {
               waveIndex:     waveIndex,  // 下一个将要生成的波次索引
               spawnsAt,
               firstAttackAt: spawnsAt + FIRST_ATTACK_OFFSET_MS,
+              leadSec:       PREVIEW_LEAD_MS / 1000,  // 🔴 audit-r25 GAP-E25-02: 显式 emit leadSec=10
             },
           });
           return true;
@@ -9555,11 +9566,19 @@ class SurvivalGameEngine {
 
     _emitEquipChanged(itemId);
 
-    // 若装上 entrance_spark → 触发入场特效（若 VIP 广播路径存在则复用；MVP log 占位）
+    // 若装上 entrance_spark → 触发入场特效广播（§39.5 4 槽位身份装备付费驱动力）
+    // 🔴 audit-r25 GAP-E25-06：之前仅 log 占位，玩家花 3000 贡献购买后下次进房无视觉反馈，付费链路未闭合
+    //   修复：emit `entrance_spark_triggered` 让客户端 EntranceFXUI / VIPAnnouncementUI 接管特效
     if (itemId === 'entrance_spark') {
-      // TODO §39.13 / §17 VIPAnnouncementUI：若房间已有 VIPAnnouncement 路径则触发
-      //   MVP：log 占位，避免依赖未落地的 VIP 协议
-      console.log(`[Shop] entrance_spark equipped by ${this._getPlayerName(playerId)} — VIP path TODO`);
+      this.broadcast({
+        type: 'entrance_spark_triggered',
+        timestamp: Date.now(),
+        data: {
+          playerId,
+          playerName: this._getPlayerName(playerId),
+        },
+      });
+      console.log(`[Shop] entrance_spark equipped by ${this._getPlayerName(playerId)} — broadcast entrance_spark_triggered`);
     }
 
     console.log(`[Shop] equip: ${this._getPlayerName(playerId)} slot=${slot} itemId=${itemId}`);
@@ -9608,22 +9627,41 @@ class SurvivalGameEngine {
   }
 
   /**
-   * §39.8 加载赛季限定 SKU 配置（当前 MVP 未上架 B9/B10；若需启用，调此方法注入 _seasonShopPool）
+   * §39.8 加载赛季限定 SKU 配置（B9/B10 注入 _seasonShopPool）
    *
-   * 文件路径约定：`Server/src/season_shop/{seasonId}.json`
-   * 文件格式：`{ season: 'season_1', items: [ { id, name, slot, price, lifetimeContribMin }, ... ] }`
+   * 文件路径约定：`Server/src/season_shop/season_{N}.json`（N=赛季数字）
+   * 文件格式：`{ season: 'season_1', items: [ { id, name, slot, price, lifetimeContribMin, minSeasonDay, ... }, ... ] }`
    *
-   * 调用时机由 SurvivalRoom / SeasonManager 决定（MVP 未挂载；留接口便于后续主版上线）。
+   * 调用时机：SeasonManager:223 在赛季切换时自动调用 `loadSeason(this.seasonId)`，传入数字（1, 2, 3...）。
    *
-   * @param {string} seasonId 例如 'season_1'
+   * 🔴 audit-r25 GAP-D25-01 P0 修复：之前路径拼接为 `season_shop/${seasonId}.json` → 实际拼出
+   *    `season_shop/1.json`，但磁盘只有 `season_1.json` → §39.8 赛季限定 SKU 从 v1.27 实装至今**完全失效**。
+   *    修复：归一化 seasonId 为数字 N，统一拼 `season_shop/season_{N}.json`，同时支持外部传入字符串
+   *    `'season_1'` 或 `'1'`（向后兼容测试用例 `Server/tools/test_shop.js:390`）。
+   *
+   * @param {number|string} seasonId 数字 1 / 字符串 'season_1' / 字符串 '1' 任一形式
    * @returns {number} 加载的 SKU 数量（失败返 0）
    */
   loadSeason(seasonId) {
-    if (!seasonId) return 0;
+    if (!seasonId && seasonId !== 0) return 0;
     try {
+      // 归一化：数字 → 直接用；字符串 'season_N' / 'N' → 提取 N
+      let normalizedNum;
+      if (typeof seasonId === 'number') {
+        normalizedNum = seasonId;
+      } else {
+        const s = String(seasonId);
+        const m = s.match(/^season_(\d+)$/) || s.match(/^(\d+)$/);
+        if (!m) {
+          console.warn(`[Shop] loadSeason: invalid seasonId ${seasonId} (expected number or 'season_N' / 'N')`);
+          this._seasonShopPool = [];
+          return 0;
+        }
+        normalizedNum = Number(m[1]);
+      }
       const path = require('path');
       const fs   = require('fs');
-      const file = path.join(__dirname, 'season_shop', `${seasonId}.json`);
+      const file = path.join(__dirname, 'season_shop', `season_${normalizedNum}.json`);
       if (!fs.existsSync(file)) {
         console.warn(`[Shop] loadSeason: file not found ${file}`);
         this._seasonShopPool = [];
@@ -9633,7 +9671,7 @@ class SurvivalGameEngine {
       const obj = JSON.parse(raw);
       const items = Array.isArray(obj.items) ? obj.items : [];
       this._seasonShopPool = items;
-      console.log(`[Shop] loadSeason: ${seasonId} loaded ${items.length} SKUs`);
+      console.log(`[Shop] loadSeason: season_${normalizedNum} loaded ${items.length} SKUs`);
       return items.length;
     } catch (e) {
       console.warn(`[Shop] loadSeason failed: ${e.message}`);

@@ -617,13 +617,17 @@ namespace DrscfZ.Survival
         public int    supporterCount;
     }
 
-    /// <summary>助威者弹幕生效（type=supporter_action）</summary>
+    /// <summary>助威者弹幕生效（type=supporter_action）
+    /// 🆕 audit-r25 GAP-D25-06：补齐 atkBuffPct + atkBuffTimer，让客户端 UI 在夜晚 cmd=6 时显示
+    /// "助威者 +X% 攻击力（剩 Ys）"实时反馈（多个助威者协作感）。</summary>
     [Serializable]
     public class SupporterActionData
     {
         public string playerId;
         public string playerName;
-        public int    cmd;       // 1/2/3/4/6/666
+        public int    cmd;            // 1/2/3/4/6/666
+        public float  atkBuffPct;     // 🆕 audit-r25 GAP-D25-06：累积百分比（0~0.20，仅夜晚 cmd=6 路径有意义）
+        public int    atkBuffTimer;   // 🆕 audit-r25 GAP-D25-06：剩余生效秒数（0~5，每秒服务端 -1 至 0 后清 _supporterAtkBuff）
     }
 
     /// <summary>AFK 替补：助威者→守护者 + 旧守护者→助威者（type=supporter_promoted）</summary>
@@ -717,11 +721,14 @@ namespace DrscfZ.Survival
 
     // ==================== §24.4 主播事件轮盘（Broadcaster Event Roulette，🆕 v1.27）====================
 
-    /// <summary>轮盘充能就绪通知（type=broadcaster_roulette_ready）</summary>
+    /// <summary>轮盘充能就绪通知（type=broadcaster_roulette_ready）
+    /// 🆕 audit-r25 GAP-D25-05：补 source 字段，区分"正常 300s 充能完成"vs"§38.3 神秘符文事件瞬间补满"。
+    /// 服务端 SurvivalGameEngine.js:8696-8702 mystic_rune case emit `source='mystic_rune'`；正常充能完成无 source（默认 ""）。</summary>
     [Serializable]
     public class RouletteReadyData
     {
-        public long readyAt;    // Unix ms；-1 表示已就绪
+        public long   readyAt;    // Unix ms；-1 表示已就绪
+        public string source;     // 🆕 audit-r25 GAP-D25-05：'mystic_rune' | ''（默认空字符串）
     }
 
     /// <summary>轮盘抽卡结果（type=broadcaster_roulette_result）
@@ -1003,7 +1010,12 @@ namespace DrscfZ.Survival
     [Serializable]
     public class StreamerRankingData
     {
-        public StreamerRankingEntry[] rankings; // Top 10
+        // 🔴 audit-r25 GAP-C25-03/06：双路径上限不一致（与 r24 GAP-B24-02 weekly_ranking 同模式延续 — 半成品延续第 8 轮）
+        //   - 服务端广播 _broadcastStreamerRanking(SurvivalRoom.js:430)：getPayload(10) 仅 Top 10
+        //   - 客户端请求 get_streamer_ranking(SurvivalRoom.js:608)：默认 50/最大 50（data.top<=50?data.top:50）
+        //   - StreamerRankingStore.js:208 getTop(n=10) 函数级默认 10 但入口默认 50
+        //   - 客户端 SurvivalRankingUI.cs:285 RequestStreamerRanking() 不带 top 参数 → 实际拿 Top 50
+        public StreamerRankingEntry[] rankings; // Top N（广播默认 10；客户端请求默认 50，最大 50）
     }
 
     // ==================== §39 商店系统（Shop System，🆕 v1.27） ====================
@@ -1601,7 +1613,7 @@ namespace DrscfZ.Survival
         public int    totalCycles;                 // 总循环次数（_enterSettlement 计数）
         public string streamerKingTitle;           // "堡垒之王" 或 null
         public int    currentSeasonId;             // 当前赛季 id
-        public string lastThemeId;                 // 上个赛季主题（防连抽记忆）
+        public string lastThemeId;                 // 🔴 audit-r25 GAP-D25-09：服务端实发当前主题（与 themeId 同值，作为持久化保留入口；非"上个赛季"语义）
         public string themeId;                     // 本赛季主题 id
         public string phase;                       // "day"/"night"/"recovery"/"idle"/... 与 SurvivalGameStateData.state 同源
         public string variant;                     // "normal"/"recovery"/... 与 PhaseChangedData.variant 同源

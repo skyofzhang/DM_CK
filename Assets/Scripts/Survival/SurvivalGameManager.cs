@@ -971,11 +971,30 @@ namespace DrscfZ.Survival
                     break;
 
                 // §34 Batch D：单人贡献增量（Batch I 补齐透传）
+                // 🔴 audit-r25 GAP-D25-03：r24 加 source 字段但 0 UI 订阅者 → 半成品延续第 5 轮
+                //   仅在 T6 礼物路径 emit（'gift_t6_max_level_bonus' / 'gift_t6_upgrade_bonus' +100 贡献奖励）
+                //   修复：在此处加跑马灯反馈，让玩家感知 T6 升级 / 满级奖励差异化路径
                 case "contribution_update":
                     var cu = JsonUtility.FromJson<ContributionUpdateData>(dataJson);
                     if (cu != null)
                     {
                         OnContributionUpdate?.Invoke(cu);
+                        // 🔴 audit-r25 GAP-D25-03：T6 路径专属跑马灯
+                        if (!string.IsNullOrEmpty(cu.source) && cu.delta > 0)
+                        {
+                            string flavorMsg = cu.source switch
+                            {
+                                "gift_t6_max_level_bonus" => $"+{cu.delta} 贡献：T6 城门已满级奖励！",
+                                "gift_t6_upgrade_bonus"   => $"+{cu.delta} 贡献：T6 触发城门升级奖励！",
+                                _                          => null,
+                            };
+                            if (flavorMsg != null)
+                            {
+                                UI.HorizontalMarqueeUI.Instance?.AddMessage(
+                                    string.IsNullOrEmpty(cu.playerName) ? "贡献" : cu.playerName,
+                                    null, flavorMsg);
+                            }
+                        }
                     }
                     break;
 
@@ -1338,6 +1357,28 @@ namespace DrscfZ.Survival
                     }
                     break;
             }
+
+            // 🔴 audit-r25 GAP-A25-01：r24 GAP-A24-02 加 7 字段（fortressDay/maxFortressDay/seasonId/seasonDay/themeId/phase/phaseRemainingSec）
+            //   但 HandleGameState 完全没分发 → 断线重连后 UI 仍要等 world_clock_tick / season_state / fortress_day_changed 才能更新
+            //   r25 修复：在末尾同步分发到 SeasonTopBarUI / FortressDayBadgeUI（重连兜底）
+            //   NOTE: FortressDayChangedData / SeasonStateData 仅复用部分字段（其余字段为 0/null 占位是合理的）；
+            //         订阅者据 reason='reconnect_sync' 可识别"重连兜底快照"分支。
+            if (data.fortressDay > 0)
+                OnFortressDayChanged?.Invoke(new FortressDayChangedData
+                {
+                    oldFortressDay = data.fortressDay,
+                    newFortressDay = data.fortressDay,  // 同步快照（非变更事件）
+                    reason         = "reconnect_sync",
+                    seasonDay      = data.seasonDay,
+                });
+            if (!string.IsNullOrEmpty(data.themeId))
+                OnSeasonState?.Invoke(new SeasonStateData
+                {
+                    seasonId  = data.seasonId,
+                    seasonDay = data.seasonDay,
+                    themeId   = data.themeId,
+                    // unlockedFeatures: 同步快照不重传（已由 data.unlockedFeatures 走 SyncUnlockedFeatures 路径处理）
+                });
         }
 
         private void HandleWorkCommand(WorkCommandData data)
@@ -2098,11 +2139,19 @@ namespace DrscfZ.Survival
             cityGateSystem?.HandleUpgrade(data.newLevel, data.newMaxHp, hpBonus, data.tierName, data.newFeatures);
 
             string tierLabel = string.IsNullOrEmpty(data.tierName) ? "" : $"「{data.tierName}」";
+            // 🔴 audit-r25 GAP-D25-07：data.source 区分三种升级路径（r6 加字段但 UI 0 消费第 19 轮 audit）
+            //   'broadcaster' 主播主动升级（消耗矿石）/ 'gift_t6' T6 礼物联动 / 'expedition_trader' 商队交易
+            string sourceFlavor = data.source switch
+            {
+                "gift_t6"            => "（T6 神秘空投联动）",
+                "expedition_trader"  => "（商队交易）",
+                _                    => "",
+            };
             UI.AnnouncementUI.Instance?.ShowAnnouncement(
-                $"城门升级至 Lv.{data.newLevel}{tierLabel}!",
+                $"城门升级至 Lv.{data.newLevel}{tierLabel}!{sourceFlavor}",
                 $"最大HP提升至 {data.newMaxHp}",
                 new Color(0.2f, 0.8f, 1f), 2f);
-            OnPlayerActivityMessage?.Invoke($"城门已升级至 Lv.{data.newLevel}{tierLabel}（最大HP:{data.newMaxHp}）");
+            OnPlayerActivityMessage?.Invoke($"城门已升级至 Lv.{data.newLevel}{tierLabel}{sourceFlavor}（最大HP:{data.newMaxHp}）");
         }
 
         private void HandleGateUpgradeFailed(string dataJson)
@@ -2456,11 +2505,18 @@ namespace DrscfZ.Survival
 
         // ==================== §24.4 主播事件轮盘（🆕 v1.27）====================
 
-        /// <summary>轮盘充能完成/剩余秒数同步（RouletteUI 订阅后自行处理）</summary>
+        /// <summary>轮盘充能完成/剩余秒数同步（RouletteUI 订阅后自行处理）
+        /// 🔴 audit-r25 GAP-D25-05：data.source 区分"正常 300s 充能完成"vs"§38.3 神秘符文事件瞬间补满"。</summary>
         private void HandleRouletteReady(RouletteReadyData data)
         {
             OnRouletteReady?.Invoke(data);
-            Debug.Log($"[SGM] broadcaster_roulette_ready: readyAt={data.readyAt}");
+            // 🔴 audit-r25 GAP-D25-05：mystic_rune 路径加专属跑马灯反馈（付费驱动力差异化）
+            if (data.source == "mystic_rune")
+            {
+                UI.HorizontalMarqueeUI.Instance?.AddMessage(
+                    "神秘符文", null, "轮盘充能瞬间补满！");
+            }
+            Debug.Log($"[SGM] broadcaster_roulette_ready: readyAt={data.readyAt} source={data.source}");
         }
 
         /// <summary>服务端已定格 cardId，客户端播转轴动画</summary>
@@ -2744,8 +2800,14 @@ namespace DrscfZ.Survival
         private void HandleMonsterWaveIncoming(MonsterWaveIncomingData data)
         {
             OnMonsterWaveIncoming?.Invoke(data);
-            UI.AnnouncementUI.Instance?.ShowAnnouncement("即将来袭",
-                "瞭望塔预警：10 秒后怪物出现",
+            // 🔴 audit-r25 GAP-E25-01：r24 加 leadSec 字段但 UI 文案硬编码 "10 秒"
+            //   修复：读 data.leadSec（watchtower=10 / emergency_alert=10/30）+ 30s 路径区分文案
+            int leadSec = data.leadSec > 0 ? data.leadSec : 10;
+            string title = leadSec >= 30 ? "紧急警报" : "即将来袭";
+            string body  = leadSec >= 30
+                ? $"紧急警报：{leadSec} 秒后怪物出现"
+                : $"瞭望塔预警：{leadSec} 秒后怪物出现";
+            UI.AnnouncementUI.Instance?.ShowAnnouncement(title, body,
                 new Color(1f, 0.85f, 0.1f), 3f);
         }
 
@@ -2986,14 +3048,16 @@ namespace DrscfZ.Survival
             Debug.Log($"[SGM] tribe_war_room_list_result: rooms={n}");
         }
 
-        /// <summary>攻击/反击失败（unicast 发起方）：跑马灯 + 活动消息。</summary>
+        /// <summary>攻击/反击失败（unicast 发起方）：跑马灯 + 活动消息。
+        /// 🔴 audit-r25 GAP-D25-04：cooldownMs 字段定义但之前 FormatTribeWarFailReason 0 消费 → 显示静态"冷却中（60s）"。
+        ///   修复：FormatTribeWarFailReason 加 cooldownMs 参数，in_cooldown 时拼接实时倒计时秒数。</summary>
         private void HandleTribeWarAttackFailed(TribeWarAttackFailedData data)
         {
             OnTribeWarAttackFailed?.Invoke(data);
-            string reasonText = FormatTribeWarFailReason(data.reason);
+            string reasonText = FormatTribeWarFailReason(data.reason, data.cooldownMs);
             OnPlayerActivityMessage?.Invoke($"攻防战操作失败：{reasonText}");
             UI.HorizontalMarqueeUI.Instance?.AddMessage("攻防战", null, reasonText);
-            Debug.Log($"[SGM] tribe_war_attack_failed: reason={data.reason}");
+            Debug.Log($"[SGM] tribe_war_attack_failed: reason={data.reason} cooldownMs={data.cooldownMs}");
         }
 
         /// <summary>攻击开始广播（双方房间均广播）：
@@ -3087,8 +3151,9 @@ namespace DrscfZ.Survival
             Debug.Log($"[SGM] tribe_war_attack_ended: sessionId={data.sessionId} reason={data.reason} stolen=({data.stolenFood},{data.stolenCoal},{data.stolenOre})");
         }
 
-        /// <summary>§35.10 attack_failed.reason → 中文（MVP 仅活动消息/跑马灯用）</summary>
-        private static string FormatTribeWarFailReason(string reason)
+        /// <summary>§35.10 attack_failed.reason → 中文（MVP 仅活动消息/跑马灯用）
+        /// 🔴 audit-r25 GAP-D25-04：加 cooldownMs 参数，in_cooldown 时显示实时倒计时秒数（替代静态"60s"）。</summary>
+        private static string FormatTribeWarFailReason(string reason, long cooldownMs = 0)
         {
             if (string.IsNullOrEmpty(reason)) return "未知原因";
             switch (reason)
@@ -3099,7 +3164,11 @@ namespace DrscfZ.Survival
                 case "attacker_busy":               return "已在攻击目标";
                 case "target_busy":                 return "目标已被其他房间攻击";
                 case "cannot_attack_self":          return "不能攻击自己";
-                case "in_cooldown":                 return "冷却中（60s）";
+                case "in_cooldown":
+                    // 🔴 audit-r25 GAP-D25-04：实时倒计时秒数（cooldownMs 0 时回退静态文案）
+                    return cooldownMs > 0
+                        ? $"冷却中（剩余 {Mathf.CeilToInt(cooldownMs / 1000f)}s）"
+                        : "冷却中（60s）";
                 case "already_attacking":           return "已在攻击目标";
                 case "target_already_under_attack": return "目标已被其他房间攻击";
                 case "target_unavailable":          return "目标房间不可攻击";
@@ -3112,7 +3181,8 @@ namespace DrscfZ.Survival
             }
         }
 
-        /// <summary>§35.10 attack_ended.reason → 中文（r15 GAP-D-MAJOR-05：与服务端 TribeWarManager.js:180 / TribeWarSession.js:58 实发 reason 对齐）</summary>
+        /// <summary>§35.10 attack_ended.reason → 中文（r15 GAP-D-MAJOR-05：与服务端 TribeWarManager.js:180 / TribeWarSession.js:58 实发 reason 对齐）
+        /// 🔴 audit-r25 GAP-D25-08：补 'room_destroyed' case（一方主播退出 onRoomDestroyed 触发，之前显示原文 "结束: room_destroyed"）。</summary>
         private static string FormatTribeWarEndReason(string reason)
         {
             if (string.IsNullOrEmpty(reason)) return "结束";
@@ -3123,6 +3193,7 @@ namespace DrscfZ.Survival
                 case "no_energy":           return "3 分钟无能量自动断开";
                 case "settlement":          return "游戏结算";
                 case "season_reset":        return "赛季切换";
+                case "room_destroyed":      return "对方主播离开";  // 🔴 audit-r25 GAP-D25-08
                 // 旧 case 保留作向后兼容
                 case "manual_stop":         return "手动停止";
                 case "zero_energy_timeout": return "3 分钟无能量自动断开";
@@ -3397,6 +3468,7 @@ namespace DrscfZ.Survival
                 case "feature_locked": return unlockDay > 0 ? $"D{unlockDay} 解锁此功能" : "功能未解锁";
                 case "in_cooldown":    return "冷却中";
                 case "wrong_phase":    return "当前阶段不可用";
+                case "not_broadcaster": return "仅主播可操作";  // 🔴 audit-r25 GAP-A25-MINOR-01：服务端 _requireBroadcaster 拒绝时 emit
                 default:               return reason;
             }
         }
