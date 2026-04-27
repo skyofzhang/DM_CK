@@ -244,7 +244,7 @@ const RANDOM_EVENT_INTERVAL_MAX_SEC = 90;
 // PM 决策（MVP）：
 //   - §36.12 feature_locked 跳过（暂不门槛）
 //   - §35 tribeWar 远征怪攻击骨架逻辑跳过（beacon 仅存 state，TODO §35）
-//   - Altar 对 666 弹幕触发值由 1.15→1.25（§6.3 P5 已按方案 A 拆分 _abilityPillBonus / _buzz666Bonus 独立轨道相乘）
+//   - Altar 对 666 弹幕触发值由 1.15→1.25（§6.3 P5 已按方案 A 拆分 _abilityPillBonus / _buzz666Bonus 独立轨道，合并取 Math.max 不相乘）
 //   - Hospital 通过 §30 _getWorkerRespawnSec 接入，公式 max(5, 30 - 10*hasLv31 - 15*hasHospital)
 //   - _roomCreatorId 暂不引入（TODO）
 //   - 每日限 1 次用 _buildVoteUsedToday bool + _enterDay 重置
@@ -618,11 +618,12 @@ class SurvivalGameEngine {
     //   本版服务端仅负责协议广播，不做数值叠加（PM 后续决定是否加服务端被动）
     this._giftSkinExpiryMs       = {};
 
-    // §6.3 P5（方案 A）：能力药丸 / 666 弹幕加成拆分为两条独立轨道，相乘生效
+    // §6.3 P5（方案 A）：能力药丸 / 666 弹幕加成拆分为两条独立轨道
     //   _abilityPillBonus  : T2 礼物 ability_pill（1.5 / altar 1.6）
     //   _buzz666Bonus      : 666 弹幕（1.15 / altar 1.25 / meteor_fragment ×2.0）
     //   过期判定使用绝对时间戳（_xxExpireAt），避免 setTimeout 互相 clearTimeout
-    //   计算：pillMult * buzzMult（两者同时激活 → 1.5 × 1.5 = 2.25×）
+    //   合并：Math.max(1.0, pillMult, buzzMult)（同时激活时取最大值，不相乘 — 避免 1.5 × 1.5 = 2.25× 双倍暴涨）
+    //   audit-r18 注释回退：r17 注释写 "pillMult * buzzMult" 与 _getEfficiencyBoostMult L4009 实际 Math.max 矛盾，已校正
     this._abilityPillBonus    = 1.0;
     this._abilityPillExpireAt = 0;
     this._buzz666Bonus        = 1.0;
@@ -650,7 +651,7 @@ class SurvivalGameEngine {
     this._firstBarrageReceived   = new Set();
 
     // ── 矿工成长系统（策划案 §30）─────────────────────────────────
-    // §30 持久化已接入 RoomPersistence（schemaVersion 3）：_lifetimeContrib / _playerLevel / _playerSkinId
+    // §30 持久化已接入 RoomPersistence（schemaVersion 4，audit-r18 注释同步）：_lifetimeContrib / _playerLevel / _playerSkinId
     //   snapshot / _applyPersistedSnapshot 负责序列化与恢复；构造函数初值仅在首次 load 前使用。
     this._lifetimeContrib    = {};   // 终身累计贡献（跨局永续）
     this._playerLevel        = {};   // 1~100（跨局永续）
@@ -687,10 +688,10 @@ class SurvivalGameEngine {
     this._expeditions           = new Map();
     this._expeditionIdCounter   = 0;
     this._meteorFragmentPending = false; // 下次 666 触发 efficiency666Bonus ×2.0（单次消费）
-    // mystic_rune 24h 滑动窗口（最多 3 次）——跨局永续（RoomPersistence schemaVersion 3）
+    // mystic_rune 24h 滑动窗口（最多 3 次）——跨局永续（RoomPersistence schemaVersion 4，audit-r18 注释同步）
     this._runeChargeLog         = [];
 
-    /** @type {Array<object>} §35 P2 战报滑动窗口，最多 10 条；跨局永续（RoomPersistence schemaVersion 3） */
+    /** @type {Array<object>} §35 P2 战报滑动窗口，最多 10 条；跨局永续（RoomPersistence schemaVersion 4，audit-r18 注释同步） */
     this._warReports            = [];
 
     // ── §37 建造系统（Building System，MVP）────────────────────────────
@@ -1353,7 +1354,7 @@ class SurvivalGameEngine {
     this._buildVoteUsedToday  = false;
 
     // §39 商店系统重置：
-    //   跨局永续（已接入 RoomPersistence schemaVersion 2，r7 落地）：_contribBalance / _playerShopInventory / _playerShopEquipped
+    //   跨局永续（已接入 RoomPersistence schemaVersion 4，audit-r18 注释同步）：_contribBalance / _playerShopInventory / _playerShopEquipped
     //   每局重置：_shopLastEquipAt / _shopSpotlightActive / _shopSpotlightUsedThisGame /
     //              _shopEmergencyAlertUsedWave / _shopPendingPurchases / _peptTalkBoostUntil
     this._shopLastEquipAt            = {};
@@ -9100,10 +9101,15 @@ class SurvivalGameEngine {
       }
     }
     // 应答：按策划案 §39.9，S→C shop_list_data { category, items }
-    this._broadcast({
+    // audit-r18 GAP-E18-39-01：unicast 同形态延伸（与 r15 player_joined / r16 handleShopInventory / r17 SurvivalRoom locked 三个 emit 点对齐）
+    // shop_list_data 是发起方点 Shop Tab 的请求响应，应只回发起者；fallback _broadcast 兜底防 _sendToPlayer 不可用
+    const _listMsg = {
       type: 'shop_list_data',
       data: { playerId: playerId || '', category, items },
-    });
+    };
+    if (!this._sendToPlayer || !this._sendToPlayer(playerId, _listMsg)) {
+      this._broadcast(_listMsg);
+    }
   }
 
   /**

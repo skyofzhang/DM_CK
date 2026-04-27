@@ -311,6 +311,11 @@ namespace DrscfZ.Survival
         public int    distributed;        // 实际瓜分金额
         public int    carryover;          // 结余（进入恢复期后的下一周期初始积分池）
         public float  payoutRate;         // 固定 0.3（失败，永续模式无胜利分支）
+        // audit-r18 §34 F6 双档分配：服务端 SurvivalGameEngine.js:3174-3177 已 emit，r18 客户端补字段供 SettlementUI 帧 B 渲染
+        public int    top10Pool;          // 🆕 audit-r18 §34 F6：Top10 双档分配总额（70% 池）
+        public int    tailPool;           // 🆕 audit-r18 §34 F6：剩余 30% 池总额（按贡献 ≥100 分配给非 Top10）
+        public int    tailEligibleCount;  // 🆕 audit-r18 §34 F6：参与 tail 分配的玩家数（贡献 ≥100 的非 Top10）
+        // contributionRewards: object<playerId, share> — JsonUtility 不支持 Dictionary，客户端如需消费可改用 Dictionary<string,int> + JObject 解析；目前仅 fortress 总览统计可用
     }
 
     /// <summary>end_game 被服务端拒绝（仅 state !∈ {day,night} 时返回，§16.4）</summary>
@@ -328,6 +333,8 @@ namespace DrscfZ.Survival
         public int    day;
         public int    bossHp;
         public int    bossAtk;
+        public bool   isActEndBoss; // audit-r18 §16 act1 终结之夜双 Boss 第 2 只标记（_spawnExtraBossForActEnd L7017 emit）
+        public bool   isBloodMoon;  // audit-r18 §36 blood_moon 主题夜超级 Boss 标记（_applyNightModifier L7299 emit）
     }
 
     /// <summary>战斗攻击数据（服务器广播，commandId=6触发）</summary>

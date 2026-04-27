@@ -106,7 +106,7 @@ namespace DrscfZ.UI
 
             // 播放加入音效
             if (AudioManager.Instance != null)
-                AudioManager.Instance.PlaySFX("player_join");
+                AudioManager.Instance.PlaySFX(AudioConstants.SFX_PLAYER_JOIN);
         }
 
         private IEnumerator ProcessQueue()

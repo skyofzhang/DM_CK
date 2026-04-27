@@ -60,7 +60,7 @@ namespace DrscfZ.UI
             _isOpen = true;
             CreatePanel();
             // 播放UI点击音效
-            if (AudioManager.Instance != null) AudioManager.Instance.PlaySFX("ui_click");
+            if (AudioManager.Instance != null) AudioManager.Instance.PlaySFX(AudioConstants.SFX_UI_CLICK);
         }
 
         public void Close()
@@ -236,7 +236,7 @@ namespace DrscfZ.UI
                 handleRT.anchoredPosition = currentValue ? new Vector2(20, 0) : new Vector2(-20, 0);
                 statusTMP.text = currentValue ? "ON" : "OFF";
                 statusTMP.color = currentValue ? new Color(0.3f, 0.9f, 0.4f) : new Color(0.55f, 0.55f, 0.55f);
-                if (AudioManager.Instance != null) AudioManager.Instance.PlaySFX("ui_click");
+                if (AudioManager.Instance != null) AudioManager.Instance.PlaySFX(AudioConstants.SFX_UI_CLICK);
             });
 
             yPos -= ROW_HEIGHT;

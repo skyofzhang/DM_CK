@@ -551,11 +551,11 @@ namespace DrscfZ.Core
                 switch (newState)
                 {
                     case GameState.Running:
-                        audio.PlaySFX("game_start");
-                        audio.CrossfadeBGM("normal_battle", 1.5f);
+                        audio.PlaySFX(AudioConstants.SFX_GAME_START);
+                        audio.CrossfadeBGM(AudioConstants.BGM_NORMAL_BATTLE, 1.5f);
                         break;
                     case GameState.Settlement:
-                        audio.PlaySFX("victory");
+                        audio.PlaySFX(AudioConstants.SFX_VICTORY);
                         audio.StopBGM();
                         break;
                     case GameState.Idle:

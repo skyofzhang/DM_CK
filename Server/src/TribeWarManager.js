@@ -10,7 +10,7 @@
  *   - 赛季切换强制断开：stopAllSessions('season_reset') 由 SeasonManager.advanceDay 触发
  *   - _roomCreatorId 鉴权放开（统一到 SurvivalRoom 层的 isRoomCreator 校验；MVP 阶段跳过）
  *   - P2 60s 手动停止冷却：_manualStopCooldowns Map 仅内存（重启即清，符合"冷却不跨重启"语义）
- *   - P2 战报持久化：engine._warReports 10 条滑动窗口 → RoomPersistence schemaVersion 3
+ *   - P2 战报持久化：engine._warReports 10 条滑动窗口 → RoomPersistence schemaVersion 4（audit-r18 注释同步）
  *   - P2 反击：damageMultiplier 由 SurvivalRoom 按 §37 beacon 填入（有 beacon 则 1.5，否则 1.0）
  *   - P2 3 分钟无能量自动断开：简单 timer 实现
  */

@@ -1,6 +1,7 @@
 ﻿using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
+using DrscfZ.Core;
 using DrscfZ.Systems;
 
 namespace DrscfZ.UI
@@ -46,7 +47,7 @@ namespace DrscfZ.UI
             if (_panelRoot != null) return;
             _isOpen = true;
             CreatePanel();
-            if (AudioManager.Instance != null) AudioManager.Instance.PlaySFX("ui_click");
+            if (AudioManager.Instance != null) AudioManager.Instance.PlaySFX(AudioConstants.SFX_UI_CLICK);
         }
 
         public void Close()
