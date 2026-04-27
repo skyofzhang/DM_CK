@@ -23,10 +23,13 @@ namespace DrscfZ.UI
         public float shakeDuration = 0.4f;
 
         // audit-r5 §28：Legacy UI — 新版使用 SurvivalGameManager，此组件保留但自动失活
+        // ⚠️ audit-r24 hotfix（CANVAS-HIDDEN）：原 `gameObject.SetActive(false)` 在 Canvas 根节点挂载时
+        //   会把整个 Canvas 关闭，导致所有 UI 不可见（违反 CLAUDE.md 规则 6 "禁止 Awake/OnEnable 中 SetActive(false) 自身 GO"）。
+        //   修复：仅 disable 脚本（this.enabled=false），不再 SetActive(false) gameObject。
+        //   该组件无外部调用方（grep `ShowUpgrade(` = 0），是纯 Legacy 死代码，未来可彻底从 Canvas 移除组件 + 删 .cs。
         private void OnEnable()
         {
             this.enabled = false;
-            if (gameObject.activeInHierarchy) gameObject.SetActive(false);
         }
 
         private Queue<UpgradeData> _pendingQueue = new Queue<UpgradeData>();
