@@ -335,6 +335,7 @@ namespace DrscfZ.Survival
         public int    bossAtk;
         public bool   isActEndBoss; // audit-r18 §16 act1 终结之夜双 Boss 第 2 只标记（_spawnExtraBossForActEnd L7017 emit）
         public bool   isBloodMoon;  // audit-r18 §36 blood_moon 主题夜超级 Boss 标记（_applyNightModifier L7299 emit）
+        public int    rushIndex;    // audit-r19 §16 act2 终结之夜 mini BossRush（3 Boss 间隔 30s，rushIndex 1-3，_scheduleActEndMiniBossRush L7047 emit）
     }
 
     /// <summary>战斗攻击数据（服务器广播，commandId=6触发）</summary>
@@ -356,6 +357,7 @@ namespace DrscfZ.Survival
         public string monsterId;    // 死亡怪物ID
         public string monsterType;  // "normal" | "elite" | "boss"
         public string killerId;     // 击杀玩家ID（可为空=被动死亡）（原 killedBy，已对齐服务端字段名）
+        public string reason;       // audit-r19 §31 被动死亡原因（'elite_raid_timeout' | 'meteor_shower' | ''；服务端 L8210/L8369 emit；玩家击杀时为空字符串）
     }
 
     /// <summary>城门升级数据（消耗矿石升级城门）</summary>
@@ -469,6 +471,7 @@ namespace DrscfZ.Survival
     {
         public string playerId;
         public long   respawnAt;  // Unix毫秒时间戳
+        public string reason;     // audit-r19 §22 死亡原因（'blizzard' | 'expedition_died' | 'expedition_night_kia' | ''；服务端 L7440/L8776/L8782/L8953 emit；普通战斗死亡时为空字符串）
     }
 
     /// <summary>矿工复活通知（type=worker_revived）</summary>

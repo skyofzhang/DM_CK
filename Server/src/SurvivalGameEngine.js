@@ -7437,7 +7437,8 @@ class SurvivalGameEngine {
         w.respawnAt = Date.now() + respawnSec * 1000;
         this._broadcast({
           type: 'worker_died',
-          data: { playerId: pid, respawnAt: w.respawnAt, cause: 'blizzard' },
+          // audit-r19 GAP-A19-02：统一字段名（cause → reason）— 与 L8776/L8782/L8953 expedition_died/expedition_night_kia 一致
+          data: { playerId: pid, respawnAt: w.respawnAt, reason: 'blizzard' },
         });
       }
     }
