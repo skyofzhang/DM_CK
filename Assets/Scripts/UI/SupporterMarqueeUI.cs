@@ -94,7 +94,15 @@ namespace DrscfZ.UI
             if (!CmdToText.TryGetValue(data.cmd, out string effectText)) return;  // cmd=666 或未知：忽略
 
             string playerName = string.IsNullOrEmpty(data.playerName) ? "匿名" : data.playerName;
-            string message    = $"[助威] {playerName}：{effectText}";
+            // 🔴 audit-r26 GAP-E26-06 / GAP-D25-06 半成品延续修复：cmd=6 路径加实时 atkBuff 累积反馈
+            //   服务端仅在夜晚 cmd=6 才 emit atkBuffPct/atkBuffTimer，其他 cmd 默认为 0
+            string buffSuffix = "";
+            if (data.cmd == 6 && data.atkBuffPct > 0f)
+            {
+                int pct = Mathf.RoundToInt(data.atkBuffPct * 100f);
+                buffSuffix = $"（累积 +{pct}%，剩 {data.atkBuffTimer}s）";
+            }
+            string message    = $"[助威] {playerName}：{effectText}{buffSuffix}";
 
             if (_label != null)
             {

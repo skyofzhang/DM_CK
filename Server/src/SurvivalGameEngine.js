@@ -963,6 +963,14 @@ class SurvivalGameEngine {
         this._applyPersistedSnapshot(snap);
       }
     }
+
+    // 🔴 audit-r26 GAP-D26-01 P0：r25 P0 修了 loadSeason 路径但漏首次启动调用入口
+    //   SeasonManager.advanceDay() 仅在 D7→S2 切换时调 loadSeason；服务器启动 seasonId=1 永远不会触发该路径
+    //   → 赛季 1 D1-D7 _seasonShopPool 永远为空，弹幕"买B9/B10"永远 item_not_found
+    //   修复：setRoomContext 末尾按当前 seasonId 兜底加载（覆盖 SurvivalRoom 初始化路径）
+    if (this.seasonMgr && typeof this.loadSeason === 'function') {
+      this.loadSeason(this.seasonMgr.seasonId);
+    }
   }
 
   /**
@@ -2390,18 +2398,22 @@ class SurvivalGameEngine {
     // 助威者贡献值 +1（与正式守护者一致），计入 live_ranking
     this._trackContribution(playerId, 1);
 
-    // 🔴 audit-r25 GAP-D25-06: emit 加 atkBuffPct/atkBuffTimer，让客户端 UI 显示
-    //   "助威者 +X% 攻击力（剩 Ys）"实时反馈（夜晚 cmd=6 才有效）
+    // 🔴 audit-r25 GAP-D25-06 + 🔴 audit-r26 GAP-D26-08: emit 加 atkBuffPct/atkBuffTimer，
+    //   仅在夜晚 cmd=6 路径携带这两字段（其他 cmd 不带 → JsonUtility 反序列化为 0 默认值）
+    //   r25 在所有 cmd 都 emit 这两字段会让客户端 UI 误读"残留值"作为 buff 进度
+    const supporterData = {
+      playerId,
+      playerName: playerName || playerId,
+      cmd,
+    };
+    if (cmd === 6 && this.state === 'night') {
+      supporterData.atkBuffPct   = this._supporterAtkBuff;        // 当前累积百分比（0~0.20）
+      supporterData.atkBuffTimer = this._supporterAtkBuffTimer;   // 剩余生效秒数（0~5）
+    }
     this.broadcast({
       type: 'supporter_action',
       timestamp: Date.now(),
-      data: {
-        playerId,
-        playerName: playerName || playerId,
-        cmd,
-        atkBuffPct:   this._supporterAtkBuff,        // 当前累积百分比（0~0.20）
-        atkBuffTimer: this._supporterAtkBuffTimer,   // 剩余生效秒数（0~5）
-      },
+      data: supporterData,
     });
   }
 
@@ -4944,6 +4956,17 @@ class SurvivalGameEngine {
     if (day >= summonerDayEff && !variants.includes('summoner')) {
       for (let i = variants.length - 1; i >= 2; i--) {
         if (variants[i] === 'normal') { variants[i] = 'summoner'; break; }
+      }
+    }
+
+    // 🔴 audit-r26 GAP-C26-04 真实玩法 bug 修复：ice post-process 同模式
+    //   _selectVariant 串行 if-else 中 rush 检查在 ice 之前，rushCount=2 (day≥7) 或 3 (day≥15) 时
+    //   抢走 ice 的 index=1 槽位 → §31.6 表"冰封怪 Day 5 起每波 1 只" 在 day≥7 后实际 0 出现率
+    //   修复：扫描 variants[] 没有 ice 但满足 iceDay 时，从后往前找 'normal' 替换为 'ice'
+    const iceDayEff = MONSTER_VARIANT_ICE_DAY + (diff === 'easy' ? 2 : diff === 'hard' ? -1 : 0);
+    if (day >= iceDayEff && !variants.includes('ice')) {
+      for (let i = variants.length - 1; i >= 1; i--) {
+        if (variants[i] === 'normal') { variants[i] = 'ice'; break; }
       }
     }
 
@@ -9094,9 +9117,11 @@ class SurvivalGameEngine {
         });
       }
       // §39.8 B9/B10 赛季限定 SKU：若 _seasonShopPool 非空则追加到 items 后
-      //   字段格式由 season_shop/{seasonId}.json 决定：{ id, name, slot, price, category, lifetimeContribMin, effect }
+      //   字段格式由 season_shop/season_{N}.json 决定：{ id, name, slot, price, category, lifetimeContribMin, effect }
       if (Array.isArray(this._seasonShopPool) && this._seasonShopPool.length > 0) {
-        const seasonId = (this.seasonMgr && this.seasonMgr.currentSeasonId) || '';
+        // 🔴 audit-r26 GAP-D26-05: SeasonManager 字段是 seasonId（int），原代码读 currentSeasonId 永远 undefined
+        //   → limitedSeasonId 永远空字符串，客户端 ShopUI 无法做"S1 限定"角标
+        const seasonId = (this.seasonMgr && this.seasonMgr.seasonId) || '';
         for (const it of this._seasonShopPool) {
           if (!it || !it.id) continue;
           items.push({

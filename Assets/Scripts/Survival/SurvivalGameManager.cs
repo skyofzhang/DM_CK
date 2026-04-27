@@ -243,6 +243,8 @@ namespace DrscfZ.Survival
         public event Action<FeatureUnlockedData>           OnFeatureUnlocked;
         public event Action<RouletteEffectPreventedData>   OnRouletteEffectPrevented;
         public event Action<TribeWarRetaliateData>         OnTribeWarRetaliate;
+        // 🔴 audit-r26 GAP-E26-01 / GAP-A26-04：r25 GAP-E25-06 半成品闭环 — entrance_spark 装备时服务端 broadcast
+        public event Action<EntranceSparkTriggeredData>    OnEntranceSparkTriggered;
 
         /// <summary>§36.12 seasonDay 从 N→N+1 递增的那一秒新解锁的功能 id 列表（由 world_clock_tick 触发）。
         /// 参数是该 tick 携带的 newlyUnlockedFeatures 字段内容，UI 层据此逐条播放解锁横幅。</summary>
@@ -808,6 +810,18 @@ namespace DrscfZ.Survival
                     var set_ = JsonUtility.FromJson<ShopEffectTriggeredData>(dataJson);
                     if (set_ != null) HandleShopEffectTriggered(set_);
                     break;
+                // 🔴 audit-r26 GAP-E26-01 / GAP-A26-04：r25 GAP-E25-06 半成品闭环 — entrance_spark 装备时服务端 broadcast 客户端 case 路由
+                case "entrance_spark_triggered":
+                    var est = JsonUtility.FromJson<EntranceSparkTriggeredData>(dataJson);
+                    if (est != null)
+                    {
+                        OnEntranceSparkTriggered?.Invoke(est);
+                        // 跑马灯反馈（VIP 入场特效装备效果） — 美术待补全屏入场粒子时可订阅 OnEntranceSparkTriggered 触发独立 EntranceFXUI
+                        string pName = string.IsNullOrEmpty(est.playerName) ? "玩家" : est.playerName;
+                        UI.HorizontalMarqueeUI.Instance?.AddMessage("入场特效", null, $"✨ {pName} 火花入场！");
+                        Debug.Log($"[SGM] entrance_spark_triggered: playerId={est.playerId} playerName={est.playerName}");
+                    }
+                    break;
 
                 // ----- §35 跨直播间攻防战 -----
                 case "tribe_war_room_list_result":
@@ -1111,15 +1125,26 @@ namespace DrscfZ.Survival
                     }
                     break;
 
-                // §30.4 每日不活跃等级衰减：BarrageMessageUI / 名牌刷新
+                // §30.4 每日等级衰减：BarrageMessageUI / 名牌刷新
                 case SurvivalMessageProtocol.DailyTierDecay:
                     var dtd = JsonUtility.FromJson<DailyTierDecayData>(dataJson);
                     if (dtd != null)
                     {
-                        Debug.Log($"[SGM] daily_tier_decay playerId={dtd.playerId} {dtd.oldLevel}→{dtd.newLevel}");
+                        Debug.Log($"[SGM] daily_tier_decay playerId={dtd.playerId} {dtd.oldLevel}→{dtd.newLevel} mode={dtd.mode}");
                         OnDailyTierDecay?.Invoke(dtd);
                         if (WorkerManager.Instance != null)
                             WorkerManager.Instance.HandleDailyTierDecay(dtd.playerId, dtd.oldLevel, dtd.newLevel);
+                        // 🔴 audit-r26 GAP-D26-03 / MINOR-D26-04：玩家可见衰减反馈（之前仅 Debug.Log，玩家不知道发生衰减）
+                        //   服务端 _applyDailyTierDecay 对所有玩家：'active' ×0.975 / 'inactive' ×0.95
+                        if (dtd.oldLevel > dtd.newLevel)
+                        {
+                            string flavor = dtd.mode == "inactive"
+                                ? "昨夜未活跃，矿工等级 ×0.95"
+                                : "活跃日小幅衰减 ×0.975";
+                            UI.HorizontalMarqueeUI.Instance?.AddMessage(
+                                "等级衰减", null,
+                                $"{flavor}（{dtd.oldLevel}→{dtd.newLevel}）");
+                        }
                     }
                     break;
 
@@ -1358,27 +1383,35 @@ namespace DrscfZ.Survival
                     break;
             }
 
-            // 🔴 audit-r25 GAP-A25-01：r24 GAP-A24-02 加 7 字段（fortressDay/maxFortressDay/seasonId/seasonDay/themeId/phase/phaseRemainingSec）
-            //   但 HandleGameState 完全没分发 → 断线重连后 UI 仍要等 world_clock_tick / season_state / fortress_day_changed 才能更新
-            //   r25 修复：在末尾同步分发到 SeasonTopBarUI / FortressDayBadgeUI（重连兜底）
-            //   NOTE: FortressDayChangedData / SeasonStateData 仅复用部分字段（其余字段为 0/null 占位是合理的）；
-            //         订阅者据 reason='reconnect_sync' 可识别"重连兜底快照"分支。
+            // 🔴 audit-r25 GAP-A25-01 + 🔴 audit-r26 GAP-A26-02/A26-10 重构：
+            //   r25 修复仅 Invoke 事件，跳过 HandleSeasonState/HandleFortressDayChanged 完整链路（CurrentSeasonState 缓存 + ApplyTheme + UpdateFortressDay 等 5+ 步）。
+            //   r26 修复：直接调用完整 Handler 方法（reconnect_sync 兜底快照路径）；CurrentSeasonState.phase 也同步缓存供 BroadcasterDecisionHUD 推荐规则使用。
+            if (!string.IsNullOrEmpty(data.themeId))
+            {
+                HandleSeasonState(new SeasonStateData
+                {
+                    seasonId  = data.seasonId,
+                    seasonDay = data.seasonDay,
+                    themeId   = data.themeId,
+                    // unlockedFeatures: 同步快照不重传（已由上方 data.unlockedFeatures 走 SyncUnlockedFeatures 路径处理）
+                });
+                // 🔴 audit-r26 GAP-A26-02：CurrentSeasonState.phase / phaseRemainingSec 缓存（SeasonStateData 不带这两字段，单独写入）
+                if (CurrentSeasonState != null && !string.IsNullOrEmpty(data.phase))
+                {
+                    CurrentSeasonState.phase             = data.phase;
+                    CurrentSeasonState.phaseRemainingSec = data.phaseRemainingSec;
+                }
+            }
             if (data.fortressDay > 0)
-                OnFortressDayChanged?.Invoke(new FortressDayChangedData
+            {
+                HandleFortressDayChanged(new FortressDayChangedData
                 {
                     oldFortressDay = data.fortressDay,
                     newFortressDay = data.fortressDay,  // 同步快照（非变更事件）
                     reason         = "reconnect_sync",
                     seasonDay      = data.seasonDay,
                 });
-            if (!string.IsNullOrEmpty(data.themeId))
-                OnSeasonState?.Invoke(new SeasonStateData
-                {
-                    seasonId  = data.seasonId,
-                    seasonDay = data.seasonDay,
-                    themeId   = data.themeId,
-                    // unlockedFeatures: 同步快照不重传（已由 data.unlockedFeatures 走 SyncUnlockedFeatures 路径处理）
-                });
+            }
         }
 
         private void HandleWorkCommand(WorkCommandData data)
@@ -2482,8 +2515,15 @@ namespace DrscfZ.Survival
         private void HandleGiftSilentFail(GiftSilentFailData data)
         {
             if (data == null) return;
-            // MVP 占位：服务端（§36.12 未实现时）暂不推送，若收到则仅 Debug.Log。
-            // 未来接入 §36.12 后可改为向发送者弹 toast。
+            // 🔴 audit-r26 GAP-D26-04 修付费红线破裂 — §33.4 D1-D5 第 13+ 位观众 T1 仙女棒扣费但 0 效果反馈
+            //   r25 GAP-D26-07 注释已修：服务端 SurvivalGameEngine.js:1924 早已实装 emit（不再是"MVP 占位"）
+            //   修复：补 toast UI，让付费观众感知"扣费但因 D1-D5 super_mode 未解锁，礼物未生效"
+            int unlockDay = data.unlockDay > 0 ? data.unlockDay : 6;
+            string toastTitle = "礼物未生效";
+            string toastBody  = $"D{unlockDay} 起所有观众礼物生效，当前为 D1-D5 — 已扣费但效果暂不累加";
+            UI.AnnouncementUI.Instance?.ShowAnnouncement(toastTitle, toastBody,
+                new Color(1f, 0.7f, 0.3f), 2.5f);
+            UI.HorizontalMarqueeUI.Instance?.AddMessage("礼物提示", null, toastBody);
             Debug.Log($"[SGM] gift_silent_fail received: giftId={data.giftId} reason={data.reason} unlockDay={data.unlockDay} priceFen={data.priceFen}");
             OnGiftSilentFail?.Invoke(data);
         }
@@ -3448,25 +3488,31 @@ namespace DrscfZ.Survival
             Debug.Log($"[SGM] roulette_spin_failed: reason={reason} unlockDay={unlockDay}");
         }
 
-        /// <summary>broadcaster_action_failed：主播 ⚡加速/🌊事件触发失败（含 feature_locked）→ 跑马灯 + 活动消息。</summary>
+        /// <summary>broadcaster_action_failed：主播 ⚡加速/🌊事件触发失败（含 feature_locked）→ 跑马灯 + 活动消息。
+        /// 🔴 audit-r26 GAP-A26-03：FormatBroadcasterActionFailReason 加 cooldownMs 参数（r25 GAP-D25-04 半成品延续：
+        /// TribeWar 路径已加 cooldownMs 实时倒计时，但 BroadcasterAction 同字段漏修）</summary>
         private void HandleBroadcasterActionFailed(BroadcasterActionFailedData data)
         {
             OnBroadcasterActionFailed?.Invoke(data);
-            string reasonText = FormatBroadcasterActionFailReason(data.reason, data.unlockDay);
+            string reasonText = FormatBroadcasterActionFailReason(data.reason, data.unlockDay, data.cooldownMs);
             string actionText = GetBroadcasterActionName(data.action);
             string msg = $"{actionText}：{reasonText}";
             UI.AnnouncementUI.Instance?.ShowAnnouncement("主播操作失败", msg, new Color(1f, 0.4f, 0.2f), 2f);
             OnPlayerActivityMessage?.Invoke(msg);
-            Debug.Log($"[SGM] broadcaster_action_failed: action={data.action} reason={data.reason} unlockDay={data.unlockDay}");
+            Debug.Log($"[SGM] broadcaster_action_failed: action={data.action} reason={data.reason} unlockDay={data.unlockDay} cooldownMs={data.cooldownMs}");
         }
 
-        private static string FormatBroadcasterActionFailReason(string reason, int unlockDay)
+        private static string FormatBroadcasterActionFailReason(string reason, int unlockDay, long cooldownMs = 0)
         {
             if (string.IsNullOrEmpty(reason)) return "未知原因";
             switch (reason)
             {
                 case "feature_locked": return unlockDay > 0 ? $"D{unlockDay} 解锁此功能" : "功能未解锁";
-                case "in_cooldown":    return "冷却中";
+                case "in_cooldown":
+                    // 🔴 audit-r26 GAP-A26-03：实时倒计时秒数（cooldownMs 0 时回退静态文案）
+                    return cooldownMs > 0
+                        ? $"冷却中（剩余 {Mathf.CeilToInt(cooldownMs / 1000f)}s）"
+                        : "冷却中";
                 case "wrong_phase":    return "当前阶段不可用";
                 case "not_broadcaster": return "仅主播可操作";  // 🔴 audit-r25 GAP-A25-MINOR-01：服务端 _requireBroadcaster 拒绝时 emit
                 default:               return reason;

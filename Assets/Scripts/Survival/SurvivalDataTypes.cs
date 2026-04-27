@@ -137,7 +137,7 @@ namespace DrscfZ.Survival
         public int    startDay;  // 起始赛季日（含）
         public int    endDay;    // 结束赛季日（含）
         public string actTag;    // "prologue"/"act1"/"act2"/"act3"/"finale"（驼峰命名，与 phase_changed.act_tag 对齐 BGM 层）
-        public string endNote;   // 🆕 audit-r24 GAP-D24-02：幕终事件关键文案（§34.4 E2，如"首个精英怪出现"/"双 Boss 同时出现"）
+        public string endNote;   // 🆕 audit-r24 GAP-D24-02 + 🔴 r26 GAP-A26-06 注释精确化：幕的整体特征描述（prologue→"教学+安全" / act1→"压力上升" / act2→"高峰冲突" / act3→"决战"等），与 §34.4 E2 "幕终事件关键文案"语义不同（后者由独立 chapter_end_event 协议承载，事件如"首个精英怪来袭"/"双 Boss 同时出现"通过 chapter_end_event.event/hint 字段获取）
         public int    seasonDay; // 🆕 audit-r24 GAP-D24-02：服务端推送时的当前赛季日（1-7）
     }
 
@@ -642,7 +642,8 @@ namespace DrscfZ.Survival
     }
 
     /// <summary>D1–D5 超员观众礼物扣费但未生效反馈（type=gift_silent_fail，🆕 v1.27）。
-    /// MVP 阶段服务端暂不推送（§36.12 未实现），仅保留协议。</summary>
+    /// 🔴 audit-r26 GAP-D26-07 doc 精确化：服务端 SurvivalGameEngine.js:1924 已实装 emit（r24 修过 §36.12 但本注释未同步）。
+    /// 触发时机：D1-D5 supporter_mode 未解锁，第 13+ 位观众发 T1 仙女棒时抖音照常扣费、服务端不累加效果，向发送者 unicast 该消息。</summary>
     [Serializable]
     public class GiftSilentFailData
     {
@@ -1815,14 +1816,28 @@ namespace DrscfZ.Survival
         public string applyAt;      // "next_night" | "next_season"（生效时机）
     }
 
-    /// <summary>§30.4 每日不活跃玩家等级衰减 ×0.95（type=daily_tier_decay，S→C，广播）。
-    /// 服务端在 UTC+8 00:00 _tickDailyDecayIfDue 触发时对不活跃玩家广播。</summary>
+    /// <summary>🔴 audit-r26 GAP-E26-01 / GAP-A26-04：r25 GAP-E25-06 半成品闭环 — entrance_spark 装备时服务端 broadcast。
+    /// 服务端 SurvivalGameEngine.js:9572-9582 实装 emit；客户端订阅 OnEntranceSparkTriggered 触发入场特效（VIPAnnouncementUI 路径或独立 EntranceFXUI）。</summary>
+    [Serializable]
+    public class EntranceSparkTriggeredData
+    {
+        public string playerId;
+        public string playerName;
+    }
+
+    /// <summary>§30.4 每日等级衰减（type=daily_tier_decay，S→C，广播）。
+    /// 🔴 audit-r26 GAP-D26-03：补 mode 字段（'active' / 'inactive'）+ 注释纠正语义。
+    /// 服务端 SurvivalGameEngine.js:7831 _applyDailyTierDecay 对所有玩家在 UTC+8 00:00 触发：
+    ///   - 'active' 路径：×0.975（每日活跃过的玩家小幅减免）
+    ///   - 'inactive' 路径：×0.95（不活跃玩家衰减更大）
+    /// 客户端可按 mode 显示差异化反馈（"昨夜未活跃，矿工等级 ×0.95" vs "活跃日衰减 ×0.975"）。</summary>
     [Serializable]
     public class DailyTierDecayData
     {
         public string playerId;
         public int    oldLevel;
         public int    newLevel;
+        public string mode;     // 🔴 audit-r26 GAP-D26-03：'active' | 'inactive'
     }
 
     /// <summary>§30.7 限时皮肤激活（type=gift_skin_applied，S→C，广播）。
