@@ -162,13 +162,8 @@ public class SetupSurvivalScene
             return;
         }
 
-        // 移除旧 TopBarUI（如果存在）
-        var oldUI = topBarGO.GetComponent<DrscfZ.UI.TopBarUI>();
-        if (oldUI != null)
-        {
-            Object.DestroyImmediate(oldUI);
-            Debug.Log("[SetupScene] 已移除旧 TopBarUI 组件");
-        }
+        // legacy-r22 清理：旧 DrscfZ.UI.TopBarUI 类已删除（chore commit 65e7259），不再尝试 GetComponent
+        // 场景中残留旧 TopBarUI Component 会变 Missing Script，由 CleanupLegacyScene 编辑器工具一并清理
 
         // 添加 SurvivalTopBarUI
         var newUI = topBarGO.GetComponent<SurvivalTopBarUI>()
