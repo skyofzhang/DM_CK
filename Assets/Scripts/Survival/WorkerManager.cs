@@ -721,11 +721,14 @@ namespace DrscfZ.Survival
                 if (w != null) w.TriggerSpecial();
         }
 
-        /// <summary>触发全体Worker冻结（捣乱礼物预留接口）</summary>
+        /// <summary>触发全体Worker冻结（捣乱礼物预留接口）。
+        /// ⚠️ audit-r24 GAP-B24-14：r24 之前 duration 入参拿到但 TriggerFrozen() 内部硬编 30s 忽略，
+        /// FrozenStatusUI 横幅显示传入的 5s 但 worker 实际冻 30s，UI 与实际状态不一致。
+        /// 现透传 duration 给 TriggerFrozen(durationSec) → _frozenDurationOverride 覆盖 FROZEN_DURATION。</summary>
         public void ActivateAllWorkersFrozen(float duration = 30f)
         {
             foreach (var w in _activeWorkers)
-                if (w != null) w.TriggerFrozen();
+                if (w != null) w.TriggerFrozen(duration);
         }
 
         /// <summary>暂停所有Worker动画（gift_pause特效期间）</summary>

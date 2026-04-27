@@ -150,7 +150,8 @@ namespace DrscfZ.Survival
         private const float MOVE_SPEED        = 1.5f;  // 移动速度（m/s）自然步行速度
         private const float WORK_DURATION     = 4f;  // 工作时长（秒）
         private const float SPECIAL_DURATION  = 3f;  // 金色光晕时长
-        private const float FROZEN_DURATION   = 30f; // 冻结时长
+        private const float FROZEN_DURATION   = 30f; // 冻结时长（默认；TriggerFrozen 入参可覆盖，audit-r24 GAP-B24-14）
+        private float       _frozenDurationOverride = 0f; // TriggerFrozen 入参临时覆盖（0 = 用 FROZEN_DURATION 默认）
         private const float BOB_AMPLITUDE     = 0.05f;
         private const float BOB_FREQ          = 2f * Mathf.PI; // 2π → 1 Hz
         private const float RETURN_HOME_SPEED = 1.5f;  // 返回待机位速度
@@ -443,9 +444,14 @@ namespace DrscfZ.Survival
                     break;
 
                 case State.Frozen:
-                    if (_visual != null) _visual.ActivateFrozen(FROZEN_DURATION);
-                    if (_bubble != null) _bubble.ShowSpecial("冰", new Color(0.533f, 0.8f, 1.0f, 0.9f));
-                    Invoke(nameof(OnFrozenEnd), FROZEN_DURATION);
+                    {
+                        // ⚠️ audit-r24 GAP-B24-14：r23 之前 frozen_all 路径硬编 30s，simulate_freeze 推 5s 时实际仍 30s 失效
+                        // 修复：使用 _frozenDurationOverride（TriggerFrozen 入参传入）替代固定 FROZEN_DURATION
+                        float frozenDur = _frozenDurationOverride > 0f ? _frozenDurationOverride : FROZEN_DURATION;
+                        if (_visual != null) _visual.ActivateFrozen(frozenDur);
+                        if (_bubble != null) _bubble.ShowSpecial("冰", new Color(0.533f, 0.8f, 1.0f, 0.9f));
+                        Invoke(nameof(OnFrozenEnd), frozenDur);
+                    }
                     break;
 
                 case State.Dead:
@@ -727,6 +733,7 @@ namespace DrscfZ.Survival
         private void OnFrozenEnd()
         {
             if (_visual != null) _visual.Reset();
+            _frozenDurationOverride = 0f; // audit-r24 GAP-B24-14：清空 override，下次 TriggerFrozen() 默认走 FROZEN_DURATION
             _state = _stateBeforeSpecial;
             EnterState(_state);
         }
@@ -779,11 +786,14 @@ namespace DrscfZ.Survival
             TransitionTo(State.Special);
         }
 
-        /// <summary>触发Frozen状态，30秒后恢复原状态</summary>
-        public void TriggerFrozen()
+        /// <summary>触发Frozen状态，duration 秒后恢复原状态。
+        /// ⚠️ audit-r24 GAP-B24-14：补 durationSec 入参 — r24 之前硬编 30s 导致 simulate_freeze 推 5s 失效，
+        /// 现 special_effect=frozen_all 路径透传 data.duration → ActivateAllWorkersFrozen → TriggerFrozen(dur)。</summary>
+        public void TriggerFrozen(float durationSec = 30f)
         {
             if (_state == State.Frozen) return;
             _stateBeforeSpecial = _state;
+            _frozenDurationOverride = durationSec > 0f ? durationSec : 30f;
             TransitionTo(State.Frozen);
         }
 

@@ -116,6 +116,10 @@ namespace DrscfZ.UI
                 sgm.OnTribeWarAttackStarted    += HandleTribeWarAttackStarted;
                 sgm.OnTribeWarUnderAttack      += HandleTribeWarUnderAttack;
                 sgm.OnTribeWarAttackEnded      += HandleTribeWarAttackEnded;
+                // ⚠️ audit-r24 GAP-B24-20：断线重连后 _activeExpeditionsCount 不同步修复
+                // r24 之前仅订阅 OnExpeditionStarted/Returned 增减，断线重连时 room_state.expeditions[] 数组不同步
+                // → HUD 推荐"可派矿工探险"但实际服务端有进行中探险，会被拒（被动 wrong_phase 提示，体验失真）
+                sgm.OnRoomState                += HandleRoomStateForExpeditionCount;
             }
 
             // 从 SurvivalGameManager 缓存初始化 seasonDay / variant
@@ -165,6 +169,7 @@ namespace DrscfZ.UI
                 sgm.OnExpeditionStarted        -= HandleExpeditionStarted;
                 sgm.OnExpeditionReturned       -= HandleExpeditionReturned;
                 sgm.OnExpeditionFailed         -= HandleExpeditionFailed;
+                sgm.OnRoomState                -= HandleRoomStateForExpeditionCount;
                 sgm.OnTribeWarAttackStarted    -= HandleTribeWarAttackStarted;
                 sgm.OnTribeWarUnderAttack      -= HandleTribeWarUnderAttack;
                 sgm.OnTribeWarAttackEnded      -= HandleTribeWarAttackEnded;
@@ -254,6 +259,23 @@ namespace DrscfZ.UI
         {
             // send 被拒的场景计数不变；已有探险此事件不触发
             RefreshCards();
+        }
+
+        /// <summary>
+        /// ⚠️ audit-r24 GAP-B24-20：断线重连同步 _activeExpeditionsCount。
+        /// 服务端 room_state 包含 expeditions[] 数组（进行中的探险列表），客户端订阅后从 Length 同步计数器。
+        /// 仅在 expeditions 字段非 null 时同步，避免误清零。
+        /// </summary>
+        private void HandleRoomStateForExpeditionCount(RoomStateData data)
+        {
+            if (data == null || data.expeditions == null) return;
+            int newCount = data.expeditions.Length;
+            if (newCount != _activeExpeditionsCount)
+            {
+                Debug.Log($"[BroadcasterDecisionHUD] room_state sync expeditions: {_activeExpeditionsCount} → {newCount}");
+                _activeExpeditionsCount = newCount;
+                RefreshCards();
+            }
         }
 
         private void HandleTribeWarAttackStarted(TribeWarAttackStartedData data)

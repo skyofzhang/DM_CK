@@ -36,6 +36,18 @@ namespace DrscfZ.Survival
         public int  dailyCapMax;
         public long dailyResetAt;              // Unix ms，下次 UTC+8 05:00
         public bool dailyCapBlocked;
+        // ⚠️ audit-r24 GAP-A24-02 补 7 个关键字段（断线重连静默丢失修复）：
+        //   服务端 SurvivalGameEngine.js:1473-1479 getFullState() 已 emit 7 字段，但客户端 Data 类完全无定义，
+        //   JsonUtility 反序列化时整块字段静默丢失，断线重连后客户端 SeasonTopBarUI / FortressDayBadgeUI 等关键 HUD
+        //   会显示错误状态直到下一条 world_clock_tick / season_state / fortress_day_changed 抵达（最长 1s 不一致窗口）。
+        //   r24 修复后客户端断线重连可立即拿到完整赛季/堡垒日/全服时钟状态。
+        public int    fortressDay;             // §36 当前堡垒日（默认 1）
+        public int    maxFortressDay;          // §36 最高堡垒日（主播榜算法依据，默认 1）
+        public int    seasonId;                // §36 赛季 ID（递增 1, 2, 3...）
+        public int    seasonDay;               // §36 赛季日（1-7）
+        public string themeId;                 // §36 主题（'classic_frozen' / 'blood_moon' / 'snowstorm' / 'dawn' / 'frenzy' / 'serene'）
+        public string phase;                   // §36 GlobalClock 全服时钟阶段（'day' / 'night'）
+        public int    phaseRemainingSec;       // §36 GlobalClock 阶段剩余秒数
         // 🆕 §19.1 P0-B3：矿工等级/皮肤/HP 批量同步（服务端 getFullState 输出）
         //   每个元素对应一个矿工的当前运行态；缺失字段 JsonUtility 回落默认值。
         //   与 worker_hp_update 独立消息配合：game_state 推送全量；hp_update 推送增量。
@@ -112,7 +124,12 @@ namespace DrscfZ.Survival
     }
 
     /// <summary>🆕 §34 Layer 3 组 D（E2）叙事节奏 —— 幕切换公告数据（type=chapter_changed）
-    /// 映射到赛季日范围：prologue(D1) / act1(D2-3) / act2(D4-5) / act3(D6) / finale(D7)。</summary>
+    /// 映射到赛季日范围：prologue(D1) / act1(D2-3) / act2(D4-5) / act3(D6) / finale(D7)。
+    /// ⚠️ audit-r24 GAP-D24-02 补 endNote + seasonDay 2 字段：
+    ///   服务端 SurvivalGameEngine.js:6921-6926 emit { name, actTag, startDay, endDay, endNote, seasonDay } 共 6 字段，
+    ///   r24 之前客户端 ChapterChangedData 仅 4 字段（name/startDay/endDay/actTag），缺 endNote + seasonDay；
+    ///   JsonUtility 反序列化时整块字段静默丢失，客户端 ChapterAnnouncementUI 永远无法显示 endNote 文案
+    ///   （"首个精英怪出现"/"双 Boss 同时出现"等 §34.4 E2 幕终事件关键文案）。</summary>
     [Serializable]
     public class ChapterChangedData
     {
@@ -120,6 +137,8 @@ namespace DrscfZ.Survival
         public int    startDay;  // 起始赛季日（含）
         public int    endDay;    // 结束赛季日（含）
         public string actTag;    // "prologue"/"act1"/"act2"/"act3"/"finale"（驼峰命名，与 phase_changed.act_tag 对齐 BGM 层）
+        public string endNote;   // 🆕 audit-r24 GAP-D24-02：幕终事件关键文案（§34.4 E2，如"首个精英怪出现"/"双 Boss 同时出现"）
+        public int    seasonDay; // 🆕 audit-r24 GAP-D24-02：服务端推送时的当前赛季日（1-7）
     }
 
     /// <summary>🆕 §34 Layer 3 组 D（E6）夜间修饰符 —— 单次夜晚的"关卡条件"
@@ -144,7 +163,12 @@ namespace DrscfZ.Survival
     }
 
     /// <summary>🆕 §34 Layer 3 组 D（E5b）夜战报告 —— 夜→昼转换时 2.5s 多行回顾（type=night_report）
-    /// 不与结算面板重叠（结算仅游戏结束时，夜战报告每夜转白天时）。</summary>
+    /// 不与结算面板重叠（结算仅游戏结束时，夜战报告每夜转白天时）。
+    /// ⚠️ audit-r24 GAP-D24-01 补 nightModifierId 字段：
+    ///   服务端 SurvivalGameEngine.js:7246 emit `nightModifierId: this._currentNightModifier ? id : 'normal'`，
+    ///   r24 之前客户端 NightReportData 完全无此字段，JsonUtility 静默丢失，
+    ///   §34.4 E5b 夜战报告自实装至今从未触发过 modifier-aware 反馈
+    ///   （"血月之夜：消灭 47 只怪"/"极夜：仅靠 X 名矿工守住"等 7 种修饰符差异化 UI 全部失效）。</summary>
     [Serializable]
     public class NightReportData
     {
@@ -158,6 +182,7 @@ namespace DrscfZ.Survival
         public string topGiftName;       // 最佳援助礼物名（可为空）
         public float  closestCallHpPct;  // 城门最低血量比（0-1）
         public float  survivalRate;      // 矿工存活率（0-1）
+        public string nightModifierId;   // 🆕 audit-r24 GAP-D24-01：'normal'/'blood_moon'/'polar_night'/'fortified'/'frenzy'/'hunters'/'blizzard_night'
     }
 
     /// <summary>🆕 §34 Layer 3 组 D（E8）参与感唤回 —— 单条记录（entries[] 数组元素）
@@ -218,6 +243,18 @@ namespace DrscfZ.Survival
         // audit-r23 GAP-A23-05：白天 scout 路径标识（服务端 L5442/L5458 emit；E03/§11 white-day scout 弱怪 atk=0 hp×0.3）
         // 客户端可据此过滤战斗判定（不计入 _activeMonsters 战斗逻辑），仅做视觉/玩法占位
         public bool               isDaytimeScout;
+        // ⚠️ audit-r24 GAP-A24-03 补 elite_raid 4 字段（§24.4 主播轮盘"精英来袭"卡触发的单只精英怪）：
+        //   服务端 SurvivalGameEngine.js:8175-8179 emit { spawnSide, monsterType: 'elite_raid', bypassCap: true, eliteHp, eliteAtk }
+        //   r24 之前客户端 MonsterWaveData 完全无这 4 字段，JsonUtility 静默丢失，
+        //   "精英来袭"卡触发后客户端按普通 normal 怪渲染，玩家无法识别精英怪威胁感（30s deadline）；
+        //   bypassCap=true 也无法在 SpawnWave 路径跳过 maxAliveMonsters 检查导致排队延迟。
+        public string monsterType;             // 'elite_raid'（轮盘卡触发）/ null（常规波次）
+        public bool   bypassCap;               // true → SpawnWave 跳过 maxAliveMonsters 排队
+        public int    eliteHp;                 // 精英怪 HP（服务端按 difficulty 计算）
+        public int    eliteAtk;                // 精英怪 ATK
+        // ⚠️ audit-r24 GAP-C24-03 补字段：服务端 SurvivalGameEngine.js:5239 _spawnBossGuards emit
+        //   monster_wave { isBossGuardSpawn: true, ... }；客户端可据此触发暗金标识 + 震屏 + 音效
+        public bool   isBossGuardSpawn;        // 召唤 Boss 卫兵生成
     }
 
     /// <summary>玩家工作指令（服务器转发评论）</summary>
@@ -552,15 +589,21 @@ namespace DrscfZ.Survival
     }
 
     /// <summary>单个玩家贡献更新（type=contribution_update，§34 Batch D Agent 新增）。
-    /// 服务端推送单人贡献增量；前端用来刷新个人贡献条/徽标。协议宽松：
-    /// contribution / delta 后端可只发一个，前端按存在字段使用。</summary>
+    /// ⚠️ audit-r24 GAP-A24-01/B24-12 补 total + source 字段（r22/r23 漏修）：
+    ///   服务端 Server/src/SurvivalGameEngine.js:2110-2117 仅在 T6 礼物 +100 贡献奖励时单点 emit，
+    ///   字段 `{ playerId, delta, total, source }` 4 项，**实际不是"每次 _trackContribution 后差额推送"**（r22 doc 描述失真）。
+    ///   r24 之前客户端字段名 `contribution` ↔ 服务端 `total` 不匹配 → JsonUtility 反序列化时 contribution 恒为 0；
+    ///   `source` 字段缺失 → T6 max_level_bonus / upgrade_bonus 差异化 UI 文案路径完全失效；
+    ///   `playerName` 服务端 0 emit（保留兼容字段）。</summary>
     [Serializable]
     public class ContributionUpdateData
     {
         public string playerId;
-        public string playerName;
-        public int    contribution;    // 当局累计贡献（0 表示"未下发"时由前端用 delta 累加）
-        public int    delta;           // 本次增量（可正可负）
+        public string playerName;     // 客户端兼容字段（服务端 0 emit；JsonUtility 缺失字段为 null）
+        public int    contribution;   // 客户端兼容字段（旧路径用；服务端实际发 total）
+        public int    delta;          // 本次增量（可正可负）
+        public int    total;          // 🆕 audit-r24 GAP-A24-01：服务端权威字段（当局累计贡献）；contribution 留作兼容
+        public string source;         // 🆕 audit-r24 GAP-A24-01：'gift_t6_max_level_bonus' | 'gift_t6_upgrade_bonus'（仅 T6 路径 emit）
     }
 
     // ==================== 助威模式 §33（🆕 v1.27，PM MVP：跳过 §36.12 / §30 依赖）====================
@@ -607,7 +650,11 @@ namespace DrscfZ.Survival
 
     // ==================== 本周贡献榜（type=weekly_ranking）====================
 
-    /// <summary>本周贡献榜单条记录</summary>
+    /// <summary>本周贡献榜单条记录。
+    /// ⚠️ audit-r24 GAP-B24-02 / POSSIBLE-D24-19 注释精确化：客户端拉取 vs 服务端主动推送两路径 Top N 不一致：
+    /// - 客户端主动请求（SurvivalRoom.js:592 case 'get_weekly_ranking' 默认 n=50，最大 50）→ 拿到 Top 50
+    /// - 服务端结算后主动广播（SurvivalRoom.js:411 _broadcastWeeklyRanking → getPayload(10)）→ 仅 Top 10
+    /// 客户端 SurvivalRankingUI 应理解两路径数据量差异，不假定单一上限。</summary>
     [Serializable]
     public class WeeklyRankingEntry
     {
@@ -757,11 +804,16 @@ namespace DrscfZ.Survival
         public ExpeditionOutcome outcome;
     }
 
-    /// <summary>探险结算详情（ExpeditionReturnedData.outcome 子对象）</summary>
+    /// <summary>探险结算详情（ExpeditionReturnedData.outcome 子对象）。
+    /// ⚠️ audit-r24 GAP-E24-02 注释精确化（r23 GAP-E23-03 半成品延续 — r23 修了 SurvivalGameManager.cs:2562 注释，
+    /// 但漏修本 Data 类注释）：'safe' 仅在 §34.4 E3b 不朽证明 _consumeFreeDeathPass 救回路径 emit（夜晚兜底专用），
+    /// 不是"无事件触发的中性归来"（_wildBeasts/_meteor/_mysticRune 等无事件分支全 emit 'success'/'died'/'empty'）。</summary>
     [Serializable]
     public class ExpeditionOutcome
     {
-        public string         type;          // 'success' / 'died' / 'empty' / 'safe'（audit-r21 GAP-A21-03 注释补齐：safe = 无事件触发的中性归来）
+        // 'success'：探险正常成功带回资源 / 'died'：矿工死亡 / 'empty'：空回（无收获）/
+        // 'safe'：仅在 §34.4 E3b 不朽证明 _consumeFreeDeathPass 救回路径 emit（夜晚兜底专用，单点）
+        public string         type;
         public ResourceBundle resources;     // 可为 null（empty/died/safe 时）
         public int            contributions; // 未产生贡献时为 0
         public bool           died;
@@ -777,13 +829,20 @@ namespace DrscfZ.Survival
     }
 
     /// <summary>探险拒绝通知（type=expedition_failed）
-    /// 服务端拒绝 send/recall 时返回，客户端显示跑马灯提示原因。</summary>
+    /// 服务端拒绝 send/recall 时返回，客户端显示跑马灯提示原因。
+    /// ⚠️ audit-r24 GAP-D24-06/E24-09 reason 注释精确化：r24 之前注释列 10 项 reason，但 'supporter' / 'already_expedition' /
+    /// 'over_limit' 三项**服务端 0 emit**（grep `_startExpedition` 返回值），客户端 case 分支永远不触发，是 r19/r20 占位词残留。</summary>
     [Serializable]
     public class ExpeditionFailedData
     {
         public string playerId;
         public string workerId;    // 被拒的 Worker 索引/id（服务端 workerIdx 字符串化，空字符串为默认）
-        public string reason;      // 'max_concurrent'/'wrong_phase'/'worker_dead'/'duplicate'/'supporter'/'supporter_not_allowed'/'season_ending'/'feature_locked'/'already_expedition'/'over_limit'
+        // 服务端实际 emit 7 项 reason：
+        //   'feature_locked'（D5 前未解锁）/ 'wrong_phase'（仅 day/recovery 可派遣）/ 'season_ending'（D7 终章禁止）/
+        //   'supporter_not_allowed'（助威者不可发起）/ 'duplicate'（同 Worker 已在探险）/
+        //   'max_concurrent'（同时 ≥ 2 探险）/ 'worker_dead'（Worker 已死亡）
+        // 客户端兜底防御别名（FailureToastLocale 兼容旧实装名）：'supporter'/'already_expedition'/'over_limit' — 服务端 0 emit
+        public string reason;
         public int    unlockDay;   // 仅 reason='feature_locked' 时有效；其他场景序列化为 0
     }
 
@@ -899,13 +958,19 @@ namespace DrscfZ.Survival
         public string   reason;         // 当前固定为 'demoted'
     }
 
-    /// <summary>瞭望塔 10s 预告怪物波次（type=monster_wave_incoming）</summary>
+    /// <summary>瞭望塔 10s 预告怪物波次（type=monster_wave_incoming）。
+    /// ⚠️ audit-r24 GAP-E24-01 补 leadSec 字段：
+    ///   两路径 emit：watchtower 路径（SurvivalGameEngine.js:4570-4577 / :4735-4744）emit 3 字段；
+    ///   emergency_alert 路径（:9434-9439）emit 4 字段含 leadSec（10s/30s 区分有无瞭望塔）。
+    ///   r24 之前客户端 MonsterWaveIncomingData 仅 3 字段缺 leadSec，emergency_alert 时 UI 走 fallback metadata.leadSec
+    ///   兜底，体验失真。</summary>
     [Serializable]
     public class MonsterWaveIncomingData
     {
         public int  waveIndex;
         public long spawnsAt;           // Unix ms
         public long firstAttackAt;      // Unix ms ≈ spawnsAt + 3500
+        public int  leadSec;            // 🆕 audit-r24 GAP-E24-01：emergency_alert 路径携带（10/30），watchtower 路径不携带（默认 0）
     }
 
     // ==================== 主播排行榜（type=streamer_ranking）====================
@@ -1605,12 +1670,15 @@ namespace DrscfZ.Survival
     /// audit-r12 GAP-B10 注释精化：本类型同时承载两个方向：
     ///   - C→S（客户端发起反击请求）：客户端**仅传** targetRoomId；damageMultiplier **不传**（服务端忽略客户端入参，防伪造）
     ///   - S→C（服务端推送反击状态/战报）：服务端填 targetRoomId + damageMultiplier
-    /// damageMultiplier 由服务端依据攻击方是否有 beacon 建筑决定（1.5 有 / 1.0 无）。</summary>
+    /// ⚠️ audit-r24 GAP-D24-04 注释方向修正（r12 注释方向语义颠倒）：
+    /// damageMultiplier 由服务端依据**反击发起方（即原防守方）**是否有 beacon 建筑决定（1.5 有 / 1.0 无）。
+    /// 服务端 SurvivalRoom.js:961 `(this.survivalEngine && ... this._buildings.has('beacon')) ? 1.5 : 1.0` —
+    /// `this.survivalEngine` 是反击发起方的引擎，与策划案 §35.6 / §37.2 文案"防守方若建有 beacon"对齐。</summary>
     [Serializable]
     public class TribeWarRetaliateData
     {
         public string targetRoomId;
-        public float  damageMultiplier;  // S→C only: 1.5 if has beacon, 1.0 otherwise (C→S 客户端不传)
+        public float  damageMultiplier;  // S→C only: 1.5 if 反击发起方（原防守方）has beacon, 1.0 otherwise (C→S 客户端不传)
     }
 
     // ==================== §34 B7 新手引导（🆕 v1.27+ audit-r3/P1） ====================

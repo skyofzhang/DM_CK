@@ -82,6 +82,11 @@ namespace DrscfZ.Systems
         [SerializeField] private AudioClip sfxRankDown;
         [SerializeField] private AudioClip sfxUIToast;
         [SerializeField] private AudioClip sfxUISettlement;
+        // ⚠️ audit-r24 GAP-C24-02 三方断点修复：常量定义 ✅ + 资源 ⏳ 美术延后 + 字典/LoadFromResources 注册 ✅
+        // 调用方 SurvivalGameManager.cs:2131/2140 (LegendPromote/TierPromote) + WorkerController.cs:909 (WorkerShield) 在
+        // r24 之前永远报 SFX not found warning；现 _sfxMap 字典 + LoadFromResources 都已注册，等待美术交付 mp3 即可生效。
+        [SerializeField] private AudioClip sfxTierPromote;          // 矿工阶段晋升（含 SFX_LEGEND_PROMOTE 共用 clip）
+        [SerializeField] private AudioClip sfxWorkerShieldActivate; // §30.3 阶8 护盾激活
 
         [Header("Settings")]
         public int maxConcurrentSFX = 5;
@@ -189,6 +194,9 @@ namespace DrscfZ.Systems
                 { "sfx_rank_down",           sfxRankDown },
                 { "ui_toast",                sfxUIToast },
                 { "ui_settlement",           sfxUISettlement },
+                // ⚠️ audit-r24 GAP-C24-02：补 _sfxMap 注册（之前 SFX_TIER_PROMOTE / SFX_LEGEND_PROMOTE / SFX_WORKER_SHIELD_ACTIVATE 永远报 SFX not found）
+                { "sfx_tier_promote",            sfxTierPromote },
+                { "sfx_worker_shield_activate",  sfxWorkerShieldActivate },
             };
 
             _bgmMap = new Dictionary<string, AudioClip>
@@ -261,6 +269,9 @@ namespace DrscfZ.Systems
             if (sfxRankDown         == null) sfxRankDown         = Resources.Load<AudioClip>("Audio/SFX/sfx_rank_down");
             if (sfxUIToast          == null) sfxUIToast          = Resources.Load<AudioClip>("Audio/UI/ui_toast");
             if (sfxUISettlement     == null) sfxUISettlement     = Resources.Load<AudioClip>("Audio/UI/ui_settlement");
+            // ⚠️ audit-r24 GAP-C24-02：补 LoadFromResources（资源文件待美术交付，目前 Resources.Load 返 null fallback 走 Inspector 默认）
+            if (sfxTierPromote          == null) sfxTierPromote          = Resources.Load<AudioClip>("Audio/SFX/sfx_tier_promote");
+            if (sfxWorkerShieldActivate == null) sfxWorkerShieldActivate = Resources.Load<AudioClip>("Audio/SFX/sfx_worker_shield_activate");
         }
 
         // ==================== SFX ====================
