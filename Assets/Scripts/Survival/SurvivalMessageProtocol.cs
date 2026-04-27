@@ -210,5 +210,10 @@ namespace DrscfZ.Survival
         public const string BossWeaknessStarted = "boss_weakness_started"; // S→C：§34 F4 Boss 露出弹幕弱点 5s（发起 6 倍伤害 / T5 AOE 3 倍）
         public const string BossWeaknessEnded   = "boss_weakness_ended";   // S→C：§34 F4 Boss 弱点期结束
         public const string InvalidCommandHint  = "invalid_command_hint";  // S→C：§34 F8 指令无效单播提示（invalid_cmd_5 / wrong_phase_6）
+
+        // ----- audit-r20 客户端补齐（🆕） -----
+        public const string ChapterEndEvent          = "chapter_end_event";          // S→C：§34.3 D 段幕末事件全屏公告（first_elite/double_boss/mini_boss_rush/hp_amplified/boss_rush_finale）
+        public const string FreeDeathPassTriggered   = "free_death_pass_triggered";  // S→C：§34.3 E3b 不朽证明（20000贡献）矿工免死豁免触发
+        public const string RoomDestroyed            = "room_destroyed";             // S→C：§15 / §19.2 房间销毁通知（reason: 'timeout' 等）
     }
 }

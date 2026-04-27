@@ -1768,4 +1768,45 @@ namespace DrscfZ.Survival
         public string msg;   // 中文提示文本，服务端本地化后单播
         public int    ttl;   // 毫秒，默认 4000
     }
+
+    /// <summary>audit-r20：§34.3 D 段幕末事件全屏公告（type=chapter_end_event，S→C，全房广播）。
+    /// 服务端 SurvivalGameEngine.js:6987 _applyActEndEventIfNeeded() emit；按 seasonDay 触发：
+    /// - seasonDay=1（prologue 结束夜）：actTag='prologue', event='first_elite', hint='首个精英怪来袭！'
+    /// - seasonDay=3（act1 结束夜）：actTag='act1',     event='double_boss', hint='双 Boss 同时出现！'
+    /// - seasonDay=5（act2 结束夜）：actTag='act2',     event='mini_boss_rush', hint='Boss Rush 降临！'
+    /// - seasonDay=6（act3 结束夜）：actTag='act3',     event='hp_amplified', hint='极限挑战：怪物 HP ×1.5，Boss HP ×2！'
+    /// - seasonDay=7（终章）：       actTag='finale',   event='boss_rush_finale', hint='终章 Boss Rush（§36）'
+    /// 客户端：UI 全屏 hint 公告（淡入淡出 2s）+ TopBar 角落 actTag。</summary>
+    [Serializable]
+    public class ChapterEndEventData
+    {
+        public int    day;        // 当前 day（含累积，与 fortressDay 同步）
+        public int    seasonDay;  // 1~7 当前赛季日（D7 整周循环）
+        public string actTag;     // "prologue" | "act1" | "act2" | "act3" | "finale"
+        public string @event;     // "first_elite" | "double_boss" | "mini_boss_rush" | "hp_amplified" | "boss_rush_finale"
+        public string hint;       // 全屏公告中文文本
+    }
+
+    /// <summary>audit-r20：§34.3 E3b 不朽证明免死豁免触发（type=free_death_pass_triggered，S→C，全房广播）。
+    /// 服务端 SurvivalGameEngine.js:6752 _consumeFreeDeathPass() emit；
+    /// 触发时机：玩家累计贡献达 20000（"不朽证明"门槛）后，矿工首次将死时消费一次免死豁免，
+    /// 矿工原地满血复活；同时记录"最戏剧性事件"候选（_recordDramaticEvent('free_death_pass')）。
+    /// 客户端：UI 跑马灯/全屏金光提示 "{playerName} 触发不朽证明，矿工免死复活！"</summary>
+    [Serializable]
+    public class FreeDeathPassTriggeredData
+    {
+        public string playerId;
+        public string playerName;
+    }
+
+    /// <summary>audit-r20：§15 / §19.2 房间销毁通知（type=room_destroyed，S→C，单播给该房间所有 ws 客户端）。
+    /// 服务端 SurvivalRoom.js:354 emit 后立即 ws.close(1000, 'room_destroyed')；
+    /// reason 通常为 'timeout'（房间空闲超时被回收）。
+    /// 客户端：UI 弹窗"房间已销毁（原因：超时）" + 自动回大厅；并兜底 NetworkManager.OnClose(1000) 触发同样路径。</summary>
+    [Serializable]
+    public class RoomDestroyedData
+    {
+        public string roomId;
+        public string reason;  // "timeout" 等
+    }
 }

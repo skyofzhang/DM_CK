@@ -222,6 +222,11 @@ namespace DrscfZ.Survival
         public event Action<BossWeaknessEndedData>   OnBossWeaknessEnded;   // §34 F4 Boss 弱点结束
         public event Action<InvalidCommandHintData>  OnInvalidCommandHint;  // §34 F8 无效指令单播提示
 
+        // ----- audit-r20 客户端补齐（🆕） -----
+        public event Action<ChapterEndEventData>        OnChapterEndEvent;          // §34.3 D 段幕末事件全屏公告
+        public event Action<FreeDeathPassTriggeredData> OnFreeDeathPassTriggered;   // §34.3 E3b 不朽证明（20000贡献）矿工免死豁免触发
+        public event Action<RoomDestroyedData>          OnRoomDestroyed;            // §15 / §19.2 房间销毁通知（reason:'timeout' 等）
+
         /// <summary>§34 B9 最近一次收到的 playerStats（供 UI 查询，初始为 null）。
         /// 收到第一条 work_command_response.playerStats 后 PersonalContribUI 常驻显示。</summary>
         public PlayerStatsData LastPlayerStats { get; private set; }
@@ -1108,6 +1113,48 @@ namespace DrscfZ.Survival
                     {
                         Debug.Log($"[SGM] invalid_command_hint type={ich.type} msg={ich.msg} ttl={ich.ttl}");
                         OnInvalidCommandHint?.Invoke(ich);
+                    }
+                    break;
+
+                // ----- audit-r20 客户端补齐（🆕） -----
+
+                // §34.3 D 段幕末事件：5 种 actTag×event 组合的全屏公告，UI 层订阅显示
+                case SurvivalMessageProtocol.ChapterEndEvent:
+                    var cee = JsonUtility.FromJson<ChapterEndEventData>(dataJson);
+                    if (cee != null)
+                    {
+                        Debug.Log($"[SGM] chapter_end_event seasonDay={cee.seasonDay} actTag={cee.actTag} event={cee.@event} hint={cee.hint}");
+                        OnChapterEndEvent?.Invoke(cee);
+                        if (!string.IsNullOrEmpty(cee.hint))
+                            OnPlayerActivityMessage?.Invoke(cee.hint);
+                    }
+                    break;
+
+                // §34.3 E3b 不朽证明：累计贡献 20000 触发免死豁免，矿工原地满血复活
+                case SurvivalMessageProtocol.FreeDeathPassTriggered:
+                    var fdp = JsonUtility.FromJson<FreeDeathPassTriggeredData>(dataJson);
+                    if (fdp != null)
+                    {
+                        Debug.Log($"[SGM] free_death_pass_triggered playerId={fdp.playerId} playerName={fdp.playerName}");
+                        OnFreeDeathPassTriggered?.Invoke(fdp);
+                        var nm = string.IsNullOrEmpty(fdp.playerName) ? fdp.playerId : fdp.playerName;
+                        OnPlayerActivityMessage?.Invoke($"<color=#FFD700>★ {nm} 触发不朽证明，矿工免死复活！</color>");
+                    }
+                    break;
+
+                // §15 / §19.2 房间销毁：服务端 emit 后立即 ws.close(1000)；客户端 UI 弹窗 + 兜底回大厅
+                case SurvivalMessageProtocol.RoomDestroyed:
+                    var rd = JsonUtility.FromJson<RoomDestroyedData>(dataJson);
+                    if (rd != null)
+                    {
+                        Debug.Log($"[SGM] room_destroyed roomId={rd.roomId} reason={rd.reason}");
+                        OnRoomDestroyed?.Invoke(rd);
+                        var rzh = rd.reason switch
+                        {
+                            "timeout" => "房间空闲超时",
+                            _          => string.IsNullOrEmpty(rd.reason) ? "未知原因" : rd.reason,
+                        };
+                        OnPlayerActivityMessage?.Invoke($"<color=#FF9999>房间已销毁（{rzh}）</color>");
                     }
                     break;
             }
