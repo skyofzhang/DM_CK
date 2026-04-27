@@ -73,10 +73,10 @@ namespace DrscfZ.Core
         // SFX — 警报（循环）
         // ============================================================
 
-        /// <summary>城门HP≤30%警报（循环，2s循环体，音量0.8）</summary>
+        /// <summary>城门HP≤30%警报（循环，2s循环体，音量0.6 — audit-r22 GAP-C22-04 注释同步：与 CityGateSystem.cs:129 StartLoopSFX(SFX_GATE_ALARM, 0.6f) 一致）</summary>
         public const string SFX_GATE_ALARM = "sfx_gate_alarm";
 
-        /// <summary>炉温≤-80℃寒风警报（循环，3s循环体，音量0.8）</summary>
+        /// <summary>炉温≤-80℃寒风警报（循环，3s循环体，音量0.55 — audit-r22 GAP-C22-04 注释同步：与 CityGateSystem.cs:146 StartLoopSFX(SFX_COLD_ALARM, 0.55f) 一致）</summary>
         public const string SFX_COLD_ALARM = "sfx_cold_alarm";
 
         /// <summary>矿工护盾激活 5s 免伤（§30.3 阶8，audit-r6 P0-F4 常量化）</summary>

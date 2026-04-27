@@ -235,17 +235,23 @@ namespace DrscfZ.Survival
     }
 
     /// <summary>礼物 effects 嵌套字段（audit-r6 P1-F1 补齐：T5 AOE 视觉反馈）
-    /// 服务端 _handleLoveExplosion / _handleMysteryAirdrop 等效果分支下发 effects object。</summary>
+    /// 服务端 _handleLoveExplosion / _handleMysteryAirdrop 等效果分支下发 effects object。
+    /// ⚠️ audit-r22 GAP-A22-02 修复：
+    ///   1. revivedWorkers 由 int 改为 string[]（服务端 L2169/L2488 emit `[playerId]` 数组，原 int 反序列化失败回 0）
+    ///   2. 补 globalEfficiencyDuration（T2 服务端 L2041 emit 30s）+ addGateHp（T5/T6 服务端 L2178/L2493 emit 200）
+    /// </summary>
     [Serializable]
     public class GiftEffectsData
     {
-        public int   aoeDamage;             // T5 全体怪物单次 AOE 伤害值
-        public int   monstersKilled;        // T5 击杀怪物数（用于跑马灯/GloryMoment）
-        public int   revivedWorkers;        // T5 复活矿工数
-        public int   healedWorkers;         // T5 治疗满血矿工数
-        public float efficiencyBonus;       // T1 仙女棒累计发送者个人加成（同步 §34 B8）
-        public float globalEfficiencyBoost; // T2 能力药丸全局 30s 提升倍率
-        public bool  supporterRedirect;     // §33.4 T4/T5 由助威者发送时重路由到随机守护者
+        public int      aoeDamage;             // T5 全体怪物单次 AOE 伤害值
+        public int      monstersKilled;        // T5 击杀怪物数（用于跑马灯/GloryMoment）
+        public string[] revivedWorkers;        // T5/T6 复活矿工 playerId 数组（audit-r22 GAP-A22-02 类型修正：int → string[]）
+        public int      healedWorkers;         // T5 治疗满血矿工数
+        public float    efficiencyBonus;       // T1 仙女棒累计发送者个人加成（同步 §34 B8）
+        public float    globalEfficiencyBoost; // T2 能力药丸全局 30s 提升倍率
+        public int      globalEfficiencyDuration; // T2 全局加成持续时长秒（audit-r22 GAP-A22-02 补字段；服务端 L2041 emit 30）
+        public int      addGateHp;             // T5/T6 城门 +HP（audit-r22 GAP-A22-02 补字段；服务端 L2178/L2493 emit 200）
+        public bool     supporterRedirect;     // §33.4 T4/T5 由助威者发送时重路由到随机守护者
     }
 
     /// <summary>礼物效果</summary>

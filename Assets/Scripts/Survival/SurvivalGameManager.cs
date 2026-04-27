@@ -1524,6 +1524,33 @@ namespace DrscfZ.Survival
             // 触发相机震屏（T3+ 礼物有重量感）
             if (gift.giftTier >= 3)
                 SurvivalCameraController.Shake(gift.giftTier * 0.05f, 0.4f);
+
+            // audit-r22 GAP-A22-02：effects 字段消费链路（修复服务端 emit 但客户端 0 消费的协议字段单向消费 gap）
+            // 服务端 SurvivalGameEngine.js _handleLoveExplosion / _handleMysteryAirdrop / case 'ability_pill' 在
+            // effects 嵌套对象写入 aoeDamage / monstersKilled / revivedWorkers[] / healedWorkers / globalEfficiencyBoost / globalEfficiencyDuration / addGateHp / efficiencyBonus / supporterRedirect 字段
+            if (gift.effects != null)
+            {
+                int reviveCount = gift.effects.revivedWorkers != null ? gift.effects.revivedWorkers.Length : 0;
+                Debug.Log($"[SGM] gift_effects tier={gift.giftTier} aoe={gift.effects.aoeDamage} killed={gift.effects.monstersKilled} revived={reviveCount} healed={gift.effects.healedWorkers} addGateHp={gift.effects.addGateHp} globalBoost={gift.effects.globalEfficiencyBoost} dur={gift.effects.globalEfficiencyDuration}s");
+                if (gift.giftTier == 5 && (gift.effects.aoeDamage > 0 || gift.effects.monstersKilled > 0))
+                {
+                    string t5Tail = reviveCount > 0 ? "，复活 1 名矿工" : (gift.effects.healedWorkers > 0 ? "，矿工满血" : string.Empty);
+                    UI.HorizontalMarqueeUI.Instance?.AddMessage(gift.playerName, gift.avatarUrl,
+                        $"爱的爆炸：全体怪物 -{gift.effects.aoeDamage}HP，击杀 {gift.effects.monstersKilled} 只" + t5Tail);
+                }
+                else if (gift.giftTier == 6 && reviveCount > 0)
+                {
+                    UI.HorizontalMarqueeUI.Instance?.AddMessage(gift.playerName, gift.avatarUrl,
+                        $"神秘空投：随机复活 {reviveCount} 名矿工");
+                }
+                else if (gift.giftTier == 2 && gift.effects.globalEfficiencyBoost > 1.0f)
+                {
+                    int boostPct = Mathf.RoundToInt((gift.effects.globalEfficiencyBoost - 1.0f) * 100f);
+                    int dur = gift.effects.globalEfficiencyDuration > 0 ? gift.effects.globalEfficiencyDuration : 30;
+                    UI.HorizontalMarqueeUI.Instance?.AddMessage(gift.playerName, gift.avatarUrl,
+                        $"能力药丸：全员采矿效率 +{boostPct}%，持续 {dur}s");
+                }
+            }
         }
 
         /// <summary>
