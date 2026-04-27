@@ -731,8 +731,8 @@ namespace DrscfZ.Survival
     [Serializable]
     public class ExpeditionOutcome
     {
-        public string         type;          // 'success' / 'died' / 'empty'
-        public ResourceBundle resources;     // 可为 null（empty/died 时）
+        public string         type;          // 'success' / 'died' / 'empty' / 'safe'（audit-r21 GAP-A21-03 注释补齐：safe = 无事件触发的中性归来）
+        public ResourceBundle resources;     // 可为 null（empty/died/safe 时）
         public int            contributions; // 未产生贡献时为 0
         public bool           died;
     }

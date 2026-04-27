@@ -465,6 +465,25 @@ namespace DrscfZ.Survival
                 case "worker_died":
                     var wd = JsonUtility.FromJson<WorkerDiedData>(dataJson);
                     WorkerManager.Instance?.HandleWorkerDied(wd.playerId, wd.respawnAt);
+                    // audit-r21 GAP-A21-01：消费 wd.reason 推送差异化跑马灯（r19 加字段，r21 补 UI 链路）
+                    // 服务端 emit reason: 'blizzard' / 'expedition_died' / 'expedition_night_kia' / ''（普通战斗）
+                    if (!string.IsNullOrEmpty(wd.reason))
+                    {
+                        string deathDisplayName = ResolveDisplayName(wd.playerId);
+                        string deathHint;
+                        switch (wd.reason)
+                        {
+                            case "blizzard":             deathHint = "被暴风雪夺命"; break;
+                            case "expedition_died":      deathHint = "外域遇险阵亡"; break;
+                            case "expedition_night_kia": deathHint = "外域夜战阵亡"; break;
+                            default:                     deathHint = null; break;
+                        }
+                        if (!string.IsNullOrEmpty(deathHint))
+                        {
+                            UI.HorizontalMarqueeUI.Instance?.AddMessage(deathDisplayName, null, deathHint);
+                            OnPlayerActivityMessage?.Invoke($"{deathDisplayName} {deathHint}");
+                        }
+                    }
                     break;
 
                 case "worker_revived":
@@ -1936,7 +1955,22 @@ namespace DrscfZ.Survival
                     new Color(1f, 0.85f, 0.1f), 3f);
             }
 
-            Debug.Log($"[SurvivalGM] 怪物死亡: {data.monsterId} ({data.monsterType}) 击杀者:{data.killerId}");
+            // audit-r21 GAP-A21-02：消费 data.reason 推送差异化跑马灯（r19 加字段，r21 补 UI 链路）
+            // 服务端 emit reason: 'elite_raid_timeout'（精英来袭超时撤退）/ 'meteor_shower'（流星雨群杀）/ ''（玩家击杀）
+            if (!string.IsNullOrEmpty(data.reason))
+            {
+                switch (data.reason)
+                {
+                    case "elite_raid_timeout":
+                        UI.HorizontalMarqueeUI.Instance?.AddMessage("精英来袭", null, "未能击杀，怪物撤退");
+                        break;
+                    case "meteor_shower":
+                        UI.HorizontalMarqueeUI.Instance?.AddMessage("流星雨", null, "怪物被流星击杀");
+                        break;
+                }
+            }
+
+            Debug.Log($"[SurvivalGM] 怪物死亡: {data.monsterId} ({data.monsterType}) 击杀者:{data.killerId} 原因:{data.reason}");
         }
 
         private void HandleNightCleared(string type, string dataJson)
@@ -2454,8 +2488,9 @@ namespace DrscfZ.Survival
         /// <summary>
         /// 格式化 outcome 文案：
         ///   success → "获得 矿石80 煤炭50"
-        ///   died    → "不幸阵亡"
+        ///   died    → "外域阵亡"
         ///   empty   → "空手而归"
+        ///   safe    → "平安归来"（audit-r21 GAP-A21-03 补齐：服务端 _wildBeasts/_meteor/_mysticRune 等无事件分支 emit safe）
         /// </summary>
         private static string FormatExpeditionOutcome(ExpeditionOutcome outcome)
         {
@@ -2464,6 +2499,7 @@ namespace DrscfZ.Survival
 
             if (outcome.type == "died")  return "外域阵亡";
             if (outcome.type == "empty") return "空手而归";
+            if (outcome.type == "safe")  return "平安归来";
 
             // success: 组合 resources + contributions
             var sb = new System.Text.StringBuilder();
