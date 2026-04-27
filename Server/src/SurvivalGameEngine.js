@@ -8980,8 +8980,11 @@ class SurvivalGameEngine {
 
   /**
    * §39 工具：校验 itemId 是否允许在当前 phase 购买（§39.6 购买窗口）
-   * state 合法值：idle | loading | day | night | settlement
-   *   MVP 无独立 `recovery` variant（策划案中 recovery = running 的第三种，本版归入 day 口径）
+   * state 合法值：idle | loading | day | night | settlement | recovery
+   * ⚠️ audit-r24 GAP-E24-16 修复：
+   *   1) A 类 worker_pep_talk / emergency_alert / gate_quickpatch / spotlight 加 recovery 兜底（与策划案 §39.6 对齐 ✓ 列）
+   *   2) B 类删 idle / loading 分支（与策划案 §39.6 ✗ 列对齐 — 游戏未开始时无 contributions，购买 B 类身份装备无意义）
+   *   3) doc 注释 "MVP 无独立 recovery variant" 删除（与 _enterRecovery 路径 state='recovery' 矛盾，r19 已实装）
    */
   _shopIsPhaseAllowed(itemId) {
     let cfg = SHOP_CATALOG[itemId];
@@ -8995,24 +8998,21 @@ class SurvivalGameEngine {
     if (!cfg) return false;
     const st = this.state;
     if (cfg.category === 'B') {
-      // §39.6 策划案：B 类全相位允许（让输了的局也能买头衔）
-      //   idle / loading / day / night / settlement / recovery 全部放行
-      //   恢复期 recovery 走 running 路径，服务端 state 仍为 'day'，此处显式列出兜底
-      return st === 'idle'
-          || st === 'loading'
-          || st === 'day'
+      // §39.6 策划案：B 类身份装备购买窗口 — day / night / recovery / settlement
+      // ⚠️ audit-r24 GAP-E24-16：删 idle / loading 兜底（游戏未开始时禁止购买）
+      return st === 'day'
           || st === 'night'
           || st === 'settlement'
           || st === 'recovery';
     }
-    // A 类：按 itemId 细分
+    // A 类：按 itemId 细分（⚠️ audit-r24 GAP-E24-16 全部加 recovery 兜底）
     switch (itemId) {
       case 'worker_pep_talk':
       case 'emergency_alert':
-        return st === 'day';
+        return st === 'day' || st === 'recovery';
       case 'gate_quickpatch':
       case 'spotlight':
-        return st === 'day' || st === 'night';
+        return st === 'day' || st === 'night' || st === 'recovery';
       default:
         return false;
     }

@@ -798,6 +798,10 @@ class SurvivalRoom {
         // §36.12 shop 门槛
         const itemIdP = (data && data.itemId) || '';
         if (!this._checkFeatureOrFail('shop', 'shop_purchase_failed', { itemId: itemIdP }, ws)) break;
+        // ⚠️ audit-r24 GAP-E24-20：补 _requireBroadcaster 守门（与策划案 §39.7 line 7175 对齐）
+        // r24 之前任何观众都可发起 prepare，恶意脚本可占用 pending 池（虽有"同主播 ≤1 pending"清理但攻击者可绕过）。
+        // 现限制只有主播能 prepare，与 §24 主播专属操作链路一致。
+        if (!this._requireBroadcaster(ws, 'shop_purchase_prepare')) break;
         // { itemId } — 仅主播 HUD B 类 ≥1000 时客户端调用
         const pid    = ws._playerId || (data && data.playerId) || '';
         this.survivalEngine.handleShopPurchasePrepare(pid, itemIdP);

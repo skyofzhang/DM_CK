@@ -51,7 +51,8 @@ namespace DrscfZ.Survival
         // 超时时长（秒）
         private const float LOADING_TIMEOUT_SECONDS = 15f;
 
-        // gift_pause 暂停标志（T5 神秘空投特效期间）
+        // gift_pause 暂停标志（T6 神秘空投 mystery_airdrop 特效期间，3000ms）
+        // ⚠️ audit-r24 GAP-A24-07：r23 注释 "T5 神秘空投" 错位（T5=爱的爆炸 / T6=神秘空投，r23 GAP-C23-02 已修 AudioConstants 注释 + §29.2 doc，但漏修本字段注释）。
         private bool _isPaused = false;
 
         // 事件（UI订阅）
@@ -456,6 +457,28 @@ namespace DrscfZ.Survival
                 // ----- 怪物波次 -----
                 case "monster_wave":
                     var mw = JsonUtility.FromJson<MonsterWaveData>(dataJson);
+                    // ⚠️ audit-r24 GAP-A24-04：r23 GAP-A23-05 加 isDaytimeScout 字段后客户端 0 消费的半成品延续修复
+                    // §11 E03 white-day scout 弱怪 atk=0 hp×0.3，仅做视觉/玩法占位，不计入战斗判定
+                    if (mw != null && mw.isDaytimeScout)
+                    {
+                        Debug.Log($"[SGM] monster_wave isDaytimeScout=true wave={mw.waveIndex} count={mw.count} — 跳过 _activeMonsters 战斗逻辑");
+                        UI.HorizontalMarqueeUI.Instance?.AddMessage(null, null, "白天侦察兵出现，注意警戒！");
+                        // 不调 SpawnWave，仅 UI 提示（保持 _activeMonsters 干净）
+                        break;
+                    }
+                    // ⚠️ audit-r24 GAP-A24-03：elite_raid 路径（§24.4 主播轮盘"精英来袭"卡触发的单只精英怪）
+                    if (mw != null && mw.monsterType == "elite_raid")
+                    {
+                        Debug.Log($"[SGM] monster_wave elite_raid hp={mw.eliteHp} atk={mw.eliteAtk} bypassCap={mw.bypassCap}");
+                        UI.HorizontalMarqueeUI.Instance?.AddMessage(null, null, $"精英来袭！HP {mw.eliteHp}，30s 内击杀方可脱险");
+                    }
+                    // ⚠️ audit-r24 GAP-C24-03：isBossGuardSpawn 路径（Boss 卫兵召唤）
+                    if (mw != null && mw.isBossGuardSpawn)
+                    {
+                        Debug.Log($"[SGM] monster_wave isBossGuardSpawn=true count={mw.count}");
+                        SurvivalCameraController.Shake(0.18f, 0.4f);
+                        UI.HorizontalMarqueeUI.Instance?.AddMessage(null, null, "Boss 召唤卫兵护驾！");
+                    }
                     monsterWaveSpawner?.SpawnWave(mw);
                     // 通知 WorkerManager 怪物出现，让闲置 Worker 自动攻击
                     WorkerManager.Instance?.OnMonstersAppear();
@@ -1517,8 +1540,11 @@ namespace DrscfZ.Survival
             if (!string.IsNullOrEmpty(sfxId))
                 Systems.AudioManager.Instance?.PlaySFX(sfxId);
 
-            // T5 神秘空投 → 顶部金色飘字
-            if (gift.giftTier >= 5)
+            // ⚠️ audit-r24 GAP-C24-01：r23 GAP-C23-02 漏修 — T5/T6 文案错位修复：
+            // T5 = love_explosion 爱的爆炸 / T6 = mystery_airdrop 神秘空投，按 tier 分发不同文案
+            if (gift.giftTier == 5)
+                UI.TopFloatingTextUI.Instance?.ShowGold($"{gift.playerName} 爱的爆炸！");
+            else if (gift.giftTier >= 6)
                 UI.TopFloatingTextUI.Instance?.ShowGold($"{gift.playerName} 神秘空投！");
 
             // 触发相机震屏（T3+ 礼物有重量感）
@@ -3461,6 +3487,10 @@ namespace DrscfZ.Survival
         public string eventId;       // trigger_event 时的事件 ID
         public string eventName;
         public string triggeredBy;
+        // ⚠️ audit-r24 GAP-A24-05 补 multiplier：服务端 SurvivalRoom.js:1207 efficiency_boost 路径 emit
+        // `multiplier: 2.0`；r24 之前客户端无字段 → JsonUtility 静默丢失 → UI 文案"效率翻倍"硬编码而非数据驱动。
+        // 未来若服务端调整倍率（如 1.5/2.5）客户端 UI 需联动显示动态文案。
+        public float  multiplier;    // efficiency_boost 时的倍率（2.0 默认；trigger_event 时为 0）
     }
 
     [Serializable] public class SpecialEffectData
