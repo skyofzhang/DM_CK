@@ -98,10 +98,13 @@ namespace DrscfZ.Core
         /// <summary>T4礼物音效（能量电池，5s电能爆鸣，音量1.0）</summary>
         public const string SFX_GIFT_T4 = "sfx_gift_t4_electric";
 
-        /// <summary>T5礼物音效（神秘空投，8s序列，音量1.0，最高优先级）</summary>
+        /// <summary>T5礼物音效（爱的爆炸 love_explosion，contribution=2000，8s序列，音量1.0，最高优先级；
+        /// audit-r23 GAP-C23-02 注释修正：之前误标为"神秘空投"——策划案 §7 礼物表 T5=爱的爆炸 / T6=神秘空投；
+        /// 资源文件名 sfx_gift_t5_airdrop 是历史命名遗留，保留避免破坏 Resources 引用）</summary>
         public const string SFX_GIFT_T5 = "sfx_gift_t5_airdrop";
 
-        /// <summary>T6礼物音效（爱的爆炸，与 T5 共用同一 clip — 策划案 §29 设计债，保留常量便于未来独立化）</summary>
+        /// <summary>T6礼物音效（神秘空投 mystery_airdrop，contribution=5000；与 T5 共用同一 clip — 策划案 §29 设计债，保留常量便于未来独立化；
+        /// audit-r23 GAP-C23-02 注释修正：之前误标为"爱的爆炸"）</summary>
         public const string SFX_GIFT_T6 = "sfx_gift_t5_airdrop";
 
         // audit-r10 清理：GiftNotificationUI 已删除（见 §28.3），对应 6 个别名常量

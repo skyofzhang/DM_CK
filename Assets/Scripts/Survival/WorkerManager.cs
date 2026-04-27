@@ -522,6 +522,14 @@ namespace DrscfZ.Survival
                 Debug.LogWarning($"[WorkerManager] HandleWorkerDied: playerId={playerId} 未找到对应Worker");
                 return;
             }
+            // audit-r23 GAP-A23-03：respawnAt=0 表示"不计时倒计时"分支（§34.4 E3b 不朽证明 _consumeFreeDeathPass 救回路径）
+            // 服务端 L8782 / L8953 emit `respawnAt: 0`；正常路径会随后再来一条 worker_died 携带正确 respawnAt 覆盖
+            // 客户端不应在 EnterDead 中显示 0s 或负数倒计时，本次跳过避免 UI 异常
+            if (respawnAt <= 0)
+            {
+                Debug.Log($"[WorkerManager] Worker '{playerId}' 死亡通知 respawnAt=0（探险/夜晚兜底分支），等待后续 worker_died 携带正确时间戳");
+                return;
+            }
             worker.EnterDead(respawnAt);
             Debug.Log($"[WorkerManager] Worker '{playerId}' 已死亡，将在{respawnAt}ms后复活");
         }

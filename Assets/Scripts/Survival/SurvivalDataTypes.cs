@@ -206,7 +206,7 @@ namespace DrscfZ.Survival
     [Serializable]
     public class MonsterWaveData
     {
-        public int    waveIndex;  // 第几批（0-based）
+        public int    waveIndex;  // 第几批（0-based；audit-r23 GAP-A23-05 注：白天 scout 路径 emit waveIndex=-1）
         public int    day;
         public string monsterId;  // e.g. "X_guai01"（旧协议字段，兼容保留）
         public int    count;      // 旧协议字段，兼容保留；新客户端优先走 monsters[]
@@ -215,6 +215,9 @@ namespace DrscfZ.Survival
         // 🆕 §31 多样性系统扩展
         public MonsterSpawnInfo[] monsters;   // 新字段：每只怪物独立携带 variant；为 null/空 → 走旧 count 路径
         public bool               isSummonSpawn;  // 召唤怪死亡触发的迷你怪生成（spawn 位置从屏幕中心偏移）
+        // audit-r23 GAP-A23-05：白天 scout 路径标识（服务端 L5442/L5458 emit；E03/§11 white-day scout 弱怪 atk=0 hp×0.3）
+        // 客户端可据此过滤战斗判定（不计入 _activeMonsters 战斗逻辑），仅做视觉/玩法占位
+        public bool               isDaytimeScout;
     }
 
     /// <summary>玩家工作指令（服务器转发评论）</summary>
@@ -235,10 +238,14 @@ namespace DrscfZ.Survival
     }
 
     /// <summary>礼物 effects 嵌套字段（audit-r6 P1-F1 补齐：T5 AOE 视觉反馈）
-    /// 服务端 _handleLoveExplosion / _handleMysteryAirdrop 等效果分支下发 effects object。
+    /// 服务端 _handleLoveExplosion / _handleMysteryAirdrop / case 'energy_battery' / case 'mystery_airdrop' / 助威者 T1/T4/T5 等效果分支下发 effects object。
     /// ⚠️ audit-r22 GAP-A22-02 修复：
     ///   1. revivedWorkers 由 int 改为 string[]（服务端 L2169/L2488 emit `[playerId]` 数组，原 int 反序列化失败回 0）
     ///   2. 补 globalEfficiencyDuration（T2 服务端 L2041 emit 30s）+ addGateHp（T5/T6 服务端 L2178/L2493 emit 200）
+    /// ⚠️ audit-r23 GAP-A23-01 补 10 字段（T4/T6/助威者 T1/T4/T5 路径之前 0 消费）：
+    ///   tempBoost / boostDuration（T4 守护者+助威者 emit）/ unfrozenWorkers（T4 联动解冻）/ giftPause（T6）
+    ///   redirectTargetId / redirectTargetName（助威者 T1/T4 重路由目标）
+    ///   addFood / addCoal / addOre / addHeat（T6 神秘空投 + T4 炉温）
     /// </summary>
     [Serializable]
     public class GiftEffectsData
@@ -252,6 +259,17 @@ namespace DrscfZ.Survival
         public int      globalEfficiencyDuration; // T2 全局加成持续时长秒（audit-r22 GAP-A22-02 补字段；服务端 L2041 emit 30）
         public int      addGateHp;             // T5/T6 城门 +HP（audit-r22 GAP-A22-02 补字段；服务端 L2178/L2493 emit 200）
         public bool     supporterRedirect;     // §33.4 T4/T5 由助威者发送时重路由到随机守护者
+        // audit-r23 GAP-A23-01 补字段（T4 守护者 + T4/T6 + 助威者 T1/T4 路径 0 消费 16 轮 audit）：
+        public float    tempBoost;             // T4 能量电池：发送者效率倍率（1.3）；助威者路径 = 重路由目标的倍率（服务端 L2069/L2551 emit）
+        public int      boostDuration;         // T4 倍率持续秒数（180）；服务端 L2070/L2552 emit
+        public int      unfrozenWorkers;       // T4 联动解冻：本次 T4 触发解冻的矿工数（服务端 L2079/L2565 emit）
+        public int      giftPause;             // T6 神秘空投触发的全局暂停毫秒（3000）；服务端 L2100 emit
+        public string   redirectTargetId;      // 助威者 T1/T4 重路由目标守护者 playerId；服务端 L2411/L2553 emit（空字符串=房间无守护者，未重路由）
+        public string   redirectTargetName;    // 助威者 T1/T4 重路由目标守护者展示名；服务端 L2412/L2554 emit
+        public int      addFood;               // T6 神秘空投资源加成；服务端 L2096 emit（500）；T3 甜甜圈 L2052 emit（100）
+        public int      addCoal;               // T6 神秘空投煤炭加成；服务端 L2097 emit（200）
+        public int      addOre;                // T6 神秘空投矿石加成；服务端 L2098 emit（100）
+        public int      addHeat;               // T4 炉温加成；服务端 L2068/L2539 emit（30）
     }
 
     /// <summary>礼物效果</summary>
@@ -361,8 +379,14 @@ namespace DrscfZ.Survival
     public class MonsterDiedData
     {
         public string monsterId;    // 死亡怪物ID
-        public string monsterType;  // "normal" | "elite" | "boss"
-        public string killerId;     // 击杀玩家ID（可为空=被动死亡）（原 killedBy，已对齐服务端字段名）
+        public string monsterType;  // "normal" | "elite" | "boss" | "elite_raid"
+        // audit-r23 GAP-A23-02：killerId 服务端 emit 5 种来源，全部需要客户端识别：
+        //   - 玩家 secOpenId（普通击杀；常态）
+        //   - 'gate_thorns'（§10 城门反伤；服务端 L5139 emit）
+        //   - 'gate_frost_pulse'（§10 寒冰冲击波被动；服务端 L4521 emit）
+        //   - 'meteor_shower'（§24.4 主播轮盘流星雨；服务端 L5560 emit；同时 reason='meteor_shower'）
+        //   - ''（精英来袭超时撤退；服务端 L8211 emit；同时 reason='elite_raid_timeout'）
+        public string killerId;
         public string reason;       // audit-r19 §31 被动死亡原因（'elite_raid_timeout' | 'meteor_shower' | ''；服务端 L8210/L8369 emit；玩家击杀时为空字符串）
     }
 
@@ -602,7 +626,7 @@ namespace DrscfZ.Survival
     {
         public string               week;      // 周标识，如 "2026-W12"
         public long                 resetAt;   // 下次重置时间（Unix ms，周一 00:00 UTC+8）
-        public WeeklyRankingEntry[] rankings;  // Top 10
+        public WeeklyRankingEntry[] rankings;  // Top N（audit-r23 GAP-B23-11：默认 50，最大 50；服务端 SurvivalRoom.js:592 默认 50；客户端可在 request_weekly_ranking 携带 top 字段缩短）
     }
 
     // ==================== §30 矿工成长系统 ====================

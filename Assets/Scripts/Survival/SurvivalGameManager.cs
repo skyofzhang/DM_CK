@@ -1526,22 +1526,39 @@ namespace DrscfZ.Survival
                 SurvivalCameraController.Shake(gift.giftTier * 0.05f, 0.4f);
 
             // audit-r22 GAP-A22-02：effects 字段消费链路（修复服务端 emit 但客户端 0 消费的协议字段单向消费 gap）
-            // 服务端 SurvivalGameEngine.js _handleLoveExplosion / _handleMysteryAirdrop / case 'ability_pill' 在
-            // effects 嵌套对象写入 aoeDamage / monstersKilled / revivedWorkers[] / healedWorkers / globalEfficiencyBoost / globalEfficiencyDuration / addGateHp / efficiencyBonus / supporterRedirect 字段
+            // audit-r23 GAP-A23-01：补 T4/T6/助威者 effects 消费（10 个补字段：tempBoost/boostDuration/unfrozenWorkers/giftPause/redirectTargetId/redirectTargetName/addFood/addCoal/addOre/addHeat）
+            // 服务端 SurvivalGameEngine.js _handleLoveExplosion / _handleMysteryAirdrop / case 'ability_pill'/'energy_battery' / 助威者 _handleSupporter* 在 effects 嵌套对象写入这些字段
             if (gift.effects != null)
             {
                 int reviveCount = gift.effects.revivedWorkers != null ? gift.effects.revivedWorkers.Length : 0;
-                Debug.Log($"[SGM] gift_effects tier={gift.giftTier} aoe={gift.effects.aoeDamage} killed={gift.effects.monstersKilled} revived={reviveCount} healed={gift.effects.healedWorkers} addGateHp={gift.effects.addGateHp} globalBoost={gift.effects.globalEfficiencyBoost} dur={gift.effects.globalEfficiencyDuration}s");
+                Debug.Log($"[SGM] gift_effects tier={gift.giftTier} aoe={gift.effects.aoeDamage} killed={gift.effects.monstersKilled} revived={reviveCount} healed={gift.effects.healedWorkers} addGateHp={gift.effects.addGateHp} globalBoost={gift.effects.globalEfficiencyBoost} dur={gift.effects.globalEfficiencyDuration}s tempBoost={gift.effects.tempBoost} boostDur={gift.effects.boostDuration} unfrozen={gift.effects.unfrozenWorkers} giftPause={gift.effects.giftPause} redirectTo={gift.effects.redirectTargetName} resources(F/C/O/H)={gift.effects.addFood}/{gift.effects.addCoal}/{gift.effects.addOre}/{gift.effects.addHeat} supporterRedirect={gift.effects.supporterRedirect}");
+
+                // 助威者重路由提示（T1/T4/T5 路径，redirectTargetName 仅助威者路径写入）
+                if (gift.effects.supporterRedirect && !string.IsNullOrEmpty(gift.effects.redirectTargetName))
+                {
+                    UI.HorizontalMarqueeUI.Instance?.AddMessage(gift.playerName, gift.avatarUrl,
+                        $"的助威让 {gift.effects.redirectTargetName} 的矿工更强了！");
+                }
+
                 if (gift.giftTier == 5 && (gift.effects.aoeDamage > 0 || gift.effects.monstersKilled > 0))
                 {
                     string t5Tail = reviveCount > 0 ? "，复活 1 名矿工" : (gift.effects.healedWorkers > 0 ? "，矿工满血" : string.Empty);
                     UI.HorizontalMarqueeUI.Instance?.AddMessage(gift.playerName, gift.avatarUrl,
                         $"爱的爆炸：全体怪物 -{gift.effects.aoeDamage}HP，击杀 {gift.effects.monstersKilled} 只" + t5Tail);
                 }
-                else if (gift.giftTier == 6 && reviveCount > 0)
+                else if (gift.giftTier == 6)
                 {
-                    UI.HorizontalMarqueeUI.Instance?.AddMessage(gift.playerName, gift.avatarUrl,
-                        $"神秘空投：随机复活 {reviveCount} 名矿工");
+                    // T6 神秘空投：资源 + 复活 + 全局暂停
+                    if (gift.effects.addFood > 0 || gift.effects.addCoal > 0 || gift.effects.addOre > 0)
+                    {
+                        UI.HorizontalMarqueeUI.Instance?.AddMessage(gift.playerName, gift.avatarUrl,
+                            $"神秘空投：食物+{gift.effects.addFood}，煤炭+{gift.effects.addCoal}，矿石+{gift.effects.addOre}，城门+{gift.effects.addGateHp}HP");
+                    }
+                    if (reviveCount > 0)
+                    {
+                        UI.HorizontalMarqueeUI.Instance?.AddMessage(gift.playerName, gift.avatarUrl,
+                            $"神秘空投：随机复活 {reviveCount} 名矿工");
+                    }
                 }
                 else if (gift.giftTier == 2 && gift.effects.globalEfficiencyBoost > 1.0f)
                 {
@@ -1549,6 +1566,24 @@ namespace DrscfZ.Survival
                     int dur = gift.effects.globalEfficiencyDuration > 0 ? gift.effects.globalEfficiencyDuration : 30;
                     UI.HorizontalMarqueeUI.Instance?.AddMessage(gift.playerName, gift.avatarUrl,
                         $"能力药丸：全员采矿效率 +{boostPct}%，持续 {dur}s");
+                }
+                else if (gift.giftTier == 4 && gift.effects.tempBoost > 1.0f)
+                {
+                    // T4 能量电池：守护者 = 自己 +30%；助威者路径 = 已通过 redirect 提示，本分支忽略避免重复跑马灯
+                    if (!gift.effects.supporterRedirect)
+                    {
+                        int boostPct = Mathf.RoundToInt((gift.effects.tempBoost - 1.0f) * 100f);
+                        int dur = gift.effects.boostDuration > 0 ? gift.effects.boostDuration : 180;
+                        UI.HorizontalMarqueeUI.Instance?.AddMessage(gift.playerName, gift.avatarUrl,
+                            $"能量电池：炉温+{gift.effects.addHeat}℃，自身效率 +{boostPct}%，持续 {dur}s");
+                    }
+                }
+
+                // §31.3 T4 联动：解冻矿工跑马灯（独立于 T4 主消费，所有 T4 触发都可能解冻）
+                if (gift.effects.unfrozenWorkers > 0)
+                {
+                    UI.HorizontalMarqueeUI.Instance?.AddMessage(gift.playerName, gift.avatarUrl,
+                        $"联动效果：解冻 {gift.effects.unfrozenWorkers} 名被冰封矿工");
                 }
             }
         }
@@ -1995,6 +2030,18 @@ namespace DrscfZ.Survival
                         UI.HorizontalMarqueeUI.Instance?.AddMessage("流星雨", null, "怪物被流星击杀");
                         break;
                 }
+            }
+
+            // audit-r23 GAP-A23-02：消费 killerId PvE 击杀来源（服务端 L5139/L4521 emit；之前 0 客户端反馈）
+            // 'gate_thorns' = §10 城门反伤被动；'gate_frost_pulse' = §10 寒冰冲击波被动
+            switch (data.killerId)
+            {
+                case "gate_thorns":
+                    UI.HorizontalMarqueeUI.Instance?.AddMessage("城门反伤", null, $"{data.monsterType} 被反伤击杀");
+                    break;
+                case "gate_frost_pulse":
+                    UI.HorizontalMarqueeUI.Instance?.AddMessage("寒冰冲击波", null, $"{data.monsterType} 被冰脉击杀");
+                    break;
             }
 
             Debug.Log($"[SurvivalGM] 怪物死亡: {data.monsterId} ({data.monsterType}) 击杀者:{data.killerId} 原因:{data.reason}");
@@ -2517,7 +2564,10 @@ namespace DrscfZ.Survival
         ///   success → "获得 矿石80 煤炭50"
         ///   died    → "外域阵亡"
         ///   empty   → "空手而归"
-        ///   safe    → "平安归来"（audit-r21 GAP-A21-03 补齐：服务端 _wildBeasts/_meteor/_mysticRune 等无事件分支 emit safe）
+        ///   safe    → "平安归来"（audit-r23 GAP-E23-03 注释精确化：仅在 §34.4 E3b 不朽证明 _consumeFreeDeathPass
+        ///            消费免死豁免救回时 emit；服务端 SurvivalGameEngine.js:8935 单点。
+        ///            r21 注释误标"_wildBeasts/_meteor/_mysticRune 无事件分支" — 实际这些分支全 emit success/died/empty，
+        ///            只有夜晚兜底死亡且玩家持有免死豁免（unique_proof_immortal）才 emit safe）
         /// </summary>
         private static string FormatExpeditionOutcome(ExpeditionOutcome outcome)
         {
