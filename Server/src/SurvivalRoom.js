@@ -433,9 +433,8 @@ class SurvivalRoom {
     message.roomId = this.roomId;
 
     // 🔴 audit-r35 GAP-E25-08 B01 协议头 MVP：注入公共字段（不覆盖 emit 处已设的同名字段，向后兼容）
-    if (message.tick === undefined) message.tick = ++this._globalTick;
-    if (message.serverTime === undefined) message.serverTime = Date.now();
-    if (message.priority === undefined) message.priority = _resolveMessagePriority(message.type);
+    // 🔴 audit-r40 GAP-PM40-02：抽成 _injectProtocolHeader helper，让 _sendToClient / _sendToPlayer 单播路径也可复用
+    this._injectProtocolHeader(message);
 
     const data = JSON.stringify(message);
 
@@ -449,54 +448,89 @@ class SurvivalRoom {
   }
 
   /**
+   * 🔴 audit-r40 GAP-PM40-02: 协议头三字段注入 helper（B01 协议头 MVP 公共逻辑）
+   *   - tick: 全局递增计数（客户端可据此检测服务端重启）
+   *   - serverTime: 服务端时间戳（客户端时钟对齐）
+   *   - priority: 4 档优先级（critical / high / normal / low），客户端 priority 队列消费
+   *
+   * 调用方：
+   *   - this.broadcast() 路径（line 432+ 已用）
+   *   - this._sendToClient(ws, msg) 单播路径（line ~1230+ 新加 helper）
+   *   - this.survivalEngine._sendToPlayer(playerId, msg) 引擎单播路径（line ~995 已注入）
+   *
+   * @param {object} message - 完整消息体（{ type, data, ... }）
+   */
+  _injectProtocolHeader(message) {
+    if (!message) return;
+    if (message.tick === undefined) message.tick = ++this._globalTick;
+    if (message.serverTime === undefined) message.serverTime = Date.now();
+    if (message.priority === undefined) message.priority = _resolveMessagePriority(message.type);
+  }
+
+  /**
+   * 🔴 audit-r40 GAP-PM40-02: 单播给指定 ws helper，注入 B01 协议头三字段
+   *   替代直接 `ws.send(JSON.stringify({...}))` 模式（绕过 broadcast() 注入）。
+   *
+   * 调用方典型场景：
+   *   - _requireBroadcaster() 单播错误响应
+   *   - heartbeat_ack 心跳响应
+   *   - tribe_war_attack_failed / tribe_war_room_list_result 单播失败响应
+   *   - weekly_ranking / streamer_ranking 主动请求响应（C2S 同步请求）
+   *
+   * @param {WebSocket} ws
+   * @param {object} msg - 完整消息体（{ type, data, ... }），自动补 roomId/timestamp
+   * @returns {boolean}
+   */
+  _sendToClient(ws, msg) {
+    if (!ws || !msg) return false;
+    if (typeof ws.send !== 'function' || ws.readyState !== 1) return false;
+    try {
+      const copy = Object.assign({ roomId: this.roomId, timestamp: Date.now() }, msg);
+      this._injectProtocolHeader(copy);
+      ws.send(JSON.stringify(copy));
+      return true;
+    } catch (e) {
+      console.warn(`[SurvivalRoom:${this.roomId}] _sendToClient error: ${e.message}`);
+      return false;
+    }
+  }
+
+  /**
    * 向所有客户端广播最新本周贡献榜
+   * 🔴 audit-r40 GAP-PM40-03：r36 标"主播/周榜走 broadcast()"实际未真闭环（半成品延续模式第 9 轮再现）—
+   *   r36 之前是 for-loop client.send 直发；r36 commit message 标修但代码仍用 for-loop（未实际改动）；
+   *   r40 真闭环：改用 this.broadcast() 自动注入 B01 协议头三字段（tick/serverTime/priority）。
    */
   _broadcastWeeklyRanking() {
     const payload = this.weeklyRanking.getPayload(10);
-    const msg = JSON.stringify({
+    this.broadcast({
       type:      'weekly_ranking',
-      roomId:    this.roomId,
       timestamp: Date.now(),
       data:      payload,
     });
-    for (const client of this.clients) {
-      try {
-        if (client.readyState === 1) client.send(msg);
-      } catch (e) { }
-    }
     console.log(`[SurvivalRoom:${this.roomId}] 本周榜已广播，week=${payload.week}，条数=${payload.rankings.length}`);
   }
 
   /**
    * 向所有客户端广播最新主播排行榜
+   * 🔴 audit-r40 GAP-PM40-03：同上 r36 半成品延续模式第 9 轮再现，r40 真闭环走 this.broadcast()
    */
   _broadcastStreamerRanking() {
     const payload = this.streamerRanking.getPayload(10);
-    const msg = JSON.stringify({
+    this.broadcast({
       type:      'streamer_ranking',
-      roomId:    this.roomId,
       timestamp: Date.now(),
       data:      payload,
     });
-    for (const client of this.clients) {
-      try {
-        if (client.readyState === 1) client.send(msg);
-      } catch (e) { }
-    }
     console.log(`[SurvivalRoom:${this.roomId}] 主播榜已广播，条数=${payload.rankings.length}`);
   }
 
   _sendStateToClient(ws) {
-    try {
-      ws.send(JSON.stringify({
-        type: 'survival_game_state',
-        roomId: this.roomId,
-        timestamp: Date.now(),
-        data: this.survivalEngine.getFullState()
-      }));
-    } catch (e) {
-      console.warn(`[SurvivalRoom:${this.roomId}] Send state error: ${e.message}`);
-    }
+    // 🔴 audit-r40 GAP-PM40-02：改用 _sendToClient helper，自动注入 B01 协议头三字段
+    this._sendToClient(ws, {
+      type: 'survival_game_state',
+      data: this.survivalEngine.getFullState()
+    });
   }
 
   // ==================== WebSocket 指令处理 ====================
@@ -1212,14 +1246,11 @@ class SurvivalRoom {
    */
   _requireBroadcaster(ws, action) {
     if (this._isRoomCreator(ws)) return true;
-    try {
-      // 单播给违规方，不向全房间广播（避免骚扰）
-      ws.send(JSON.stringify({
-        type: 'broadcaster_action_failed',
-        timestamp: Date.now(),
-        data: { action: action || 'unknown', reason: 'not_broadcaster' }
-      }));
-    } catch (e) { /* ignore */ }
+    // 🔴 audit-r40 GAP-PM40-02：改用 _sendToClient helper，自动注入 B01 协议头三字段（避免单播路径绕过 broadcast() 注入）
+    this._sendToClient(ws, {
+      type: 'broadcaster_action_failed',
+      data: { action: action || 'unknown', reason: 'not_broadcaster' }
+    });
     const wsOpenId = ws && (ws._playerId || ws.openId) || 'N/A';
     console.log(`[GM-AUDIT] REJECTED action=${action} roomId=${this.roomId} openId=${wsOpenId} isGM=${this.isGMMode} reason=not_broadcaster`);
     return false;

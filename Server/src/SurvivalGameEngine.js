@@ -1001,7 +1001,16 @@ class SurvivalGameEngine {
       if (!ws || ws._playerId !== playerId) continue;
       try {
         if (ws.readyState === 1) {
-          const copy = Object.assign({ roomId }, msg);
+          const copy = Object.assign({ roomId, timestamp: Date.now() }, msg);
+          // 🔴 audit-r40 GAP-PM40-01：B01 协议头注入（单播路径 — r35 GAP-E25-08 服务端单播路径补全）
+          //   r35 仅在 SurvivalRoom.broadcast() 注入 tick/serverTime/priority；_sendToPlayer 是 SurvivalGameEngine
+          //   内部 helper（约 30+ 处单播错误响应：gift_silent_fail / shop_inventory / shop_purchase_failed /
+          //   shop_equip_failed / expedition_failed / build_propose_failed / roulette_spin_failed / ...）
+          //   全部绕过 broadcast() 注入逻辑，导致客户端 priority 队列消费时这些消息缺三字段。
+          //   r40 真闭环：调用 SurvivalRoom._injectProtocolHeader（若可用）注入三字段后再发。
+          if (this.room._injectProtocolHeader && typeof this.room._injectProtocolHeader === 'function') {
+            this.room._injectProtocolHeader(copy);
+          }
           ws.send(JSON.stringify(copy));
           sent = true;
         }
