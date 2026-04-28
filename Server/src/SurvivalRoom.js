@@ -867,7 +867,10 @@ class SurvivalRoom {
       case 'shop_equip': {
         // §36.12 shop 门槛
         const itemIdE = (data && data.itemId) || '';
-        if (!this._checkFeatureOrFail('shop', 'shop_purchase_failed', { itemId: itemIdE }, ws)) break;
+        // 🔴 audit-r37 GAP-C37-06：失败类型 shop_purchase_failed → shop_equip_failed
+        //   旧版 shop_equip 路径走 shop_purchase_failed → 客户端 ShopUI 误按购买失败处理（无法定位装备槽 toast）
+        //   r37 改用 shop_equip_failed 与 §19.2 line 2540 设计对齐
+        if (!this._checkFeatureOrFail('shop', 'shop_equip_failed', { itemId: itemIdE, slot: (data && data.slot) || '' }, ws)) break;
         // { slot, itemId? } — itemId 缺省/空 = 卸下该槽位
         const pid    = ws._playerId || (data && data.playerId) || '';
         const slot   = (data && data.slot)   || '';

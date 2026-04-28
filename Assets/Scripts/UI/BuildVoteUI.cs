@@ -161,6 +161,18 @@ namespace DrscfZ.UI
             }
         }
 
+        /// <summary>🔴 audit-r37 GAP-C37-02：客户端发起 build_propose（首次启动建造投票）
+        ///   旧版客户端 0 处发送 build_propose → §37 建造系统在客户端实际无法首次启动（仅响应弹幕投票）
+        ///   r37 真闭环 — BroadcasterDecisionHUD.OpenBuildPropose 调本方法发起，§24.3 主播 HUD 路径可工作
+        ///   服务端 SurvivalGameEngine.js handleBuildPropose 处理；失败时回 build_propose_failed</summary>
+        public void SendPropose(string buildId)
+        {
+            if (string.IsNullOrEmpty(buildId)) { Debug.LogWarning("[BuildVoteUI] SendPropose: buildId 为空"); return; }
+            string json = $"{{\"type\":\"build_propose\",\"data\":{{\"buildId\":\"{buildId}\"}}}}";
+            NetworkManager.Instance?.SendJson(json);
+            Debug.Log($"[BuildVoteUI] SendPropose: buildId={buildId}（r37 GAP-C37-02 闭环）");
+        }
+
         private void SendVote(string buildId)
         {
             if (_current == null || string.IsNullOrEmpty(buildId)) return;

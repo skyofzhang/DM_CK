@@ -709,6 +709,35 @@ namespace DrscfZ.Survival
             }
         }
 
+        /// <summary>🔴 audit-r37 GAP-A37-04：survival_game_state.workers[] 全量快照消费
+        ///   服务端 SurvivalGameEngine.js:1472-1481 emit 6+2 字段（playerId/playerName/level/skinTier/skinId/maxHp/currentHp/state）
+        ///   断线重连 + 冷启动时一次性同步全员 level/skin/state（避免等下一次 worker_hp_update 的 1s 窗口）
+        ///   r36 MEMORY 标 A36-01 已修但实际 0 消费 — r37 真闭环
+        ///   消费策略：
+        ///     - HP：调 SetHp(currentHp, maxHp) 立即同步血条
+        ///     - 等级：调 worker.HandleWorkerLevelUp 等价方法（SetTierSkin），但避免触发升级公告（仅冷同步）
+        ///     - 死亡/冻结：服务端 state 字段三档 dead/frozen/active 同步 worker 状态机
+        ///     - playerName/skinId 暂不消费（待 PlayerNameTag/SkinId 同步路径明确）</summary>
+        public void HandleWorkersFullSnapshot(WorkerStateData[] workers)
+        {
+            if (workers == null || workers.Length == 0) return;
+            foreach (var ws in workers)
+            {
+                if (ws == null || string.IsNullOrEmpty(ws.playerId)) continue;
+                var worker = FindWorkerByPlayerId(ws.playerId);
+                if (worker == null) continue;
+                // HP 同步
+                if (ws.maxHp > 0) worker.SetHp(ws.currentHp, ws.maxHp);
+                // 阶段皮肤同步（r37 GAP-D37-01 已闭环 _cachedTier 缓存，此处仅外观）
+                if (ws.skinTier >= 1 && ws.skinTier <= 10) worker.SetTierSkin(ws.skinTier);
+                // 死亡 / 冻结同步
+                if (ws.state == "dead" && !worker.IsDead) worker.EnterDead(0);
+                else if (ws.state == "frozen") worker.TriggerFrozen(0f);
+                else if (ws.state == "active" && worker.IsDead) worker.Revive();
+            }
+            Debug.Log($"[WorkerManager] HandleWorkersFullSnapshot: 同步 {workers.Length} 个矿工状态（r37 GAP-A37-04 闭环）");
+        }
+
         /// <summary>按playerId查找活跃Worker（r15 GAP-D-MAJOR-01：改 public 供 UI 层复用，如 NewbieHintUI 触发金色光柱）</summary>
         public WorkerController FindWorkerByPlayerId(string playerId)
         {

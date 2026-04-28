@@ -65,6 +65,15 @@ class GlobalClock {
     try {
       if (room.broadcast && this._seasonMgr) {
         const seasonDay = this._seasonMgr.seasonDay;
+        // 🔴 audit-r37 GAP-C37-05：老用户豁免覆盖 — 优先走 SurvivalEngine._getUnlockedFeaturesForClient()
+        //   旧版直接调 getUnlockedFeatures(seasonDay) 仅按当前赛季日返回 → 老用户重连时多锁定
+        //   新版优先走 engine 的 _getUnlockedFeaturesForClient（含老用户判断 → 返回全集）
+        //   fallback 仍走 getUnlockedFeatures(seasonDay) 兼容无 engine 的特殊情形
+        let unlockedFeatures = null;
+        if (room.survivalEngine && typeof room.survivalEngine._getUnlockedFeaturesForClient === 'function') {
+          try { unlockedFeatures = room.survivalEngine._getUnlockedFeaturesForClient(); } catch (e) { /* ignore */ }
+        }
+        if (!unlockedFeatures) unlockedFeatures = getUnlockedFeatures(seasonDay);
         room.broadcast({
           type: 'season_state',
           timestamp: Date.now(),
@@ -73,7 +82,7 @@ class GlobalClock {
             seasonDay,
             themeId: this._seasonMgr.themeId,
             // §36.12：连接时同步一次已解锁列表，避免中途进场客户端错过 newlyUnlockedFeatures 横幅
-            unlockedFeatures: getUnlockedFeatures(seasonDay),
+            unlockedFeatures,
           },
         });
       }

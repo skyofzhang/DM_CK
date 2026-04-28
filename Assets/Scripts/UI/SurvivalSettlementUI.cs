@@ -259,7 +259,7 @@ namespace DrscfZ.UI
             yield return new WaitForSecondsRealtime(10f);
 
             // 序列播完后显示"重新开始"按钮（GM 手动跳过用）；
-            // 服务端 8s 后自动推送 phase_changed{variant:recovery}，客户端进入恢复期白天
+            // 🔴 audit-r37 GAP-C37-08：服务端 30s 后自动推送 phase_changed{variant:recovery}，客户端进入恢复期白天（旧注释 8s 失真，r31 已改 30000ms）
             if (_restartButton != null) _restartButton.gameObject.SetActive(true);
             if (_skipButton != null) _skipButton.gameObject.SetActive(false);
             Debug.Log("[SurvivalSettlementUI] §34 B2 结算 30s 播完，等待服务端 recovery 推送或主播手动关闭");
@@ -620,7 +620,7 @@ namespace DrscfZ.UI
 
         // ─── Restart ─────────────────────────────────────────────────────────
         // 🆕 v1.26 永续模式（§23.1）：结算结束客户端**不再发送 reset_game**；
-        //   服务端 8s 后自动推送 phase_changed{variant:recovery} 进入恢复期。
+        //   🔴 audit-r37 GAP-C37-08：服务端 30s 后自动推送 phase_changed{variant:recovery} 进入恢复期（旧注释 8s 失真）。
         //   保留按钮仅作 GM 手动关闭 UI 兜底（例如序列播完后再次点击隐藏面板）。
 
         private void OnRestartClicked()

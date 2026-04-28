@@ -467,6 +467,11 @@ class BroadcasterRoulette {
         cardId,
         displayedCards,
         spunAt: nowMs,
+        // 🔴 audit-r37 GAP-E37-01：r36 MEMORY 标 A36-09 已 emit autoApplyAt，但实际服务端从未 emit
+        //   半成品延续模式第 7 轮再现 — r37 真补完
+        //   客户端 RouletteResultData.autoApplyAt 字段已定义（r35 加），现在终于有数据消费
+        //   = nowMs + ROULETTE_AUTO_APPLY_MS（10s 兜底自动 apply 时刻）
+        autoApplyAt: nowMs + ROULETTE_AUTO_APPLY_MS,
       },
     });
     console.log(`[Roulette] spin: displayed=[${displayedCards.join(',')}] → locked=${cardId}`);
@@ -1469,13 +1474,20 @@ class SurvivalGameEngine {
         }])
       ),
       // audit-r4 §19.2 workers[] 全量快照：断线重连 + 客户端 WorkerManager 一次性同步全员 level/skinTier/state
+      // 🔴 audit-r37 GAP-A37-05 补 playerName + skinId 字段（与客户端 WorkerStateData 对齐）：
+      //   - playerName：取自 this.playerNames[pid]（worker_join 时缓存），缺失时 fallback pid
+      //   - skinId：取自 this._activeGiftSkin[pid]（限时礼物皮肤 G01/G02/G03），无礼物期间为 null（客户端走 skinTier 兜底）
+      //   - state 取值与客户端 WorkerStateData.state 注释完整 6 取值不一致（仅 dead/frozen/active）—— 是设计妥协，
+      //     idle/working/combat/expedition 在客户端由 WorkerManager 自维护；此 emit 仅做断线快照同步
       workers:      Object.entries(this._workerHp).map(([pid, w]) => ({
-        playerId:  pid,
-        level:     (this._playerLevel && this._playerLevel[pid]) || 1,
-        skinTier:  (this._playerSkinTier && this._playerSkinTier[pid]) || 1,
-        maxHp:     w.maxHp,
-        currentHp: w.hp,
-        state:     w.isDead ? 'dead' : (this._frozenWorkers && this._frozenWorkers.has(pid) ? 'frozen' : 'active'),
+        playerId:   pid,
+        playerName: (this.playerNames && this.playerNames[pid]) || pid,
+        level:      (this._playerLevel && this._playerLevel[pid]) || 1,
+        skinTier:   (this._playerSkinTier && this._playerSkinTier[pid]) || 1,
+        skinId:     (this._activeGiftSkin && this._activeGiftSkin[pid]) || null,
+        maxHp:      w.maxHp,
+        currentHp:  w.hp,
+        state:      w.isDead ? 'dead' : (this._frozenWorkers && this._frozenWorkers.has(pid) ? 'frozen' : 'active'),
       })),
 
       // §36 全服同步 / 赛季 / 堡垒日 / 每日 cap（客户端 survival_game_state 同步）
@@ -2196,7 +2208,7 @@ class SurvivalGameEngine {
       avatarUrl:  avatarUrl || '',
       giftId:     gift.id,
       giftName:   gift.name_cn,
-      giftTier:   getTierNumber(gift.tier),   // 数字 1-5，保持与客户端兼容
+      giftTier:   getTierNumber(gift.tier),   // 🔴 audit-r37 GAP-C37-16：数字 1-6（r14 起 T6 → 6，旧注释 1-5 失真）
       giftTierStr: gift.tier,                 // 'T1'~'T5'，供扩展使用
       giftValue,
       score:      gift.score,
@@ -2273,6 +2285,12 @@ class SurvivalGameEngine {
     // r15 GAP-E15-4：unicast 给发起方（原 broadcast 会让其他客户端 MyEquipped 被他人数据覆盖）
     const owned    = this._playerShopInventory[playerId] || [];
     const equipped = this._playerShopEquipped[playerId]  || {};
+    // 🔴 audit-r37 GAP-E37-13/16：player_joined 路径与 handleShopInventory 路径 emit 字段统一
+    //   旧版仅 player_joined 路径漏 contribBalance/lifetimeContrib 两字段，
+    //   导致玩家进房瞬间 ShopUI 无法显示余额，需等下一次 handleShopInventory 主动刷新
+    //   r37 统一两路径都 emit 完整 5 字段（playerId/owned/equipped/contribBalance/lifetimeContrib）
+    const balance  = this._contribBalance[playerId]      || 0;
+    const lifetime = this._lifetimeContrib[playerId]     || 0;
     const _invMsg = {
       type: 'shop_inventory_data',
       timestamp: Date.now(),
@@ -2285,6 +2303,8 @@ class SurvivalGameEngine {
           entrance: equipped.entrance || '',
           barrage:  equipped.barrage  || '',
         },
+        contribBalance:  Math.round(balance),
+        lifetimeContrib: Math.round(lifetime),
       },
     };
     if (!this._sendToPlayer(playerId, _invMsg)) this.broadcast(_invMsg);
@@ -4917,7 +4937,11 @@ class SurvivalGameEngine {
       this._broadcast({
         type: 'worker_died',
         timestamp: Date.now(),
-        data: { playerId: pid, respawnAt: w.respawnAt }
+        // 🔴 audit-r37 GAP-A37-03：常规波次伤害路径补 reason='wave'
+        //   r19 GAP-A19-02 仅修了 blizzard 路径；expedition_died/expedition_night_kia 已有 reason
+        //   常规战斗死亡走 default 分支 → 客户端 SurvivalGameManager.cs:501 跑马灯无差异化反馈
+        //   r37 补 reason='wave' 让客户端 case "wave" 显示"战死"跑马灯
+        data: { playerId: pid, respawnAt: w.respawnAt, reason: 'wave' }
       });
       console.log(`[SurvivalEngine] Worker ${pid} died, respawn at +${respawnSec}s (tier=${this._getWorkerTier(pid)})`);
 
@@ -5133,7 +5157,8 @@ class SurvivalGameEngine {
           this._broadcast({
             type: 'worker_died',
             timestamp: Date.now(),
-            data: { playerId: pid, respawnAt: w.respawnAt }
+            // 🔴 audit-r37 GAP-A37-03 第二处：常规波次伤害路径补 reason='wave'（_spawnWave 内部 _distributeDamage 后死亡分支）
+            data: { playerId: pid, respawnAt: w.respawnAt, reason: 'wave' }
           });
           console.log(`[SurvivalEngine] Worker ${pid} died, respawn at +${respawnSec}s (tier=${this._getWorkerTier(pid)})`);
 

@@ -154,12 +154,16 @@ namespace DrscfZ.Survival
 
     /// <summary>🆕 §34 Layer 3 组 D（E5a）智能提词器 —— 仅主播可见的话术提示（type=streamer_prompt）
     /// priority 三级视觉：urgent（红底加粗）/ social（蓝底）/ info（灰底半透）。
-    /// 主播端仅 isRoomCreator=true 显示；其他观众端收到也应过滤。</summary>
+    /// 主播端仅 isRoomCreator=true 显示；其他观众端收到也应过滤。
+    /// 🔴 audit-r37 GAP-E37-21：补 recipient 字段（服务端 SurvivalGameEngine.js:7170-7177 emit 含 recipient: 'broadcaster_only'）
+    ///   旧版客户端缺字段 → 只能依赖客户端 isRoomCreator 自行过滤（脆弱），现在可双层守门</summary>
     [Serializable]
     public class StreamerPromptData
     {
         public string text;       // "食物快没了！提醒观众刷甜甜圈！"
         public string priority;   // "urgent" | "social" | "info"
+        public string recipient;  // 🔴 audit-r37 GAP-E37-21：'broadcaster_only' = 仅主播；其它值时所有客户端均可见
+        // 注：客户端 SurvivalGameManager.cs:950 case "streamer_prompt" 已加双层守门（recipient + _isRoomCreator）
     }
 
     /// <summary>🆕 §34 Layer 3 组 D（E5b）夜战报告 —— 夜→昼转换时 2.5s 多行回顾（type=night_report）
@@ -753,7 +757,7 @@ namespace DrscfZ.Survival
         public string   cardId;           // 定格卡 ID（elite_raid/time_freeze/double_contrib/mystery_trader/meteor_shower/aurora）
         public string[] displayedCards;   // 长度 3，展示给主播的 3 张卡
         public long     spunAt;           // spin 发生时刻（Unix ms，用于兜底 autoApplyAt 计算）
-        public long     autoApplyAt;      // 未主动 apply 时的 5s 兜底自动 apply 时刻（Unix ms，= spunAt + 5000）
+        public long     autoApplyAt;      // 🔴 audit-r37 GAP-E37-07：未主动 apply 时的 10s 兜底自动 apply 时刻（Unix ms，= spunAt + 10000）— 服务端 ROULETTE_AUTO_APPLY_MS = 10*1000
     }
 
     /// <summary>轮盘效果结束通知（type=broadcaster_roulette_effect_ended）</summary>
@@ -990,7 +994,7 @@ namespace DrscfZ.Survival
         public int  waveIndex;
         public long spawnsAt;           // Unix ms
         public long firstAttackAt;      // Unix ms ≈ spawnsAt + 3500
-        public int  leadSec;            // 🆕 audit-r24 GAP-E24-01：emergency_alert 路径携带（10/30），watchtower 路径不携带（默认 0）
+        public int  leadSec;            // 🆕 audit-r24 GAP-E24-01：emergency_alert 路径 30s + watchtower 路径 10s（PREVIEW_LEAD_MS）— r25 起两路径均携带 leadSec（GAP-E37-24 注释精确化）
     }
 
     // ==================== 主播排行榜（type=streamer_ranking）====================
@@ -1057,10 +1061,13 @@ namespace DrscfZ.Survival
         public ShopItem[] items;
     }
 
-    /// <summary>B 类 ≥1000 主播 HUD 购买触发双确认弹窗（type=shop_purchase_confirm_prompt，§39.7）</summary>
+    /// <summary>B 类 ≥1000 主播 HUD 购买触发双确认弹窗（type=shop_purchase_confirm_prompt，§39.7）
+    /// 🔴 audit-r37 GAP-C37-15：补 playerId 字段（服务端 SurvivalGameEngine.js:9234-9237 emit 含 playerId）
+    ///   旧版客户端 Data 类缺该字段 → 多人房间无法精确路由弹窗到发起人客户端</summary>
     [Serializable]
     public class ShopPurchaseConfirmPromptData
     {
+        public string playerId;    // 🔴 audit-r37 GAP-C37-15：弹窗发起人 openId，主播触发时为 broadcaster openId
         public string pendingId;   // 一次性凭证 UUID
         public string itemId;
         public int    price;
@@ -1117,13 +1124,19 @@ namespace DrscfZ.Survival
         public string barrage;
     }
 
-    /// <summary>背包/装备快照，进房或重连时推送（type=shop_inventory_data）</summary>
+    /// <summary>背包/装备快照，进房或重连时推送（type=shop_inventory_data）
+    /// 🔴 audit-r37 GAP-C37-01/E37-13/E37-16：补 contribBalance + lifetimeContrib 字段
+    ///   服务端 SurvivalGameEngine.js:9657-9658（handleShopInventory）+ player_joined 路径（r37 补齐）已 emit
+    ///   客户端旧版 Data 类仅 3 字段，JsonUtility 反序列化时静默丢弃 → ShopUI 重连后无法显示玩家"剩余可用积分"和"终身累计贡献"
+    ///   r37 加字段让 §39.5 ShopUI 余额显示可用</summary>
     [Serializable]
     public class ShopInventoryData
     {
         public string       playerId;
         public string[]     owned;
         public ShopEquipped equipped;
+        public int          contribBalance;    // 🔴 audit-r37 GAP-C37-01：当前可消费余额（A 类货币）
+        public long         lifetimeContrib;   // 🔴 audit-r37 GAP-C37-01：终身累计贡献（B 类货币 / 装备购买基线）
     }
 
     /// <summary>A 类效果元数据（随 shop_effect_triggered 下发的附加信息）</summary>
@@ -1158,7 +1171,9 @@ namespace DrscfZ.Survival
 
     /// <summary>攻防战大厅列表中的单个房间条目（tribe_war_room_list_result.rooms[i]）。
     /// MVP 字段子集：只保留大厅选人最小必要集（roomId/streamerName/state/day/underAttack/attackable）。
-    /// 其它后端字段（difficulty/playerCount/gateHpPct）在主版可补。</summary>
+    /// 其它后端字段（difficulty/playerCount/gateHpPct）在主版可补。
+    /// 🔴 audit-r37 GAP-C37-03：补 fortressDay 字段（服务端 TribeWarManager.js:56-65 emit 含 fortressDay）
+    ///   r36 GAP-C36-05 已 doc 同步但漏修客户端 Data 类，r37 真闭环 — TribeWarLobbyUI 可显示堡垒日</summary>
     [Serializable]
     public class TribeWarRoomInfo
     {
@@ -1166,6 +1181,7 @@ namespace DrscfZ.Survival
         public string streamerName;
         public string state;         // 'day' | 'night' | 'recovery' | 其它
         public int    day;
+        public int    fortressDay;   // 🔴 audit-r37 GAP-C37-03：堡垒日（§36 同步），TribeWarLobbyUI 显示用
         public bool   underAttack;   // 当前是否正在被其他房间攻击
         public bool   attackable;    // 是否可作为目标（综合自我限制/互斥判定，由服务端给出）
     }

@@ -949,7 +949,17 @@ namespace DrscfZ.Survival
                     break;
                 case "streamer_prompt":
                     var prompt = JsonUtility.FromJson<StreamerPromptData>(dataJson);
-                    if (prompt != null) OnStreamerPrompt?.Invoke(prompt);
+                    if (prompt != null)
+                    {
+                        // 🔴 audit-r37 GAP-E37-21：双层守门 — 服务端 recipient='broadcaster_only' 时仅主播可见
+                        //   服务端虽优先单播，但 ws 未绑定时 fallback broadcast；客户端按 isRoomCreator 双层过滤
+                        if (prompt.recipient == "broadcaster_only" && !_isRoomCreator)
+                        {
+                            Debug.Log($"[SGM] streamer_prompt 过滤（recipient=broadcaster_only, _isRoomCreator=false）");
+                            break;
+                        }
+                        OnStreamerPrompt?.Invoke(prompt);
+                    }
                     break;
                 case "night_report":
                     var report = JsonUtility.FromJson<NightReportData>(dataJson);
@@ -1033,10 +1043,14 @@ namespace DrscfZ.Survival
                     }
                     break;
                 case "feature_unlocked":
+                    // 🔴 audit-r37 GAP-C37-04：服务端从未 emit type:'feature_unlocked' 单事件 — 客户端 case 永不触发
+                    //   实际功能解锁通知走 world_clock_tick.newlyUnlockedFeatures 路径（FeatureUnlockBanner.cs:95-96 订阅）
+                    //   保留本 case 作未来服务端 emit 单事件时的预留路由，不删除避免破坏潜在设计意图
+                    //   ⚠️ 当前 OnFeatureUnlocked Action 0 订阅者，触发即静默
                     var fu = JsonUtility.FromJson<FeatureUnlockedData>(dataJson);
                     if (fu != null)
                     {
-                        Debug.Log($"[SGM] feature_unlocked: {fu.featureId} @ seasonDay={fu.unlockedAt}");
+                        Debug.Log($"[SGM] feature_unlocked: {fu.featureId} @ seasonDay={fu.unlockedAt} (r37: 服务端尚未 emit 此单事件，预留路由)");
                         string msg = string.IsNullOrEmpty(fu.message) ? $"新功能解锁：{fu.featureId}" : fu.message;
                         OnPlayerActivityMessage?.Invoke(msg);
                         OnFeatureUnlocked?.Invoke(fu);
@@ -1403,6 +1417,48 @@ namespace DrscfZ.Survival
                         ChangeState(SurvivalState.Settlement);
                     }
                     break;
+
+                // 🔴 audit-r37 GAP-A37-06：case "recovery" 双重保险路由
+                //   服务端 SurvivalGameEngine.js:1452 已把 recovery 转 day 推送，但仍可能出现 state='recovery' 直推
+                //   （如手动调 broadcast 不经 getFullState），客户端旧版会走 default 静默丢弃整条消息
+                //   r37 真闭环 — recovery 同 case "day" 路径处理（切 Running + variant=recovery）
+                case "recovery":
+                    Debug.Log("[SGM] survival_game_state=recovery 直推 → 转 case \"day\" + variant=recovery 处理");
+                    string recoveryVariant = string.IsNullOrEmpty(data.variant) ? "recovery" : data.variant;
+                    if (_state == SurvivalState.Settlement)
+                    {
+                        ChangeState(SurvivalState.Running);
+                        if (_settlementUI != null && _settlementUI.gameObject.activeSelf)
+                            _settlementUI.gameObject.SetActive(false);
+                    }
+                    else if ((_state == SurvivalState.Loading || _state == SurvivalState.Waiting) && IsEnteringScene)
+                    {
+                        StopLoadingTimeout();
+                        ChangeState(SurvivalState.Running);
+                    }
+                    if (_state == SurvivalState.Running)
+                    {
+                        bool rcVariantChanged = recoveryVariant != _lastPhaseVariant;
+                        _lastPhaseVariant = recoveryVariant;
+                        if (rcVariantChanged) OnPhaseVariantChanged?.Invoke(recoveryVariant);
+                        dayNightManager?.HandlePhaseChanged(new PhaseChangedData
+                        {
+                            phase = "day", day = data.day,
+                            phaseDuration = data.remainingTime,
+                            variant = recoveryVariant
+                        });
+                    }
+                    break;
+            }
+
+            // 🔴 audit-r37 GAP-A37-04：workers[] 全量快照消费（断线重连 + 冷启动）
+            //   r4 §19.2 加 workers[] 字段服务端 emit，但客户端 HandleGameState 全文 0 处读取
+            //   后果：断线重连后 WorkerPool 的 level/skinTier/state 不一致直到下一条 worker_hp_update（最长 1s 窗口）
+            //   r36 MEMORY 标 A36-01 已修但实际未实装 — 半成品延续模式第 7 轮再现
+            //   r37 真闭环 — 调用 WorkerManager.HandleWorkersFullSnapshot 一次性同步全员状态
+            if (data.workers != null && data.workers.Length > 0 && workerManager != null)
+            {
+                workerManager.HandleWorkersFullSnapshot(data.workers);
             }
 
             // 🔴 audit-r25 GAP-A25-01 + 🔴 audit-r26 GAP-A26-02/A26-10 重构：

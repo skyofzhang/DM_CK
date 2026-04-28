@@ -1054,6 +1054,11 @@ namespace DrscfZ.Survival
         {
             var tag = GetComponentInChildren<PlayerNameTag>(true);
             if (tag != null) tag.SetTier(tier);
+            // 🔴 audit-r37 GAP-D37-01：缓存当前 tier（ClearGiftSkin 时恢复用）
+            //   audit-r6 引入 _cachedTier 字段但永不赋值 → 30+ 轮 audit 漏检
+            //   后果：阶 7 玩家拿到 T4 礼物（G01 炽热矿工），礼物到期后 ClearGiftSkin 调 SwapSkinModel(1) 退化到见习矿工
+            //   r37 真闭环 — SetTierSkin 入口缓存 _cachedTier，§30.7 "礼物限时皮肤结束后恢复阶段皮肤外观"功能终于生效
+            _cachedTier = tier;
             // §30 皮肤模型切换骨架（audit-r3/P1 E7）
             //   TODO 13 套皮肤 Prefab 待美术交付（见美术清单 v3 §30）
             //   当前仅做 Prefab 查找 + log，不做实际 Instantiate（避免 WorkerSkins/ 目录不存在时 NPE 泛滥）

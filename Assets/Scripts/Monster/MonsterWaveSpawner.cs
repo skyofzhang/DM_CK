@@ -158,11 +158,16 @@ namespace DrscfZ.Monster
 
             bool isSummon  = data.isSummonSpawn;
             string side    = data.spawnSide ?? "all";
+            // 🔴 audit-r37 GAP-A37-02：bypassCap 守卫 — 主播轮盘 elite_raid 卡触发的精英怪不受 maxAliveMonsters 限制
+            //   服务端 SurvivalDataTypes.cs:252 MonsterWaveData.bypassCap 字段 r35 已加但客户端 SpawnWave 路径绕过
+            //   旧版当 _activeMonsters.Count >= 15 时排队 0.5s/tick，"30s deadline" 玩法体感失效
+            //   r37 真闭环 — bypassCap=true 时跳过 maxAliveMonsters 检查，立即 SpawnOneVariantMonster
+            bool bypassCap = data.bypassCap;
 
             foreach (var info in data.monsters)
             {
-                // 同屏上限控制（与 SpawnBatch 一致）
-                while (_activeMonsters.Count >= _maxAliveMonsters)
+                // 同屏上限控制（与 SpawnBatch 一致）；bypassCap=true 时跳过（精英来袭专属）
+                while (!bypassCap && _activeMonsters.Count >= _maxAliveMonsters)
                     yield return new WaitForSeconds(0.5f);
 
                 // 变种解析：字符串 → 枚举（失败退回 Normal）
