@@ -659,6 +659,29 @@ namespace DrscfZ.Survival
             Debug.Log($"[WorkerManager] Worker '{playerId}' 传奇免死触发");
         }
 
+        /// <summary>🔴 audit-r35 GAP-D25-12 §34.4 E3b 不朽证明触发：矿工头顶金色光柱视觉反馈
+        /// 由 SurvivalGameManager.case FreeDeathPassTriggered 调用，找到对应 worker 调 Visual.TriggerFreeDeathPassFlash</summary>
+        public void HandleFreeDeathPass(string playerId)
+        {
+            var worker = FindWorkerByPlayerId(playerId);
+            if (worker == null)
+            {
+                Debug.LogWarning($"[WorkerManager] HandleFreeDeathPass: playerId={playerId} 未找到对应 Worker");
+                return;
+            }
+            // WorkerVisual 在 worker GO 上 — 通过 GetComponent 取得（避免 [SerializeField] 暴露字段）
+            var visual = worker.GetComponent<WorkerVisual>();
+            if (visual != null)
+            {
+                visual.TriggerFreeDeathPassFlash();
+                Debug.Log($"[WorkerManager] Worker '{playerId}' 不朽证明光柱已触发");
+            }
+            else
+            {
+                Debug.LogWarning($"[WorkerManager] HandleFreeDeathPass: playerId={playerId} 缺 WorkerVisual 组件");
+            }
+        }
+
         /// <summary>服务器通知矿工皮肤切换（worker_skin_changed）</summary>
         public void HandleSkinChanged(WorkerSkinChangedData data)
         {

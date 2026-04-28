@@ -125,5 +125,83 @@ namespace DrscfZ.Survival
             ApplyColor(saved);
             _flashCoroutine = null;
         }
+
+        /// <summary>🔴 audit-r35 GAP-D25-12 §34.4 E3b 不朽证明矿工头顶光柱（FreeDeathPassUI 完整版 60% → 90%）
+        /// 触发时机：SurvivalGameManager.HandleFreeDeathPassTriggered → WorkerManager.HandleFreeDeathPass(playerId) → 找到 worker.Visual 调本方法
+        /// 视觉：矿工头顶 2m 高金色光柱（动态创建 GameObject 含发光 Sprite/Cube），3s 淡入淡出后销毁；不阻塞其他 visual 状态</summary>
+        public void TriggerFreeDeathPassFlash()
+        {
+            StartCoroutine(FreeDeathPassFlashCoroutine());
+        }
+
+        private IEnumerator FreeDeathPassFlashCoroutine()
+        {
+            // 创建头顶金色光柱（placeholder：扁平 Cube + 发光金色 — 美术后期可换粒子 prefab）
+            var pillar = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            pillar.name = "FreeDeathPassPillar";
+            // 移除 Collider 避免影响物理
+            var col = pillar.GetComponent<Collider>();
+            if (col != null) Destroy(col);
+            // 挂在矿工头顶
+            pillar.transform.SetParent(transform, false);
+            pillar.transform.localPosition = new Vector3(0f, 2.0f, 0f);
+            pillar.transform.localScale    = new Vector3(0.3f, 4.0f, 0.3f);  // 细长光柱 4m 高
+
+            // 金色无光照材质（避免依赖 URP shader 引用）
+            var rd = pillar.GetComponent<Renderer>();
+            if (rd != null)
+            {
+                Material mat = null;
+                var unlitShader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color");
+                if (unlitShader != null)
+                {
+                    mat = new Material(unlitShader);
+                }
+                else
+                {
+                    // fallback: 复制现有材质
+                    mat = new Material(rd.sharedMaterial);
+                }
+                mat.color = new Color(1f, 0.84f, 0.1f, 1f); // 金色 #FFD700
+                rd.material = mat;
+                rd.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                rd.receiveShadows = false;
+            }
+
+            // 淡入 + 持续 + 淡出（基于 transform.localScale.y 缩放）
+            float fadeIn  = 0.3f;
+            float hold    = 2.0f;
+            float fadeOut = 0.7f;
+
+            float t = 0f;
+            Vector3 baseScale = pillar.transform.localScale;
+            // 淡入：高度 0 → 4m
+            while (t < fadeIn)
+            {
+                t += Time.deltaTime;
+                float p = Mathf.Clamp01(t / fadeIn);
+                pillar.transform.localScale = new Vector3(baseScale.x, baseScale.y * p, baseScale.z);
+                pillar.transform.localPosition = new Vector3(0f, baseScale.y * p * 0.5f, 0f);  // 锚定地面
+                yield return null;
+            }
+            pillar.transform.localScale = baseScale;
+            pillar.transform.localPosition = new Vector3(0f, 2f, 0f);
+
+            // 持续
+            yield return new WaitForSeconds(hold);
+
+            // 淡出：高度 4m → 0
+            t = 0f;
+            while (t < fadeOut)
+            {
+                t += Time.deltaTime;
+                float p = 1f - Mathf.Clamp01(t / fadeOut);
+                pillar.transform.localScale = new Vector3(baseScale.x, baseScale.y * p, baseScale.z);
+                pillar.transform.localPosition = new Vector3(0f, baseScale.y * p * 0.5f, 0f);
+                yield return null;
+            }
+
+            Destroy(pillar);
+        }
     }
 }

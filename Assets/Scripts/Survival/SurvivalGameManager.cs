@@ -66,6 +66,10 @@ namespace DrscfZ.Survival
         /// 订阅者：BroadcasterPanel / SettingsPanelUI 可据此在主播 HUD 显示"当前阶段不可结束"提示。</summary>
         public event Action<EndGameFailedData> OnEndGameFailed;
         public event Action<PhaseChangedData> OnPhaseChanged;    // 🆕 §4.2 昼夜/恢复期切换（携带 variant）
+
+        // 🔴 audit-r35 GAP-A25-04 game_paused 完整版（90% → 100%）：PauseOverlayUI 订阅这两个事件显示/隐藏全屏遮罩
+        public event System.Action OnGamePaused;
+        public event System.Action OnGameResumed;
         public event Action<string> OnPlayerActivityMessage;     // 弹幕消息文本
         public event Action<int> OnScorePoolUpdated;             // 积分池变动（实时推送）
         public event Action<WeeklyRankingData>   OnWeeklyRankingReceived;   // 本周贡献榜（服务器推送）
@@ -631,19 +635,16 @@ namespace DrscfZ.Survival
                 case "gate_effect_triggered":
                     HandleGateEffectTriggered(dataJson);
                     break;
-                // 🔴 audit-r31 GAP-A25-04 协议对称化：服务端 game_paused/game_resumed 切换；客户端 toast 反馈让 GM 测试时看到状态
+                // 🔴 audit-r31 GAP-A25-04 协议对称化 + audit-r35 完整版（90% → 100%）：触发 OnGamePaused/OnGameResumed 事件
+                //   PauseOverlayUI 订阅事件显示持久全屏遮罩；同时保留 toast/跑马灯反馈
                 case "game_paused":
                     Debug.Log("[SGM] game_paused received (GM command)");
-                    UI.AnnouncementUI.Instance?.ShowAnnouncement(
-                        "游戏已暂停", "GM 调试：所有 timer 已停止；再次发 pause_game 恢复",
-                        new Color(0.7f, 0.7f, 0.9f), 3f);
+                    OnGamePaused?.Invoke();
                     UI.HorizontalMarqueeUI.Instance?.AddMessage("GM", null, "游戏已暂停");
                     break;
                 case "game_resumed":
                     Debug.Log("[SGM] game_resumed received (GM command)");
-                    UI.AnnouncementUI.Instance?.ShowAnnouncement(
-                        "游戏已恢复", "GM 调试：tick 重启，游戏继续",
-                        new Color(0.5f, 0.9f, 0.6f), 2f);
+                    OnGameResumed?.Invoke();
                     UI.HorizontalMarqueeUI.Instance?.AddMessage("GM", null, "游戏已恢复");
                     break;
                 case "boss_appeared":
@@ -1222,6 +1223,7 @@ namespace DrscfZ.Survival
                 // §34.3 E3b 不朽证明：累计贡献 20000 触发免死豁免，矿工原地满血复活
                 // 🔴 audit-r30 GAP-D25-12/D26-09 MVP 实装：复用 AnnouncementUI 全屏大字 + 跑马灯 + 镜头震动
                 //   "巅峰荣耀时刻"视觉反馈（之前仅跑马灯文本，付费动机弱化）
+                // 🔴 audit-r35 完整版（60% → 90%）：加矿工头顶金色光柱（WorkerVisual.TriggerFreeDeathPassFlash）
                 case SurvivalMessageProtocol.FreeDeathPassTriggered:
                     var fdp = JsonUtility.FromJson<FreeDeathPassTriggeredData>(dataJson);
                     if (fdp != null)
@@ -1240,6 +1242,11 @@ namespace DrscfZ.Survival
                         OnPlayerActivityMessage?.Invoke($"<color=#FFD700>★ {nm} 触发不朽证明，矿工免死复活！</color>");
                         // 镜头轻微震动 0.15 强度 0.5s（与 §27.2 加冕场景同级）
                         SurvivalCameraController.Shake(0.15f, 0.5f);
+                        // 🔴 audit-r35 完整版：矿工头顶金色光柱（3s 淡入持续淡出）
+                        if (WorkerManager.Instance != null)
+                        {
+                            WorkerManager.Instance.HandleFreeDeathPass(fdp.playerId);
+                        }
                     }
                     break;
 
