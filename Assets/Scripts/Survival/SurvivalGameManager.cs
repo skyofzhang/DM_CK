@@ -1208,6 +1208,8 @@ namespace DrscfZ.Survival
                     break;
 
                 // §34.3 E3b 不朽证明：累计贡献 20000 触发免死豁免，矿工原地满血复活
+                // 🔴 audit-r30 GAP-D25-12/D26-09 MVP 实装：复用 AnnouncementUI 全屏大字 + 跑马灯 + 镜头震动
+                //   "巅峰荣耀时刻"视觉反馈（之前仅跑马灯文本，付费动机弱化）
                 case SurvivalMessageProtocol.FreeDeathPassTriggered:
                     var fdp = JsonUtility.FromJson<FreeDeathPassTriggeredData>(dataJson);
                     if (fdp != null)
@@ -1215,7 +1217,17 @@ namespace DrscfZ.Survival
                         Debug.Log($"[SGM] free_death_pass_triggered playerId={fdp.playerId} playerName={fdp.playerName}");
                         OnFreeDeathPassTriggered?.Invoke(fdp);
                         var nm = string.IsNullOrEmpty(fdp.playerName) ? fdp.playerId : fdp.playerName;
+                        // 🔴 audit-r30 MVP：全屏 AnnouncementUI 金色大字（5s）+ 跑马灯 + 轻微镜头震动
+                        UI.AnnouncementUI.Instance?.ShowAnnouncement(
+                            $"★ 不朽证明 ★",
+                            $"{nm} 触发 20000 贡献荣耀！矿工免死复活！",
+                            new Color(1f, 0.84f, 0.1f), // 金色 #FFD700
+                            5f);
+                        UI.HorizontalMarqueeUI.Instance?.AddMessage(
+                            nm, null, $"<color=#FFD700>★ 触发不朽证明，矿工免死复活！</color>");
                         OnPlayerActivityMessage?.Invoke($"<color=#FFD700>★ {nm} 触发不朽证明，矿工免死复活！</color>");
+                        // 镜头轻微震动 0.15 强度 0.5s（与 §27.2 加冕场景同级）
+                        SurvivalCameraController.Shake(0.15f, 0.5f);
                     }
                     break;
 
@@ -2615,7 +2627,8 @@ namespace DrscfZ.Survival
 
         /// <summary>
         /// 探险外域事件：UI 层显示事件图标/提示；trader_caravan 且有 options 时弹 TraderCaravanUI。
-        /// 非 trader_caravan 的事件仅推到 ExpeditionMarkerUI.ShowEvent 做气泡提示（MVP：Log 降级）。
+        /// 🔴 audit-r30 GAP-D25-11/E26-04 MVP 实装：5 类外域事件（wild_beasts/meteor_fragment/lost_cache/bandit_raid/mystic_rune）
+        /// 加专属中文跑马灯 + AnnouncementUI toast。之前仅 trader_caravan 有 UI，其他 5 类完全静默 — §38.3 付费驱动力丢失。
         /// </summary>
         private void HandleExpeditionEvent(ExpeditionEventData data)
         {
@@ -2638,6 +2651,46 @@ namespace DrscfZ.Survival
                         new Color(1f, 0.85f, 0.1f),
                         4f);
                     Debug.LogWarning("[SGM] expedition_event trader_caravan：TraderCaravanUI.Instance 为 null，已降级到 AnnouncementUI");
+                }
+            }
+            else
+            {
+                // 🔴 audit-r30：5 类外域事件 MVP 反馈（§38.3 付费驱动力 — 之前 5/6 类静默丢失）
+                string eventTitle = null;
+                string eventBody  = null;
+                Color  eventColor = Color.white;
+                switch (data.eventId)
+                {
+                    case "lost_cache":
+                        eventTitle = "拾到宝藏！";
+                        eventBody  = "矿工在外域发现遗弃的物资箱";
+                        eventColor = new Color(1f, 0.85f, 0.3f);  // 金黄
+                        break;
+                    case "wild_beasts":
+                        eventTitle = "遭遇荒野猛兽！";
+                        eventBody  = "矿工正在搏斗，30% 概率阵亡";
+                        eventColor = new Color(0.9f, 0.3f, 0.2f); // 警告红
+                        break;
+                    case "meteor_fragment":
+                        eventTitle = "拾到陨石碎片！";
+                        eventBody  = "下次 666 弹幕效率翻倍";
+                        eventColor = new Color(0.7f, 0.6f, 1f);   // 神秘紫
+                        break;
+                    case "bandit_raid":
+                        eventTitle = "遭遇强盗袭击！";
+                        eventBody  = "矿工奋力反抗中";
+                        eventColor = new Color(0.8f, 0.4f, 0.2f); // 暗橙
+                        break;
+                    case "mystic_rune":
+                        eventTitle = "拾到神秘符文！";
+                        eventBody  = "主播事件轮盘瞬间充能完成";
+                        eventColor = new Color(0.5f, 0.85f, 1f);  // 神秘蓝
+                        break;
+                }
+                if (eventTitle != null)
+                {
+                    UI.AnnouncementUI.Instance?.ShowAnnouncement(eventTitle, eventBody, eventColor, 3f);
+                    UI.HorizontalMarqueeUI.Instance?.AddMessage("外域事件", null, $"{eventTitle} {eventBody}");
                 }
             }
 
@@ -3001,11 +3054,13 @@ namespace DrscfZ.Survival
                 }
                 case "spotlight":
                 {
-                    // targetPlayerId 通常 == sourcePlayerId；UI 高亮/弹幕星标等效果由后续 LiveRankingUI 或 BarrageMessageUI 消费时自行识别
+                    // targetPlayerId 通常 == sourcePlayerId；§39.2 A4 设计 — 自己名字在 Top5 高亮金色 10s + 跑马灯提示
                     float dur = data.durationSec > 0 ? data.durationSec : 10f;
-                    // MVP 占位：Log + 跑马灯提示；具体 LiveRankingUI 金色高亮留待后续视觉任务实现
-                    UI.HorizontalMarqueeUI.Instance?.AddMessage(sourceName, null, $"成为聚光灯焦点（{Mathf.RoundToInt(dur)}s）");
-                    Debug.Log($"[SGM] shop_effect_triggered spotlight: source={data.sourcePlayerId} target={data.targetPlayerId} duration={dur}s (占位：UI 高亮效果待视觉任务实现)");
+                    string targetId = string.IsNullOrEmpty(data.targetPlayerId) ? data.sourcePlayerId : data.targetPlayerId;
+                    // 🔴 audit-r30 GAP-D26-06 MVP 实装：SurvivalLiveRankingUI 金色高亮 + ★ 前缀
+                    UI.SurvivalLiveRankingUI.Instance?.TriggerSpotlight(targetId, dur);
+                    UI.HorizontalMarqueeUI.Instance?.AddMessage(sourceName, null, $"<color=#FFD700>★ 成为聚光灯焦点（{Mathf.RoundToInt(dur)}s）</color>");
+                    Debug.Log($"[SGM] shop_effect_triggered spotlight: source={data.sourcePlayerId} target={targetId} duration={dur}s (Top5 高亮已触发)");
                     break;
                 }
                 default:

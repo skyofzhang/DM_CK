@@ -20,6 +20,9 @@ namespace DrscfZ.UI
     /// </summary>
     public class SurvivalLiveRankingUI : MonoBehaviour
     {
+        // 🔴 audit-r30 GAP-D26-06 MVP：单例（仅 SurvivalGameManager.HandleShopEffectTriggered 调用 TriggerSpotlight）
+        public static SurvivalLiveRankingUI Instance { get; private set; }
+
         [Header("面板")]
         [SerializeField] private GameObject   _panel;
         [SerializeField] private TMP_Text     _titleText;
@@ -34,10 +37,17 @@ namespace DrscfZ.UI
         // 上一帧 Top5 ID（用于检测排名变化触发高亮动画）
         private readonly string[] _prevRankIds = new string[5];
 
+        // 🔴 audit-r30 GAP-D26-06 MVP 实装：§39.2 A4 spotlight 聚光灯效果
+        //   购买 spotlight (250 贡献) 后，自己名字在 Top5 中高亮金色 + ★ 前缀，持续 N 秒
+        private string _spotlightPlayerId = null;
+        private float  _spotlightExpireTime = 0f;
+
         // ==================== 生命周期 ====================
 
         private void Awake()
         {
+            // 🔴 audit-r30：Instance 单例赋值（CLAUDE.md 规则 6 — 不在 Awake 内 SetActive(false) 自身 GO）
+            if (Instance == null) Instance = this;
             if (_panel != null) _panel.SetActive(false);
         }
 
@@ -49,12 +59,26 @@ namespace DrscfZ.UI
 
         private void OnEnable()   { TrySubscribe(); }
         private void OnDisable()  { Unsubscribe(); }
-        private void OnDestroy()  { Unsubscribe(); }
+        private void OnDestroy()
+        {
+            Unsubscribe();
+            if (Instance == this) Instance = null; // 🔴 audit-r30：清理 Instance 单例
+        }
 
         // SGM 可能比本组件晚初始化，Update 里补订阅（成功后停止轮询）
         private void Update()
         {
             if (!_subscribed) TrySubscribe();
+        }
+
+        /// <summary>🔴 audit-r30 GAP-D26-06 MVP：§39.2 A4 spotlight 聚光灯触发
+        /// 由 SurvivalGameManager.HandleShopEffectTriggered case "spotlight" 调用，将 targetPlayerId 高亮 durationSec 秒</summary>
+        public void TriggerSpotlight(string targetPlayerId, float durationSec)
+        {
+            if (string.IsNullOrEmpty(targetPlayerId) || durationSec <= 0f) return;
+            _spotlightPlayerId   = targetPlayerId;
+            _spotlightExpireTime = Time.time + durationSec;
+            // 立即重渲染当前 Top5（如果已可见）— 通过订阅最新数据触发或下次 live_ranking 自动更新
         }
 
         private void TrySubscribe()
@@ -152,7 +176,14 @@ namespace DrscfZ.UI
 
                 // §39.5 / audit-r5 §19：组合前缀渲染 title + frame + entrance + barrage + legend 金色
                 string prefix = GetEquippedPrefix(entry.equipped);
-                string name  = $"{prefix}{Truncate(entry.playerName, 6)}";
+                // 🔴 audit-r30 GAP-D26-06 spotlight MVP：高亮金色 ★ 前缀 + 名字染金（仅命中聚光灯目标 + 未过期）
+                bool isSpotlight = !string.IsNullOrEmpty(_spotlightPlayerId)
+                                && _spotlightPlayerId == entry.playerId
+                                && Time.time < _spotlightExpireTime;
+                string truncatedName = Truncate(entry.playerName, 6);
+                string name = isSpotlight
+                    ? $"<color=#FFD700>★ {prefix}{truncatedName}</color>"
+                    : $"{prefix}{truncatedName}";
                 string score = entry.contribution.ToString("N0");
                 string rank  = $"#{entry.rank}";
 
