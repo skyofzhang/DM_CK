@@ -16,6 +16,9 @@ namespace DrscfZ.UI
     /// </summary>
     public class BarrageMessageUI : MonoBehaviour
     {
+        // 🔴 audit-r33 GAP-D26-06 spotlight UI 完整版（80% → 100%）：BarrageMessageUI ★ 前缀（同 SurvivalLiveRankingUI 模式）
+        public static BarrageMessageUI Instance { get; private set; }
+
         [Header("弹幕面板引用（Inspector拖入）")]
         public RectTransform barrageContent;   // BarrageContent（VerticalLayoutGroup）
         public ScrollRect    scrollRect;       // 用于自动滚到底部
@@ -24,6 +27,11 @@ namespace DrscfZ.UI
         [SerializeField] private int   _maxMessages   = 30;   // 最多保留条数
         [SerializeField] private float _messageFontSz = 30f;  // 字体大小
         [SerializeField] private float _rowHeight     = 44f;  // 每行高度
+
+        // 🔴 audit-r33 GAP-D26-06 spotlight UI 完整版（80% → 100%）：弹幕含 spotlight 玩家名时加 ★ 前缀
+        //   §39.2 A4 设计 — 购买聚光灯效果后，自己名字下一条弹幕尾加 ★ 图标（同 SurvivalLiveRankingUI 高亮模式）
+        private string _spotlightPlayerName = null;
+        private float  _spotlightExpireTime = 0f;
 
         // 消息颜色配置
         private static readonly Color COLOR_JOIN     = new Color(0.40f, 0.85f, 0.40f);  // 加入 绿
@@ -34,6 +42,12 @@ namespace DrscfZ.UI
         private readonly Queue<GameObject> _msgRows = new Queue<GameObject>();
         private bool _subscribed = false;
         private Coroutine _scrollCoroutine;
+
+        private void Awake()
+        {
+            // 🔴 audit-r33：Instance 单例（spotlight UI 完整版需 SurvivalGameManager 调用 TriggerSpotlight）
+            if (Instance == null) Instance = this;
+        }
 
         private void Start()
         {
@@ -49,6 +63,19 @@ namespace DrscfZ.UI
 
         private void OnEnable()  { TrySubscribe(); }
         private void OnDisable() { Unsubscribe(); }
+        private void OnDestroy()
+        {
+            if (Instance == this) Instance = null;
+        }
+
+        /// <summary>🔴 audit-r33 GAP-D26-06 spotlight UI 完整版：§39.2 A4 聚光灯触发
+        /// 由 SurvivalGameManager.HandleShopEffectTriggered case "spotlight" 调用，spotlight 期间含 playerName 的弹幕加 ★ 前缀</summary>
+        public void TriggerSpotlight(string targetPlayerName, float durationSec)
+        {
+            if (string.IsNullOrEmpty(targetPlayerName) || durationSec <= 0f) return;
+            _spotlightPlayerName = targetPlayerName;
+            _spotlightExpireTime = Time.time + durationSec;
+        }
 
         private void TrySubscribe()
         {
@@ -92,6 +119,19 @@ namespace DrscfZ.UI
         {
             if (barrageContent == null) return;
 
+            // 🔴 audit-r33 GAP-D26-06 spotlight UI 完整版：弹幕含 spotlight 玩家名时加 ★ 前缀（金色，富文本）
+            //   §39.2 A4 设计 — 购买聚光灯效果后，自己名字下一条弹幕尾加 ★ 图标
+            string finalText = text;
+            bool useRichText = false;
+            if (!string.IsNullOrEmpty(_spotlightPlayerName)
+                && Time.time < _spotlightExpireTime
+                && !string.IsNullOrEmpty(text)
+                && text.Contains(_spotlightPlayerName))
+            {
+                finalText = $"<color=#FFD700>★</color> {text}";
+                useRichText = true;
+            }
+
             // 创建消息行
             var rowGO = new GameObject("MsgRow");
             rowGO.transform.SetParent(barrageContent, false);
@@ -102,7 +142,8 @@ namespace DrscfZ.UI
             var tmp = rowGO.AddComponent<TextMeshProUGUI>();
             var font = Resources.Load<TMPro.TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
             if (font != null) tmp.font = font;
-            tmp.text      = text;
+            tmp.text      = finalText;
+            tmp.richText  = useRichText;
             tmp.fontSize  = _messageFontSz;
             tmp.color     = color;
             tmp.alignment = TextAlignmentOptions.Left;

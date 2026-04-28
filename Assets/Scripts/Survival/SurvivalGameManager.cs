@@ -3083,13 +3083,15 @@ namespace DrscfZ.Survival
                 }
                 case "spotlight":
                 {
-                    // targetPlayerId 通常 == sourcePlayerId；§39.2 A4 设计 — 自己名字在 Top5 高亮金色 10s + 跑马灯提示
+                    // targetPlayerId 通常 == sourcePlayerId；§39.2 A4 设计 — 自己名字在 Top5 高亮金色 10s + BarrageMessageUI ★ 前缀 + 跑马灯提示
                     float dur = data.durationSec > 0 ? data.durationSec : 10f;
                     string targetId = string.IsNullOrEmpty(data.targetPlayerId) ? data.sourcePlayerId : data.targetPlayerId;
                     // 🔴 audit-r30 GAP-D26-06 MVP 实装：SurvivalLiveRankingUI 金色高亮 + ★ 前缀
                     UI.SurvivalLiveRankingUI.Instance?.TriggerSpotlight(targetId, dur);
+                    // 🔴 audit-r33 GAP-D26-06 spotlight UI 完整版（80% → 100%）：BarrageMessageUI ★ 前缀
+                    UI.BarrageMessageUI.Instance?.TriggerSpotlight(sourceName, dur);
                     UI.HorizontalMarqueeUI.Instance?.AddMessage(sourceName, null, $"<color=#FFD700>★ 成为聚光灯焦点（{Mathf.RoundToInt(dur)}s）</color>");
-                    Debug.Log($"[SGM] shop_effect_triggered spotlight: source={data.sourcePlayerId} target={targetId} duration={dur}s (Top5 高亮已触发)");
+                    Debug.Log($"[SGM] shop_effect_triggered spotlight: source={data.sourcePlayerId} target={targetId} duration={dur}s (Top5 高亮 + Barrage ★ 已触发)");
                     break;
                 }
                 default:
