@@ -242,7 +242,9 @@ namespace DrscfZ.Survival
         public event Action<RoomStateData>                 OnRoomState;
         public event Action<FeatureUnlockedData>           OnFeatureUnlocked;
         public event Action<RouletteEffectPreventedData>   OnRouletteEffectPrevented;
-        public event Action<TribeWarRetaliateData>         OnTribeWarRetaliate;
+        // ⚠️ audit-r27 GAP-D26-02/E26-07 死代码清理：OnTribeWarRetaliate 事件已删除
+        //   原因：服务端 0 emit 'tribe_war_retaliate' (S→C only)，仅 SurvivalRoom.js:945 是 C→S inbound handler；
+        //   客户端 case 路由永不触发，0 订阅者。TribeWarRetaliateData 保留作 C→S 请求构造时序列化 targetRoomId 字段。
         // 🔴 audit-r26 GAP-E26-01 / GAP-A26-04：r25 GAP-E25-06 半成品闭环 — entrance_spark 装备时服务端 broadcast
         public event Action<EntranceSparkTriggeredData>    OnEntranceSparkTriggered;
 
@@ -1049,14 +1051,9 @@ namespace DrscfZ.Survival
                         OnRouletteEffectPrevented?.Invoke(rep);
                     }
                     break;
-                case "tribe_war_retaliate":
-                    var twR = JsonUtility.FromJson<TribeWarRetaliateData>(dataJson);
-                    if (twR != null)
-                    {
-                        Debug.Log($"[SGM] tribe_war_retaliate target={twR.targetRoomId} dmgMul={twR.damageMultiplier}");
-                        OnTribeWarRetaliate?.Invoke(twR);
-                    }
-                    break;
+                // ⚠️ audit-r27 GAP-D26-02/E26-07 死代码删除：原 case "tribe_war_retaliate" 永不触发（服务端 0 emit）
+                //   服务端仅在 SurvivalRoom.js:945 处理 C→S inbound，反击成功后走 tribe_war_attack_started 路径
+                //   TribeWarRetaliateData 类保留作 C→S 请求 targetRoomId 字段（damageMultiplier 字段 S→C only 已删）
 
                 // ----- audit-r5 客户端补齐（🆕 v1.27+） -----
                 // §19/§34.4 E9 难度生效：E9 UI / 跑马灯订阅

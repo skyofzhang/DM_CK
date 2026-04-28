@@ -1679,19 +1679,15 @@ namespace DrscfZ.Survival
     }
 
     // ---- A12. §35 P2 反击/攻击扩展 ----
-    /// <summary>攻防战反击/主动攻击（type=tribe_war_retaliate）。
-    /// audit-r12 GAP-B10 注释精化：本类型同时承载两个方向：
-    ///   - C→S（客户端发起反击请求）：客户端**仅传** targetRoomId；damageMultiplier **不传**（服务端忽略客户端入参，防伪造）
-    ///   - S→C（服务端推送反击状态/战报）：服务端填 targetRoomId + damageMultiplier
-    /// ⚠️ audit-r24 GAP-D24-04 注释方向修正（r12 注释方向语义颠倒）：
-    /// damageMultiplier 由服务端依据**反击发起方（即原防守方）**是否有 beacon 建筑决定（1.5 有 / 1.0 无）。
-    /// 服务端 SurvivalRoom.js:961 `(this.survivalEngine && ... this._buildings.has('beacon')) ? 1.5 : 1.0` —
-    /// `this.survivalEngine` 是反击发起方的引擎，与策划案 §35.6 / §37.2 文案"防守方若建有 beacon"对齐。</summary>
+    /// <summary>攻防战反击请求（type=tribe_war_retaliate，C→S only）。
+    /// 🔴 audit-r27 死代码清理：S→C 推送路径从未实装（服务端 0 emit 此 type，仅 SurvivalRoom.js:945 是 C→S inbound handler，
+    ///   反击成功后服务端走 tribe_war_attack_started 路径广播）；客户端 case 路由 + OnTribeWarRetaliate Action 已删除。
+    ///   原 damageMultiplier 字段（S→C only）一并删除 — 防止未来开发者按错误注释认为是双向协议。
+    ///   保留：本类用作 C→S 请求时序列化 targetRoomId 字段。</summary>
     [Serializable]
     public class TribeWarRetaliateData
     {
         public string targetRoomId;
-        public float  damageMultiplier;  // S→C only: 1.5 if 反击发起方（原防守方）has beacon, 1.0 otherwise (C→S 客户端不传)
     }
 
     // ==================== §34 B7 新手引导（🆕 v1.27+ audit-r3/P1） ====================
