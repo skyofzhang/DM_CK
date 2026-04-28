@@ -182,11 +182,18 @@ const TRADER_COST_ORE        = 50;
 // 矿工成长系统常量（策划案 §30.10）
 // TIER_THRESHOLDS[tierIdx]：进入该阶段所需的最小累计终身贡献值
 // TIER_COST_PER_LV[tierIdx]：该阶段内每级所需贡献值增量
-// TIER_THREAT[tierIdx]：阶段威胁值倍率（用于怪物目标选择）
+// TIER_THREAT[tierIdx]：阶段威胁值倍率（仅作数据源参考，怪物目标选择已简化为客户端 ThreatMultiplier）
+// 🔴 audit-r38 GAP-D38-02：TIER_THREAT 数组在服务端 0 处 grep 引用（前 37 轮 audit 漏检）
+//   - 客户端 WorkerController.cs:73 ThreatMultiplier 属性独立计算（公式：1.0 + (tier-1) * 0.4），
+//     与服务端这里数值不完全一致（服务端 [1.0,1.3,1.7,2.2,2.8,3.4,4.0,4.6,5.2,6.0]，
+//     客户端 [1.0,1.4,1.8,2.2,2.6,3.0,3.4,3.8,4.2,4.6]）— 双源真理风险但不影响实际，
+//     因服务端不使用此数组做目标选择（怪物目标选择走 _selectMonsterTarget 用 HP 黑名单 / assassin 优先低 HP）
+//   - 保留作"策划案 §30.10 设计参考表"，未来若服务端要做威胁值加权目标选择可启用
+//   - 客户端 ThreatMultiplier 公式权威，禁止读取服务端 emit 的 tier-threat（无此协议）
 // TIER_SKINS[tierIdx]：阶段对应的皮肤 ID（自动换肤/手动换肤共用）
 const TIER_THRESHOLDS  = [0, 100, 300, 700, 1700, 3700, 8700, 18700, 43700, 103700];
 const TIER_COST_PER_LV = [10, 20, 40, 100, 200, 500, 1000, 2500, 6000, 15000];
-const TIER_THREAT      = [1.0, 1.3, 1.7, 2.2, 2.8, 3.4, 4.0, 4.6, 5.2, 6.0];
+const TIER_THREAT      = [1.0, 1.3, 1.7, 2.2, 2.8, 3.4, 4.0, 4.6, 5.2, 6.0];  // 0 引用，r38 注释标记
 const TIER_SKINS       = ['skin_rookie','skin_veteran','skin_backbone','skin_elite',
                           'skin_assault','skin_iron','skin_commander',
                           'skin_wargod','skin_myth','skin_legend'];

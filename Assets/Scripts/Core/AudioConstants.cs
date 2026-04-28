@@ -150,24 +150,29 @@ namespace DrscfZ.Core
 
         // ============================================================
         // SFX — 原有 Game SFX（GameManager / UI 使用）
+        // 🔴 audit-r38 GAP-D38-09 注释统一：以下常量除 SFX_UI_CLICK / SFX_UNIT_SPAWN 外，
+        //   在 SurvivalGame 模式 runtime 0 引用（grep Assets/Scripts 无 .PlaySFX(SFX_XXX) 路径）；
+        //   AudioManager._sfxMap 仍注册作向下兼容（旧 GameManager / TribeWar 模式遗留）。
+        //   r28-r37 多轮 audit 接力清理但未集中决策；r38 决策：保留作"兼容预留"，标 [Legacy] 标签。
+        //   未来若确认彻底无用可批量删除常量 + _sfxMap 注册（搜索 'sfx_legacy_purge' tag）。
         // ============================================================
 
-        /// <summary>玩家加入（弹幕）</summary>
+        /// <summary>[Legacy 旧 GameManager 遗留] 玩家加入（弹幕）— SurvivalGame 0 引用，仅 _sfxMap 注册</summary>
         public const string SFX_PLAYER_JOIN = "player_join";
 
-        /// <summary>VIP加入</summary>
+        /// <summary>[Legacy 旧 GameManager 遗留] VIP加入 — SurvivalGame 0 引用</summary>
         public const string SFX_VIP_JOIN = "vip_join";
 
-        /// <summary>游戏开始</summary>
+        /// <summary>[Legacy 旧 GameManager 遗留] 游戏开始 — SurvivalGame 用 SFX_DAY_START 替代</summary>
         public const string SFX_GAME_START = "game_start";
 
-        /// <summary>胜利</summary>
+        /// <summary>[Legacy 旧 GameManager 遗留] 胜利 — SurvivalGame 用 SFX_GAME_VICTORY 替代</summary>
         public const string SFX_VICTORY = "victory";
 
         /// <summary>[Legacy 角力游戏遗留] 击退 — 当前项目未使用，保留兼容</summary>
         public const string SFX_PUSHBACK = "pushback";
 
-        /// <summary>UI点击音效</summary>
+        /// <summary>UI点击音效（SurvivalGame UI 路径仍引用）</summary>
         public const string SFX_UI_CLICK = "ui_click";
 
         /// <summary>单位出生（Worker 派遣到工位时播放）</summary>
@@ -179,10 +184,10 @@ namespace DrscfZ.Core
         /// <summary>[Legacy 角力游戏遗留] 强力推进 — 当前项目未使用，保留兼容</summary>
         public const string SFX_PUSH_FORCE = "push_force";
 
-        /// <summary>升级</summary>
+        /// <summary>[Legacy 旧 GameManager 遗留] 升级 — SurvivalGame 用 SFX_TIER_PROMOTE / SFX_GATE_UPGRADE 替代</summary>
         public const string SFX_UPGRADE = "upgrade";
 
-        /// <summary>倒计时</summary>
+        /// <summary>[Legacy 旧 GameManager 遗留] 倒计时 — SurvivalGame 0 引用</summary>
         public const string SFX_COUNTDOWN = "countdown";
 
         // ============================================================

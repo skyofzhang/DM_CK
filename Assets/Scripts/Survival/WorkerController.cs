@@ -256,6 +256,14 @@ namespace DrscfZ.Survival
             if (_hpFillImage != null)
                 _hpFillImage.fillAmount = 1f;
 
+            // 🔴 audit-r38 GAP-D38-12：_cachedTier 安全初始化兜底
+            //   r37 SetTierSkin 入口缓存 _cachedTier 真闭环，但 Initialize 仅在 worker_join 路径
+            //   通过 WorkerManager.HandleWorkerJoin → worker.SetTierSkin(data.tier) 间接覆盖；
+            //   极端边界（断线重连前矿工已拿礼物 / Initialize 后 SetTierSkin 调用前 SetGiftSkin）
+            //   _cachedTier 保留默认值 0 → ClearGiftSkin fallback tier=1。
+            //   r38 显式 Initialize 后立即 _cachedTier=1（默认 tier=1 矿工），消除边界 0 风险。
+            if (_cachedTier <= 0) _cachedTier = 1;
+
             TransitionTo(State.Idle);
         }
 

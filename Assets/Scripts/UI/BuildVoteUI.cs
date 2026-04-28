@@ -173,6 +173,27 @@ namespace DrscfZ.UI
             Debug.Log($"[BuildVoteUI] SendPropose: buildId={buildId}（r37 GAP-C37-02 闭环）");
         }
 
+        /// <summary>🔴 audit-r38 GAP-PM38-01：BuildVoteUI 启动链真闭环
+        ///   r37 commit 加了 SendPropose 公开方法但客户端 0 处真实调用源 → §37 建造系统 UI 路径完全断裂
+        ///   r38 闭环 — BroadcasterDecisionHUD.OpenBuildPropose 调 OpenProposeMenu() 启动建造投票流程
+        ///   MVP 实装：默认提案 'watchtower'（最常见首发建筑）；服务端会把它作为 options[0]，
+        ///            再随机抽 2 个其他可建建筑凑 3 选 1（详见 SurvivalGameEngine.js handleBuildPropose L6042-6062）
+        ///   未来扩展：可改为本地弹 5 选 1 菜单（watchtower/market/hospital/altar/beacon）让用户先选倾向</summary>
+        public void OpenProposeMenu()
+        {
+            // 投票面板已激活 → 当前已有投票流程，避免重复 propose
+            if (_current != null)
+            {
+                Debug.LogWarning("[BuildVoteUI] OpenProposeMenu: 当前已有活跃投票，跳过重复发起");
+                return;
+            }
+            // MVP：默认 watchtower（瞭望塔，§37 5 个建造之首）
+            // 服务端 handleBuildPropose 会以此为 options[0]，再随机加 2 个候选广播 build_vote_started
+            const string defaultBuildId = "watchtower";
+            SendPropose(defaultBuildId);
+            Debug.Log($"[BuildVoteUI] OpenProposeMenu: r38 MVP 默认提案 {defaultBuildId}（GAP-PM38-01 闭环）");
+        }
+
         private void SendVote(string buildId)
         {
             if (_current == null || string.IsNullOrEmpty(buildId)) return;

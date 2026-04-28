@@ -432,11 +432,24 @@ namespace DrscfZ.UI
         /// <summary>§38 探险面板入口别名（兼容 BroadcasterPanel 反射的备用名）。</summary>
         public void ShowExpeditionControls() => OpenExpeditionPanel();
 
-        /// <summary>§37 建造投票面板入口（反射兼容；对外触发 UnityEvent _onBuildClicked）。</summary>
+        /// <summary>§37 建造投票面板入口（反射兼容；对外触发 UnityEvent _onBuildClicked）。
+        /// 🔴 audit-r38 GAP-PM38-01 真闭环：当 _onBuildClicked Inspector 0 listener 时，
+        ///   fallback 调 BuildVoteUI.OpenProposeMenu() 启动建造投票（r37 SendPropose 公开方法的真正入口）。
+        ///   双路径并存：Inspector 已绑定 → UnityEvent 路径；未绑定 → BuildVoteUI 直发 build_propose</summary>
         public void OpenBuildPropose()
         {
+            int listenerCount = _onBuildClicked != null ? _onBuildClicked.GetPersistentEventCount() : 0;
             _onBuildClicked?.Invoke();
-            Debug.Log("[BroadcasterDecisionHUD] OpenBuildPropose: _onBuildClicked.Invoke()");
+            // r38 GAP-PM38-01：Inspector 未绑定 listener 时（默认情况）走 BuildVoteUI 直发协议路径
+            if (listenerCount == 0 && BuildVoteUI.Instance != null)
+            {
+                BuildVoteUI.Instance.OpenProposeMenu();
+                Debug.Log("[BroadcasterDecisionHUD] OpenBuildPropose: fallback BuildVoteUI.OpenProposeMenu()（r38 GAP-PM38-01 闭环）");
+            }
+            else
+            {
+                Debug.Log($"[BroadcasterDecisionHUD] OpenBuildPropose: _onBuildClicked.Invoke() (listeners={listenerCount})");
+            }
         }
 
         /// <summary>§37 建造投票面板入口别名 1。</summary>
