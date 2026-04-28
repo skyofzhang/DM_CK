@@ -967,17 +967,11 @@ namespace DrscfZ.Survival
                     break;
 
                 // ----- §34 Layer 2 组 A 新手友好（🆕 v1.27） -----
-                // B9 work_command_response：协议预留 type（当前服务端实际把 playerStats 捎带在 work_command 广播上，
-                //   由 HandleWorkCommand 统一分发 OnPlayerStatsUpdated；此 case 作为未来拆分独立 response type 的兜底）。
-                //   若老服务端不下发本消息，前端保持静默（PersonalContribUI 不显示）。
-                case "work_command_response":
-                    var wcr = JsonUtility.FromJson<WorkCommandResponseData>(dataJson);
-                    if (wcr != null && wcr.playerStats != null)
-                    {
-                        LastPlayerStats = wcr.playerStats;
-                        OnPlayerStatsUpdated?.Invoke(wcr.playerStats);
-                    }
-                    break;
+                // ⚠️ audit-r28 GAP-A26-09 死代码清理：原 case "work_command_response" 永不触发
+                //   服务端 0 emit 'work_command_response'（grep 全代码 0 命中）；playerStats 实际捎带在
+                //   work_command 广播上，由 HandleWorkCommand 统一分发 OnPlayerStatsUpdated（HandleMessage:1356-1358）。
+                //   选 B 决策：删除客户端 case 路由 + WorkCommandResponseData 类（仅注释保留作历史参考）。
+                //   PersonalContribUI 订阅 OnPlayerStatsUpdated 不受影响（HandleWorkCommand 路径仍触发）。
 
                 // B8 fairy_wand_maxed：服务端 fairy_wand 累计跨过 +100% 时 unicast；
                 //   前端全屏金闪 + 跑马灯 "满级矿工达成！{playerName}"。

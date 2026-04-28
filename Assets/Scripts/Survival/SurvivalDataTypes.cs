@@ -1516,12 +1516,14 @@ namespace DrscfZ.Survival
     }
 
     // ==================== §34 Layer 2 组 A 新手友好（B1/B5/B8/B9，🆕 v1.27） ====================
-    // 协议：work_command_response 扩展 playerStats（B9）；fairy_wand_maxed 独立消息（B8）。
-    // B1 StatusLineBanner / B5 OreRepairFloatingText 不依赖新协议，仅监听既有 resource_update / gift_impact。
+    // 🔴 audit-r28 GAP-A26-09 死代码清理：work_command_response 协议双轨问题已确认 — 服务端 0 emit
+    //   'work_command_response'，playerStats 实际捎带在 work_command 广播上（HandleWorkCommand 路径分发 OnPlayerStatsUpdated）。
+    //   选 B 决策：WorkCommandResponseData 类已死代码（case 路由删除 — SurvivalGameManager.cs 注释中保留历史参考）。
+    //   PlayerStatsData 类保留 — 仍在 WorkCommandData.playerStats 字段中使用（HandleWorkCommand 路径）。
 
     /// <summary>§34 B9 个人贡献条 —— 每次 work_command 响应附带的玩家统计。
-    /// 服务端将 playerStats 嵌入 work_command_response.data；客户端在 case "work_command_response" 中反序列化。
-    /// 无响应消息时（老服务端）前端保持隐藏不展示。
+    /// 服务端将 playerStats 嵌入 work_command 广播（非独立 work_command_response），客户端在 HandleWorkCommand 中分发。
+    /// 无 playerStats 时（兼容场景）前端保持隐藏不展示。
     /// fairyWandBonus 对应 §34 B8 累计加成（0-100 百分比整数；≥100 时满级）。</summary>
     [Serializable]
     public class PlayerStatsData
@@ -1531,18 +1533,10 @@ namespace DrscfZ.Survival
         public int fairyWandBonus;   // 仙女棒累计效率加成（0-100 百分比整数）
     }
 
-    /// <summary>§34 B9 work_command_response 完整响应体（S→C）。
-    /// 服务端 work_command 后单播给发送者；字段顺序对齐策划案 §34.3。
-    /// 老服务端若未下发本消息，前端不触发 PersonalContribUI，保持隐藏。</summary>
-    [Serializable]
-    public class WorkCommandResponseData
-    {
-        public string          playerId;
-        public string          playerName;
-        public int             commandId;     // 1-6，与 WorkCommandData.commandId 对齐
-        public string          commandName;   // "food"/"coal"/"ore"/"heat"/"repair"/"attack"
-        public PlayerStatsData playerStats;   // 可为 null（兼容老服务端），前端 null 判空跳过
-    }
+    // ⚠️ audit-r28 GAP-A26-09 死代码清理：原 WorkCommandResponseData 类已删除（无占位）。
+    //   原由：服务端 0 emit 'work_command_response'，playerStats 实际捎带在 work_command 广播上；
+    //   客户端 case "work_command_response" 路由也已删除（详见 SurvivalGameManager.cs 注释保留）；
+    //   PlayerStatsData 类保留作 work_command.data.playerStats 字段使用（HandleWorkCommand 路径分发 OnPlayerStatsUpdated）。
 
     /// <summary>§34 B8 仙女棒满级（≥100% fairyWandBonus）的玩家。
     /// 服务端 fairy_wand 累计跨过 100% 阈值时 unicast 给该玩家，客户端全屏金闪 + 跑马灯。
