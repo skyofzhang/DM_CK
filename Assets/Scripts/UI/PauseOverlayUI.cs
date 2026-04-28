@@ -58,9 +58,15 @@ namespace DrscfZ.UI
 
         private void BuildOverlayHierarchy()
         {
+            // 🔴 audit-r35 hotfix：找 Canvas 作挂载父级（兼容父级是 Transform / RectTransform 两种情况）
+            //   PauseOverlayPanel 挂载点本身可能是普通 Transform（MCP 创建时未升级 RectTransform），
+            //   子节点必须挂在 Canvas 直接下才能正常 UI 渲染
+            Canvas parentCanvas = GetComponentInParent<Canvas>();
+            Transform mountParent = parentCanvas != null ? parentCanvas.transform : transform;
+
             // 创建 overlay 根节点 — 全屏覆盖
             _overlayRoot = new GameObject("PauseOverlayRoot");
-            _overlayRoot.transform.SetParent(transform, false);
+            _overlayRoot.transform.SetParent(mountParent, false);
 
             var rt = _overlayRoot.AddComponent<RectTransform>();
             rt.anchorMin = Vector2.zero;
