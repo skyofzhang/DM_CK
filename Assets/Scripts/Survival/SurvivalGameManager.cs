@@ -2685,41 +2685,59 @@ namespace DrscfZ.Survival
             else
             {
                 // 🔴 audit-r30：5 类外域事件 MVP 反馈（§38.3 付费驱动力 — 之前 5/6 类静默丢失）
+                // 🔴 audit-r34 增强（70% → 85%）：加镜头震动差异化 — 战斗类强震动 / 收获类轻震动 / 神秘类中震动
                 string eventTitle = null;
                 string eventBody  = null;
                 Color  eventColor = Color.white;
+                float  shakeIntensity = 0f;
+                float  shakeDuration  = 0f;
                 switch (data.eventId)
                 {
                     case "lost_cache":
                         eventTitle = "拾到宝藏！";
                         eventBody  = "矿工在外域发现遗弃的物资箱";
                         eventColor = new Color(1f, 0.85f, 0.3f);  // 金黄
+                        shakeIntensity = 0.05f;                    // 🔴 r34: 轻震动（收获类）
+                        shakeDuration  = 0.15f;
                         break;
                     case "wild_beasts":
                         eventTitle = "遭遇荒野猛兽！";
                         eventBody  = "矿工正在搏斗，30% 概率阵亡";
                         eventColor = new Color(0.9f, 0.3f, 0.2f); // 警告红
+                        shakeIntensity = 0.15f;                    // 🔴 r34: 强震动（战斗类）
+                        shakeDuration  = 0.4f;
                         break;
                     case "meteor_fragment":
                         eventTitle = "拾到陨石碎片！";
                         eventBody  = "下次 666 弹幕效率翻倍";
                         eventColor = new Color(0.7f, 0.6f, 1f);   // 神秘紫
+                        shakeIntensity = 0.12f;                    // 🔴 r34: 中等震动（陨石冲击感）
+                        shakeDuration  = 0.3f;
                         break;
                     case "bandit_raid":
                         eventTitle = "遭遇强盗袭击！";
                         eventBody  = "矿工奋力反抗中";
                         eventColor = new Color(0.8f, 0.4f, 0.2f); // 暗橙
+                        shakeIntensity = 0.15f;                    // 🔴 r34: 强震动（战斗类）
+                        shakeDuration  = 0.4f;
                         break;
                     case "mystic_rune":
                         eventTitle = "拾到神秘符文！";
                         eventBody  = "主播事件轮盘瞬间充能完成";
                         eventColor = new Color(0.5f, 0.85f, 1f);  // 神秘蓝
+                        shakeIntensity = 0.08f;                    // 🔴 r34: 神秘类中震动
+                        shakeDuration  = 0.25f;
                         break;
                 }
                 if (eventTitle != null)
                 {
                     UI.AnnouncementUI.Instance?.ShowAnnouncement(eventTitle, eventBody, eventColor, 3f);
                     UI.HorizontalMarqueeUI.Instance?.AddMessage("外域事件", null, $"{eventTitle} {eventBody}");
+                    // 🔴 r34: 镜头震动差异化反馈（事件感官强度区分）
+                    if (shakeIntensity > 0f)
+                    {
+                        SurvivalCameraController.Shake(shakeIntensity, shakeDuration);
+                    }
                 }
             }
 
