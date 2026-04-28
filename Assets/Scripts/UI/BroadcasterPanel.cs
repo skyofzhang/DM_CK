@@ -467,6 +467,19 @@ namespace DrscfZ.UI
                 return;
             }
 
+            // 🔴 audit-r39 GAP-PM39-03：daily_limit 客户端 pre-check（避免点击 → 弹确认 → 服务端拒错误体验链）
+            //   策划案 §10.5 明确：每日仅可升级 1 次（_gateUpgradedToday，与 expedition_trader 共享）。
+            //   r38 之前 OnUpgradeGateClick 0 处 DailyUpgraded pre-check：玩家点按钮 → GateUpgradeConfirmUI 弹窗 →
+            //   "确认升级" → 服务端 daily_limit 拒 → 玩家收到 gate_upgrade_failed { reason: 'daily_limit' } toast。
+            //   两步操作后才知道今日已升级，错误体验。r39 客户端 pre-check：直接 toast "今日已升级"，不弹确认窗。
+            //   服务端 daily_limit 拒绝路径仍保留作权威回退。
+            if (gate.DailyUpgraded)
+            {
+                AnnouncementUI.Instance?.ShowAnnouncement(
+                    "今日已升级", "城门每日仅可升级 1 次（与探险商队共享额度），明日 UTC+8 05:00 重置", new Color(1f, 0.7f, 0.2f), 2.5f);
+                return;
+            }
+
             int currentLv = gate.GateLevel;
             int nextLv    = currentLv + 1;
             int cost      = GetUpgradeCost(currentLv);

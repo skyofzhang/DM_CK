@@ -8528,6 +8528,21 @@ class SurvivalGameEngine {
    * 调用方负责主播鉴权（弹幕入口和 WS 入口均在外层限制）。
    */
   _handleExpeditionRecall(playerId, playerName) {
+    // 🔴 audit-r39 GAP-PM39-01：recall phase 校验（与 _startExpedition 对称）
+    //   策划案 §38 line 6999 明确 "expedition_command 仅 state === 'day' 受理（不含 recovery）—
+    //   恢复期/夜晚服务端拒绝并返回 expedition_failed { reason: 'wrong_phase' }"。
+    //   r38 之前 _handleExpeditionRecall / _recallExpedition 0 处 phase 校验，
+    //   主播在夜晚/恢复期点 recall 时服务端"静默执行"（_expeditions 已 sweep 删除则 0 处理 + 0 反馈），
+    //   玩家不知道为什么没生效 → 与 send 路径 wrong_phase 反馈不对称。
+    if (this.state !== 'day') {
+      this._sendToPlayer(playerId, {
+        type: 'expedition_failed',
+        timestamp: Date.now(),
+        data: { playerId, reason: 'wrong_phase', unlockDay: 0 },
+      });
+      console.log(`[SurvivalEngine] expedition recall rejected: state=${this.state} pid=${playerId}`);
+      return;
+    }
     this._recallExpedition(playerId);
   }
 
