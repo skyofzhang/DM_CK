@@ -296,15 +296,14 @@ class SurvivalRoom {
       } else if (this.clients.size > 0) {
         this.roomCreatorWs = this.clients.values().next().value;
         console.log(`[SurvivalRoom:${this.roomId}] Creator disconnected, transferring creator to next client (GM mode fallback)`);
-        // 通知新创建者
-        try {
-          this.roomCreatorWs.send(JSON.stringify({
-            type: 'join_room_confirm',
-            roomId: this.roomId,
-            timestamp: Date.now(),
-            data: { isRoomCreator: true }
-          }));
-        } catch (e) { }
+        // 🔴 audit-r42 GAP-C42-01: GM 模式掉线主播转移路径必须注入 B01 协议头三字段。
+        //   r41 标"协议头单播路径全覆盖"实仅扫了 ws.send，漏抓 this.roomCreatorWs.send 模式。
+        //   改走 _sendToClient helper 自动注入 tick/serverTime/priority 三字段（与 join_room_confirm
+        //   入房路径单播模式一致），避免客户端 priority 队列读不到 GM 转移的 isRoomCreator 单播。
+        this._sendToClient(this.roomCreatorWs, {
+          type: 'join_room_confirm',
+          data: { isRoomCreator: true }
+        });
       } else {
         this.roomCreatorWs = null;
       }
