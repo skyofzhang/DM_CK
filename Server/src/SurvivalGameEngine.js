@@ -1034,7 +1034,13 @@ class SurvivalGameEngine {
     if (!ws || ws.readyState !== 1) return false;
     try {
       const roomId = this.room.roomId || '';
-      const copy = Object.assign({ roomId }, msg);
+      const copy = Object.assign({ roomId, timestamp: Date.now() }, msg);
+      // 🔴 audit-r41 GAP-PM41-02：B01 协议头注入（单播路径第 10 轮再现 — r40 漏修 _sendToRoomCreator helper）
+      //   r35 仅 broadcast() 注入；r40 修了 _sendToPlayer 但漏 _sendToRoomCreator（专给主播单播 streamer_prompt 等）；
+      //   r41 真闭环：与 _sendToPlayer 同模式调 _injectProtocolHeader 注入三字段（tick/serverTime/priority）。
+      if (this.room._injectProtocolHeader && typeof this.room._injectProtocolHeader === 'function') {
+        this.room._injectProtocolHeader(copy);
+      }
       ws.send(JSON.stringify(copy));
       return true;
     } catch (e) {

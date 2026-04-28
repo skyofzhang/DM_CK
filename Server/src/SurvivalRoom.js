@@ -203,19 +203,16 @@ class SurvivalRoom {
         console.log(`[SurvivalRoom:${this.roomId}] Creator upgraded on late join_room (douyin mode): openId=${ws._playerId}`);
       }
       // 回补 join_room_confirm（客户端可重读 isRoomCreator）
-      try {
-        ws.send(JSON.stringify({
-          type: 'join_room_confirm',
-          roomId: this.roomId,
-          timestamp: Date.now(),
-          data: {
-            isRoomCreator: this._isRoomCreator(ws),
-            has_active_session: this.survivalEngine &&
-              this.survivalEngine.state !== 'idle' &&
-              this.survivalEngine.state !== undefined
-          }
-        }));
-      } catch (e) { /* ignore */ }
+      // 🔴 audit-r41 GAP-PM41-01: 改用 _sendToClient helper，自动注入 B01 协议头三字段
+      this._sendToClient(ws, {
+        type: 'join_room_confirm',
+        data: {
+          isRoomCreator: this._isRoomCreator(ws),
+          has_active_session: this.survivalEngine &&
+            this.survivalEngine.state !== 'idle' &&
+            this.survivalEngine.state !== undefined
+        }
+      });
       return;
     }
 
@@ -264,19 +261,14 @@ class SurvivalRoom {
     const hasActiveSession = this.survivalEngine &&
       this.survivalEngine.state !== 'idle' &&
       this.survivalEngine.state !== undefined;
-    try {
-      ws.send(JSON.stringify({
-        type: 'join_room_confirm',
-        roomId: this.roomId,
-        timestamp: Date.now(),
-        data: {
-          isRoomCreator: isCreator,
-          has_active_session: hasActiveSession
-        }
-      }));
-    } catch (e) {
-      console.warn(`[SurvivalRoom:${this.roomId}] join_room_confirm send error: ${e.message}`);
-    }
+    // 🔴 audit-r41 GAP-PM41-01: 改用 _sendToClient helper，自动注入 B01 协议头三字段
+    this._sendToClient(ws, {
+      type: 'join_room_confirm',
+      data: {
+        isRoomCreator: isCreator,
+        has_active_session: hasActiveSession
+      }
+    });
 
     // 新客户端连接：发送当前完整状态
     this._sendStateToClient(ws);
@@ -388,11 +380,11 @@ class SurvivalRoom {
 
     for (const ws of this.clients) {
       try {
-        ws.send(JSON.stringify({
+        // 🔴 audit-r41 GAP-PM41-01: 改用 _sendToClient helper，自动注入 B01 协议头三字段
+        this._sendToClient(ws, {
           type: 'room_destroyed',
-          timestamp: Date.now(),
           data: { roomId: this.roomId, reason: 'timeout' }
-        }));
+        });
         ws.close(1000, 'room_destroyed');
       } catch (e) { }
     }
@@ -570,11 +562,9 @@ class SurvivalRoom {
         data:      Object.assign({ reason: 'feature_locked', unlockDay }, extraFields || {}),
       };
       // P0-A8 单播：优先发给 ws；未提供 ws（纯弹幕入口等）时仍 broadcast 兜底
-      if (ws && typeof ws.send === 'function' && ws.readyState === 1) {
-        try {
-          msg.roomId = this.roomId;
-          ws.send(JSON.stringify(msg));
-        } catch (e) { /* ignore */ }
+      // 🔴 audit-r41 GAP-PM41-01: 改用 _sendToClient helper，自动注入 B01 协议头三字段；失败时 fallback broadcast
+      if (ws && this._sendToClient(ws, msg)) {
+        // 单播成功
       } else {
         try {
           this.broadcast(msg);
@@ -622,19 +612,14 @@ class SurvivalRoom {
         } catch (_) { /* ignore */ }
         // §17.15：若节流窗口尚新（≤ ONBOARDING_REPLAY_WINDOW_MS），
         // 沿用同一 sessionId 给该客户端补发一次 show_onboarding_sequence（客户端幂等）
+        // 🔴 audit-r41 GAP-PM41-01: 改用 _sendToClient helper，自动注入 B01 协议头三字段
         this.survivalEngine._replayOnboardingIfInWindow((msg) => {
-          try {
-            msg.roomId = this.roomId;
-            if (ws.readyState === 1) ws.send(JSON.stringify(msg));
-          } catch (e) {
-            console.warn(`[SurvivalRoom:${this.roomId}] onboarding replay send error: ${e.message}`);
-          }
+          this._sendToClient(ws, msg);
         });
         break;
       case 'heartbeat':
-        try {
-          ws.send(JSON.stringify({ type: 'heartbeat_ack', timestamp: Date.now(), roomId: this.roomId }));
-        } catch (e) { }
+        // 🔴 audit-r41 GAP-PM41-01: 改用 _sendToClient helper，自动注入 B01 协议头三字段
+        this._sendToClient(ws, { type: 'heartbeat_ack' });
         break;
       case 'upgrade_gate': {
         if (!this._requireBroadcaster(ws, 'upgrade_gate')) break;
@@ -666,15 +651,14 @@ class SurvivalRoom {
         break;
       case 'get_weekly_ranking':
         // 客户端请求本周贡献榜（面板打开时触发）
+        // 🔴 audit-r41 GAP-PM41-01: 改用 _sendToClient helper，自动注入 B01 协议头三字段
         try {
           const n = (data && data.top && data.top <= 50) ? data.top : 50;
           const payload = this.weeklyRanking.getPayload(n);
-          ws.send(JSON.stringify({
-            type:      'weekly_ranking',
-            roomId:    this.roomId,
-            timestamp: Date.now(),
-            data:      payload,
-          }));
+          this._sendToClient(ws, {
+            type: 'weekly_ranking',
+            data: payload,
+          });
         } catch (e) {
           console.error(`[SurvivalRoom:${this.roomId}] get_weekly_ranking error: ${e.message}`);
         }
@@ -682,15 +666,14 @@ class SurvivalRoom {
 
       case 'get_streamer_ranking':
         // 客户端请求主播排行榜
+        // 🔴 audit-r41 GAP-PM41-01: 改用 _sendToClient helper，自动注入 B01 协议头三字段
         try {
           const sN = (data && data.top && data.top <= 50) ? data.top : 50;
           const sPayload = this.streamerRanking.getPayload(sN);
-          ws.send(JSON.stringify({
-            type:      'streamer_ranking',
-            roomId:    this.roomId,
-            timestamp: Date.now(),
-            data:      sPayload,
-          }));
+          this._sendToClient(ws, {
+            type: 'streamer_ranking',
+            data: sPayload,
+          });
         } catch (e) {
           console.error(`[SurvivalRoom:${this.roomId}] get_streamer_ranking error: ${e.message}`);
         }
@@ -731,15 +714,13 @@ class SurvivalRoom {
         // §36.12 broadcaster_boost 门槛（seasonDay ≥ 2）；失败带 action 子动作名
         if (!this._checkFeatureOrFail('broadcaster_boost', 'broadcaster_action_failed', { action }, ws)) break;
         // r15 GAP-B-MAJOR-01：策划案 §24.3 L2675 明示 broadcaster_action 仅 day/night 受理，恢复期/其他状态拒绝
+        // 🔴 audit-r41 GAP-PM41-01: 改用 _sendToClient helper，自动注入 B01 协议头三字段
         const _engineState = this.survivalEngine && this.survivalEngine.state;
         if (_engineState !== 'day' && _engineState !== 'night') {
-          try {
-            ws.send(JSON.stringify({
-              type: 'broadcaster_action_failed',
-              timestamp: Date.now(),
-              data: { action, reason: 'wrong_phase' },
-            }));
-          } catch (_) { /* ws closed */ }
+          this._sendToClient(ws, {
+            type: 'broadcaster_action_failed',
+            data: { action, reason: 'wrong_phase' },
+          });
           break;
         }
         this._handleBroadcasterAction(ws, data);
@@ -793,14 +774,12 @@ class SurvivalRoom {
 
         if (action === 'recall') {
           // recall 仅主播可用（§38.5）
+          // 🔴 audit-r41 GAP-PM41-01: 改用 _sendToClient helper，自动注入 B01 协议头三字段
           if (!this._isRoomCreator(ws)) {
-            try {
-              ws.send(JSON.stringify({
-                type: 'expedition_failed',
-                timestamp: Date.now(),
-                data: { playerId: ws._playerId || '', reason: 'supporter_not_allowed', unlockDay: 0 },
-              }));
-            } catch (e) { /* ignore */ }
+            this._sendToClient(ws, {
+              type: 'expedition_failed',
+              data: { playerId: ws._playerId || '', reason: 'supporter_not_allowed', unlockDay: 0 },
+            });
             break;
           }
           const targetPid = (data && data.playerId) || '';
@@ -930,9 +909,8 @@ class SurvivalRoom {
               lifetimeContrib: 0,
             },
           };
-          if (ws && typeof ws.send === 'function') {
-            try { ws.send(JSON.stringify(_lockedMsg)); } catch (_e) { this.broadcast(_lockedMsg); }
-          } else {
+          // 🔴 audit-r41 GAP-PM41-01: 改用 _sendToClient helper，自动注入 B01 协议头三字段；失败时 fallback broadcast
+          if (!(ws && this._sendToClient(ws, _lockedMsg))) {
             this.broadcast(_lockedMsg);
           }
           break;
@@ -999,13 +977,14 @@ class SurvivalRoom {
         break;
 
       // ==================== §35 Tribe War C→S ====================
+      // 🔴 audit-r41 GAP-PM41-01: 全部改用 _sendToClient helper，自动注入 B01 协议头三字段
       case 'tribe_war_room_list': {
         if (!this.tribeWarMgr) {
-          ws.send(JSON.stringify({ type: 'tribe_war_room_list_result', timestamp: Date.now(), data: { rooms: [] } }));
+          this._sendToClient(ws, { type: 'tribe_war_room_list_result', data: { rooms: [] } });
           break;
         }
         const rooms = this.tribeWarMgr.getRoomList(this.roomId);
-        ws.send(JSON.stringify({ type: 'tribe_war_room_list_result', timestamp: Date.now(), data: { rooms } }));
+        this._sendToClient(ws, { type: 'tribe_war_room_list_result', data: { rooms } });
         break;
       }
       case 'tribe_war_attack': {
@@ -1015,14 +994,14 @@ class SurvivalRoom {
         if (!this.tribeWarMgr) break;
         const targetRoomId = data && data.targetRoomId;
         if (!targetRoomId) {
-          ws.send(JSON.stringify({ type: 'tribe_war_attack_failed', timestamp: Date.now(), data: { reason: 'room_not_found' } }));
+          this._sendToClient(ws, { type: 'tribe_war_attack_failed', data: { reason: 'room_not_found' } });
           break;
         }
         const res = this.tribeWarMgr.startAttack(this.roomId, targetRoomId);
         if (!res.ok) {
           const failData = { reason: res.reason };
           if (res.cooldownMs !== undefined) failData.cooldownMs = res.cooldownMs;
-          ws.send(JSON.stringify({ type: 'tribe_war_attack_failed', timestamp: Date.now(), data: failData }));
+          this._sendToClient(ws, { type: 'tribe_war_attack_failed', data: failData });
         }
         this._gmAudit(ws, 'tribe_war_attack', { targetRoomId });
         break;
@@ -1042,16 +1021,17 @@ class SurvivalRoom {
         if (!this._checkFeatureOrFail('tribe_war', 'tribe_war_attack_failed', {}, ws)) break;
         // 仅防守方(被攻击中)可反击;damageMultiplier 查 engine._buildings.has('beacon') 填 1.5（§37.2 烽火台反击联动）
         if (!this.tribeWarMgr) break;
+        // 🔴 audit-r41 GAP-PM41-01: 全部改用 _sendToClient helper，自动注入 B01 协议头三字段
         const underAttackSid = this.tribeWarMgr._defenderToSession.get(this.roomId);
         if (!underAttackSid) {
-          ws.send(JSON.stringify({ type: 'tribe_war_attack_failed', timestamp: Date.now(), data: { reason: 'not_under_attack' } }));
+          this._sendToClient(ws, { type: 'tribe_war_attack_failed', data: { reason: 'not_under_attack' } });
           break;
         }
         const atkSession = this.tribeWarMgr._sessions.get(underAttackSid);
         const targetRoomId = (data && data.targetRoomId) ||
                              (atkSession && atkSession.attacker && atkSession.attacker.roomId);
         if (!targetRoomId) {
-          ws.send(JSON.stringify({ type: 'tribe_war_attack_failed', timestamp: Date.now(), data: { reason: 'room_not_found' } }));
+          this._sendToClient(ws, { type: 'tribe_war_attack_failed', data: { reason: 'room_not_found' } });
           break;
         }
         // §37.2 beacon 反击联动：建有 beacon 时 damageMultiplier=1.5，否则 1.0
@@ -1060,7 +1040,7 @@ class SurvivalRoom {
         if (!res.ok) {
           const failData = { reason: res.reason };
           if (res.cooldownMs !== undefined) failData.cooldownMs = res.cooldownMs;
-          ws.send(JSON.stringify({ type: 'tribe_war_attack_failed', timestamp: Date.now(), data: failData }));
+          this._sendToClient(ws, { type: 'tribe_war_attack_failed', data: failData });
         }
         this._gmAudit(ws, 'tribe_war_retaliate', { targetRoomId, damageMultiplier: _dm });
         break;
