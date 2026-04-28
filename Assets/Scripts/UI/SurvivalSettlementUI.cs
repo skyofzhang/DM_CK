@@ -423,6 +423,128 @@ namespace DrscfZ.UI
                     }
                 }
             }
+
+            // 🔴 audit-r32 GAP-A26-08 r31 半成品闭环：§34 F6 双档分配 — tail 30% 池 ≥100 贡献分配
+            //   r35 完整版（95% → 100%）：动态创建独立列表 UI 在 _screenB 下方显示一行行 "Nickname +Share"
+            RenderTailRewardsList(data);
+        }
+
+        // 🔴 audit-r35 GAP-A26-08 r32 半成品闭环（95% → 100%）：tailRewards 独立列表渲染
+        //   动态创建子节点 — 不依赖场景预创建的 GameObject 槽位（与 PauseOverlayUI 同模式）
+        private GameObject _tailRewardsContainer;
+
+        private void RenderTailRewardsList(SettlementData data)
+        {
+            // 清理旧列表（每次 ShowScreenB 重建，避免叠加）
+            if (_tailRewardsContainer != null)
+            {
+                Destroy(_tailRewardsContainer);
+                _tailRewardsContainer = null;
+            }
+
+            if (data.TailRewards == null || data.TailRewards.Count == 0) return;
+
+            int totalCount = Mathf.Max(data.TailEligibleCount, data.TailRewards.Count);
+            int totalShare = 0;
+            for (int i = 0; i < data.TailRewards.Count; i++) totalShare += data.TailRewards[i].Share;
+
+            // 跑马灯保持（向下兼容 r32 行为）
+            var sb = new System.Text.StringBuilder();
+            sb.Append($"§34 F6 双档分配：{totalCount} 名 ≥100 贡献者瓜分 {totalShare} 积分");
+            if (data.TailRewards.Count > 0)
+            {
+                int showN = Mathf.Min(3, data.TailRewards.Count);
+                sb.Append("（");
+                for (int i = 0; i < showN; i++)
+                {
+                    if (i > 0) sb.Append(" / ");
+                    sb.Append($"{data.TailRewards[i].Nickname} +{data.TailRewards[i].Share}");
+                }
+                if (data.TailRewards.Count > showN) sb.Append($" 等 {totalCount - showN} 名");
+                sb.Append("）");
+            }
+            HorizontalMarqueeUI.Instance?.AddMessage("结算分配", null, sb.ToString());
+
+            // 🔴 r35 完整版：在 _screenB 下方创建独立列表（最多显示前 5 名 + "等 N 名"）
+            if (_screenB == null) { Debug.LogWarning("[SettlementUI] _screenB null，跳过 tailRewards 独立列表渲染"); return; }
+
+            _tailRewardsContainer = new GameObject("TailRewardsList");
+            _tailRewardsContainer.transform.SetParent(_screenB.transform, false);
+            var rt = _tailRewardsContainer.AddComponent<RectTransform>();
+            rt.anchorMin = new Vector2(0.5f, 0f);
+            rt.anchorMax = new Vector2(0.5f, 0f);
+            rt.pivot     = new Vector2(0.5f, 0f);
+            rt.anchoredPosition = new Vector2(0f, 30f);    // 距 _screenB 底部 30px
+            rt.sizeDelta = new Vector2(700f, 200f);
+
+            var vlg = _tailRewardsContainer.AddComponent<VerticalLayoutGroup>();
+            vlg.childAlignment   = TextAnchor.UpperCenter;
+            vlg.spacing          = 4f;
+            vlg.padding          = new RectOffset(8, 8, 8, 8);
+            vlg.childControlHeight = false;
+            vlg.childControlWidth  = true;
+            vlg.childForceExpandHeight = false;
+            vlg.childForceExpandWidth  = true;
+
+            // 标题
+            var titleGO = new GameObject("TailTitle");
+            titleGO.transform.SetParent(_tailRewardsContainer.transform, false);
+            var titleRT = titleGO.AddComponent<RectTransform>();
+            titleRT.sizeDelta = new Vector2(0f, 32f);
+            var titleLE = titleGO.AddComponent<LayoutElement>();
+            titleLE.preferredHeight = 32f;
+            var titleTmp = titleGO.AddComponent<TextMeshProUGUI>();
+            BindFont(titleTmp);
+            titleTmp.text      = $"§34 F6 双档分配 · {totalCount} 名 ≥100 贡献者 · 总池 {totalShare}";
+            titleTmp.fontSize  = 22;
+            titleTmp.color     = new Color(1f, 0.84f, 0.1f); // 金色
+            titleTmp.alignment = TextAlignmentOptions.Center;
+            titleTmp.fontStyle = FontStyles.Bold;
+
+            // 列表项（最多 5 条，超出加 "等 N 名"）
+            int showN2 = Mathf.Min(5, data.TailRewards.Count);
+            for (int i = 0; i < showN2; i++)
+            {
+                var entry = data.TailRewards[i];
+                var rowGO = new GameObject($"TailRow_{i}");
+                rowGO.transform.SetParent(_tailRewardsContainer.transform, false);
+                var rowRT = rowGO.AddComponent<RectTransform>();
+                rowRT.sizeDelta = new Vector2(0f, 22f);
+                var rowLE = rowGO.AddComponent<LayoutElement>();
+                rowLE.preferredHeight = 22f;
+                var rowTmp = rowGO.AddComponent<TextMeshProUGUI>();
+                BindFont(rowTmp);
+                rowTmp.text      = $"  {entry.Nickname}  +{entry.Share}";
+                rowTmp.fontSize  = 18;
+                rowTmp.color     = new Color(0.95f, 0.95f, 0.95f);
+                rowTmp.alignment = TextAlignmentOptions.Center;
+            }
+            if (data.TailRewards.Count > showN2)
+            {
+                var moreGO = new GameObject("TailMore");
+                moreGO.transform.SetParent(_tailRewardsContainer.transform, false);
+                var moreRT = moreGO.AddComponent<RectTransform>();
+                moreRT.sizeDelta = new Vector2(0f, 22f);
+                var moreLE = moreGO.AddComponent<LayoutElement>();
+                moreLE.preferredHeight = 22f;
+                var moreTmp = moreGO.AddComponent<TextMeshProUGUI>();
+                BindFont(moreTmp);
+                moreTmp.text      = $"...等 {totalCount - showN2} 名 ≥100 贡献者已分配";
+                moreTmp.fontSize  = 16;
+                moreTmp.color     = new Color(0.7f, 0.7f, 0.7f);
+                moreTmp.alignment = TextAlignmentOptions.Center;
+                moreTmp.fontStyle = FontStyles.Italic;
+            }
+
+            Debug.Log($"[SettlementUI] tailRewards rendered: {showN2}/{data.TailRewards.Count} entries shown, total {totalShare} (independent UI list)");
+        }
+
+        private static void BindFont(TextMeshProUGUI tmp)
+        {
+            if (tmp == null) return;
+            var font = Resources.Load<TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF")
+                    ?? Resources.Load<TMP_FontAsset>("Fonts/ChineseFont SDF");
+            if (font != null) tmp.font = font;
         }
 
         // ─── Screen C: Top3 贡献者 + 动态标语 ──────────────────────────────────
@@ -575,6 +697,9 @@ namespace DrscfZ.UI
         public bool   NewbieProtected;       // 🆕 §16.6 Day 1-10 新手保护
         public bool   IsManual;              // 🆕 §16.4 GM 手动终止（reason == "manual"）
         public List<RankEntry> Rankings;     // null = 由 PlaySettlementSequence 自动从 RankingSystem 获取
+        // 🔴 audit-r32 GAP-A26-08 r31 半成品闭环：tail 30% 池 ≥100 贡献分配（非 Top10）— SurvivalGameEndedData.tailRewards 映射后渲染于帧 B
+        public List<TailRewardSummary> TailRewards;  // null/empty 不显示
+        public int    TailEligibleCount;     // §34 F6: tailRewards 总人数（>List.Count 时表示"还有 N 名"）
     }
 
     [System.Serializable]
@@ -582,5 +707,12 @@ namespace DrscfZ.UI
     {
         public string Nickname;
         public int    Score;
+    }
+
+    [System.Serializable]
+    public class TailRewardSummary
+    {
+        public string Nickname;
+        public int    Share;
     }
 }

@@ -21,6 +21,39 @@ function getStreamerRanking() {
   return _streamerRankingInstance;
 }
 
+// 🔴 audit-r35 GAP-E25-08 B01 协议头 MVP：消息类型 → priority 数字映射（§19.0 设计）
+//   0=critical（状态机/失败/赛季结束 — 必须立即处理）
+//   1=high（游戏状态变更 — 优先处理）
+//   2=normal（资源/排行/事件 — 默认）
+//   3=low（debug / 装饰类 — 可降频）
+function _resolveMessagePriority(messageType) {
+  if (!messageType) return 2;
+  // critical：状态机/失败/赛季关键事件
+  if (messageType === 'phase_changed' ||
+      messageType === 'room_failed' ||
+      messageType === 'season_settlement' ||
+      messageType === 'survival_game_ended' ||
+      messageType === 'fortress_day_changed' ||
+      messageType === 'free_death_pass_triggered' ||
+      messageType === 'room_destroyed' ||
+      messageType === 'season_state') return 0;
+  // high：游戏状态/快照
+  if (messageType === 'survival_game_state' ||
+      messageType === 'room_state' ||
+      messageType === 'world_clock_tick' ||
+      messageType === 'game_paused' ||
+      messageType === 'game_resumed' ||
+      messageType === 'monster_wave_incoming' ||
+      messageType === 'monster_wave' ||
+      messageType === 'boss_appeared' ||
+      messageType === 'gate_breach_warning') return 1;
+  // low：debug / 装饰
+  if (messageType === 'debug' ||
+      messageType === 'live_comment') return 3;
+  // 其他（资源/排行/礼物/事件等）= normal
+  return 2;
+}
+
 class SurvivalRoom {
   /**
    * @param {string} roomId    - 房间ID（通常=抖音直播间ID）
@@ -37,6 +70,11 @@ class SurvivalRoom {
     this.createdAt    = Date.now();
     this.lastActiveAt = Date.now();
     this.status       = 'active'; // active | paused | destroyed
+
+    // 🔴 audit-r35 GAP-E25-08 B01 协议头 MVP：每条 S→C 广播自动注入 tick / serverTime / priority
+    //   §19.0 设计：服务端递增计数 tick + Unix ms serverTime + priority 数字（0=critical / 1=high / 2=normal / 3=low）
+    //   客户端可按 tick 序号识别"服务端重启 vs 客户端追赶"，按 priority 数字处理（MVP 仅 log）
+    this._globalTick = 0;
 
     // WebSocket 客户端集合
     this.clients = new Set();
@@ -393,6 +431,12 @@ class SurvivalRoom {
 
     if (this.clients.size === 0) return;
     message.roomId = this.roomId;
+
+    // 🔴 audit-r35 GAP-E25-08 B01 协议头 MVP：注入公共字段（不覆盖 emit 处已设的同名字段，向后兼容）
+    if (message.tick === undefined) message.tick = ++this._globalTick;
+    if (message.serverTime === undefined) message.serverTime = Date.now();
+    if (message.priority === undefined) message.priority = _resolveMessagePriority(message.type);
+
     const data = JSON.stringify(message);
 
     for (const client of this.clients) {
@@ -865,13 +909,26 @@ class SurvivalRoom {
       //     真实抖音模式下同样需要主播身份，防止观众客户端伪造消息触发
       case 'pause_game':
         if (!this._requireBroadcaster(ws, 'pause_game')) break;
-        // 暂停/恢复游戏（仅限调试）
+        // 🔴 audit-r31 GAP-A25-04 协议对称化修复：原仅 emit game_paused，无 game_resumed 对称消息
+        //   修复：根据当前 _gmPaused 状态切换；resume 时调 _startTick 真恢复 + emit game_resumed
         if (this.survivalEngine.state === 'day' || this.survivalEngine.state === 'night') {
-          this.survivalEngine._clearAllTimers();
-          this.broadcast({ type: 'game_paused', data: { paused: true } });
-          console.log(`[SurvivalRoom:${this.roomId}] GM: game paused`);
+          if (!this._gmPaused) {
+            // pause: 清 timers + emit game_paused
+            this.survivalEngine._clearAllTimers();
+            this._gmPaused = true;
+            this.broadcast({ type: 'game_paused', data: { paused: true } });
+            console.log(`[SurvivalRoom:${this.roomId}] GM: game paused`);
+          } else {
+            // resume: 重启 _startTick + emit game_resumed
+            if (typeof this.survivalEngine._startTick === 'function') {
+              this.survivalEngine._startTick();
+            }
+            this._gmPaused = false;
+            this.broadcast({ type: 'game_resumed', data: { paused: false } });
+            console.log(`[SurvivalRoom:${this.roomId}] GM: game resumed`);
+          }
         }
-        this._gmAudit(ws, 'pause_game', { state: this.survivalEngine.state });
+        this._gmAudit(ws, 'pause_game', { state: this.survivalEngine.state, paused: this._gmPaused });
         break;
 
       case 'simulate_gift': {

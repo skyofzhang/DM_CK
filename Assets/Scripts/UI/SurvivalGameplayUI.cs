@@ -78,7 +78,10 @@ namespace DrscfZ.UI
         {
             if (_gameUIPanel != null) _gameUIPanel.SetActive(false);
             if (_bottomBar != null)   _bottomBar.SetActive(false);
-            if (_announcementPanel != null) _announcementPanel.SetActive(false);
+            // 🔴 audit-r25 GAP-A25-03：之前强制 _announcementPanel.SetActive(false)，但 ShowPanels 不恢复
+            //   → v1.26 永续模式 Settlement → Running 自动切换后 AnnouncementUI 全屏公告永久断链
+            //   修复：让 AnnouncementPanel 自管显隐（doc §17.0:1660-1661 一致），不在 HidePanels 强制隐藏
+            //   旧行: if (_announcementPanel != null) _announcementPanel.SetActive(false);
         }
     }
 }

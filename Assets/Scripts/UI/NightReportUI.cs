@@ -132,6 +132,15 @@ namespace DrscfZ.UI
                 sb.AppendLine($"矿工存活率：{survivalPct}%");
                 sb.Append   ($"最危险时刻：城门血量仅剩 {closestCallPct}%");
 
+                // 🔴 audit-r25 GAP-D25-02：r24 加 nightModifierId 字段但 UI 0 消费 → 半成品延续第 5 轮
+                //   §34.4 E5b 7 修饰符差异化文案从 r24 加字段至今从未触发
+                //   修复：按 7 种 modifier id 追加专属一句体验文案
+                if (!string.IsNullOrEmpty(data.nightModifierId) && data.nightModifierId != "normal")
+                {
+                    sb.AppendLine();
+                    sb.Append(GetModifierFlavorText(data.nightModifierId, data.monstersKilled, data.survivalRate));
+                }
+
                 _bodyText.text = sb.ToString();
             }
 
@@ -161,6 +170,32 @@ namespace DrscfZ.UI
             if (_panelCanvasGroup != null) _panelCanvasGroup.alpha = 0f;
             if (_panelRoot != null) _panelRoot.gameObject.SetActive(false);
             _runCoroutine = null;
+        }
+
+        /// <summary>🔴 audit-r25 GAP-D25-02：§34.4 E5b 7 修饰符差异化体验文案
+        /// 修饰符 id 来自服务端 night_report.nightModifierId（§34.3 E1）：
+        ///   blood_moon / polar_night / fortified / frenzy / hunters / blizzard_night / normal
+        /// </summary>
+        private static string GetModifierFlavorText(string modifierId, int monstersKilled, float survivalRate)
+        {
+            int survivalPct = Mathf.Clamp(Mathf.RoundToInt(survivalRate * 100f), 0, 100);
+            switch (modifierId)
+            {
+                case "blood_moon":
+                    return $"血月之夜：消灭 {monstersKilled} 只血怪！";
+                case "polar_night":
+                    return $"极夜降临：仅靠 {survivalPct}% 矿工守住防线";
+                case "fortified":
+                    return "坚守之夜：城门固守 +50% 伤害减免";
+                case "frenzy":
+                    return $"狂怒之夜：怪物 +17 同屏上限，斩杀 {monstersKilled} 只";
+                case "hunters":
+                    return "猎手之夜：精英怪藏匿在暗处";
+                case "blizzard_night":
+                    return $"暴风雪夜：极寒中坚守 {survivalPct}% 矿工";
+                default:
+                    return $"特殊夜（{modifierId}）：本夜仍胜利！";
+            }
         }
     }
 }

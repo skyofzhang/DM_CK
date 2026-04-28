@@ -137,7 +137,7 @@ namespace DrscfZ.Survival
         public int    startDay;  // 起始赛季日（含）
         public int    endDay;    // 结束赛季日（含）
         public string actTag;    // "prologue"/"act1"/"act2"/"act3"/"finale"（驼峰命名，与 phase_changed.act_tag 对齐 BGM 层）
-        public string endNote;   // 🆕 audit-r24 GAP-D24-02：幕终事件关键文案（§34.4 E2，如"首个精英怪出现"/"双 Boss 同时出现"）
+        public string endNote;   // 🆕 audit-r24 GAP-D24-02 + 🔴 r26 GAP-A26-06 注释精确化：幕的整体特征描述（prologue→"教学+安全" / act1→"压力上升" / act2→"高峰冲突" / act3→"决战"等），与 §34.4 E2 "幕终事件关键文案"语义不同（后者由独立 chapter_end_event 协议承载，事件如"首个精英怪来袭"/"双 Boss 同时出现"通过 chapter_end_event.event/hint 字段获取）
         public int    seasonDay; // 🆕 audit-r24 GAP-D24-02：服务端推送时的当前赛季日（1-7）
     }
 
@@ -376,7 +376,19 @@ namespace DrscfZ.Survival
         public int    top10Pool;          // 🆕 audit-r18 §34 F6：Top10 双档分配总额（70% 池）
         public int    tailPool;           // 🆕 audit-r18 §34 F6：剩余 30% 池总额（按贡献 ≥100 分配给非 Top10）
         public int    tailEligibleCount;  // 🆕 audit-r18 §34 F6：参与 tail 分配的玩家数（贡献 ≥100 的非 Top10）
-        // contributionRewards: object<playerId, share> — JsonUtility 不支持 Dictionary，客户端如需消费可改用 Dictionary<string,int> + JObject 解析；目前仅 fortress 总览统计可用
+        // 🔴 audit-r31 GAP-A26-08 实装：原 contributionRewards 用 Dictionary 结构 JsonUtility 不支持→静默丢失。
+        //   服务端 r31 改 emit `tailRewards: [{playerId, playerName, share}]` 数组结构（兼容 JsonUtility）。
+        //   旧字段 contributionRewards Dict 保留作老客户端兼容（新客户端不消费）。
+        public TailRewardEntry[] tailRewards;  // 🆕 audit-r31：非 Top10 且 ≥100 贡献者的奖励数组
+    }
+
+    /// <summary>🆕 audit-r31 GAP-A26-08：tail 30% 池单条奖励记录（数组元素，替代 contributionRewards Dictionary 结构）</summary>
+    [Serializable]
+    public class TailRewardEntry
+    {
+        public string playerId;
+        public string playerName;
+        public int    share;
     }
 
     /// <summary>end_game 被服务端拒绝（仅 state !∈ {day,night} 时返回，§16.4）</summary>
@@ -617,13 +629,17 @@ namespace DrscfZ.Survival
         public int    supporterCount;
     }
 
-    /// <summary>助威者弹幕生效（type=supporter_action）</summary>
+    /// <summary>助威者弹幕生效（type=supporter_action）
+    /// 🆕 audit-r25 GAP-D25-06：补齐 atkBuffPct + atkBuffTimer，让客户端 UI 在夜晚 cmd=6 时显示
+    /// "助威者 +X% 攻击力（剩 Ys）"实时反馈（多个助威者协作感）。</summary>
     [Serializable]
     public class SupporterActionData
     {
         public string playerId;
         public string playerName;
-        public int    cmd;       // 1/2/3/4/6/666
+        public int    cmd;            // 1/2/3/4/6/666
+        public float  atkBuffPct;     // 🆕 audit-r25 GAP-D25-06：累积百分比（0~0.20，仅夜晚 cmd=6 路径有意义）
+        public int    atkBuffTimer;   // 🆕 audit-r25 GAP-D25-06：剩余生效秒数（0~5，每秒服务端 -1 至 0 后清 _supporterAtkBuff）
     }
 
     /// <summary>AFK 替补：助威者→守护者 + 旧守护者→助威者（type=supporter_promoted）</summary>
@@ -638,7 +654,8 @@ namespace DrscfZ.Survival
     }
 
     /// <summary>D1–D5 超员观众礼物扣费但未生效反馈（type=gift_silent_fail，🆕 v1.27）。
-    /// MVP 阶段服务端暂不推送（§36.12 未实现），仅保留协议。</summary>
+    /// 🔴 audit-r26 GAP-D26-07 doc 精确化：服务端 SurvivalGameEngine.js:1924 已实装 emit（r24 修过 §36.12 但本注释未同步）。
+    /// 触发时机：D1-D5 supporter_mode 未解锁，第 13+ 位观众发 T1 仙女棒时抖音照常扣费、服务端不累加效果，向发送者 unicast 该消息。</summary>
     [Serializable]
     public class GiftSilentFailData
     {
@@ -717,11 +734,14 @@ namespace DrscfZ.Survival
 
     // ==================== §24.4 主播事件轮盘（Broadcaster Event Roulette，🆕 v1.27）====================
 
-    /// <summary>轮盘充能就绪通知（type=broadcaster_roulette_ready）</summary>
+    /// <summary>轮盘充能就绪通知（type=broadcaster_roulette_ready）
+    /// 🆕 audit-r25 GAP-D25-05：补 source 字段，区分"正常 300s 充能完成"vs"§38.3 神秘符文事件瞬间补满"。
+    /// 服务端 SurvivalGameEngine.js:8696-8702 mystic_rune case emit `source='mystic_rune'`；正常充能完成无 source（默认 ""）。</summary>
     [Serializable]
     public class RouletteReadyData
     {
-        public long readyAt;    // Unix ms；-1 表示已就绪
+        public long   readyAt;    // Unix ms；-1 表示已就绪
+        public string source;     // 🆕 audit-r25 GAP-D25-05：'mystic_rune' | ''（默认空字符串）
     }
 
     /// <summary>轮盘抽卡结果（type=broadcaster_roulette_result）
@@ -1003,7 +1023,12 @@ namespace DrscfZ.Survival
     [Serializable]
     public class StreamerRankingData
     {
-        public StreamerRankingEntry[] rankings; // Top 10
+        // 🔴 audit-r25 GAP-C25-03/06：双路径上限不一致（与 r24 GAP-B24-02 weekly_ranking 同模式延续 — 半成品延续第 8 轮）
+        //   - 服务端广播 _broadcastStreamerRanking(SurvivalRoom.js:430)：getPayload(10) 仅 Top 10
+        //   - 客户端请求 get_streamer_ranking(SurvivalRoom.js:608)：默认 50/最大 50（data.top<=50?data.top:50）
+        //   - StreamerRankingStore.js:208 getTop(n=10) 函数级默认 10 但入口默认 50
+        //   - 客户端 SurvivalRankingUI.cs:285 RequestStreamerRanking() 不带 top 参数 → 实际拿 Top 50
+        public StreamerRankingEntry[] rankings; // Top N（广播默认 10；客户端请求默认 50，最大 50）
     }
 
     // ==================== §39 商店系统（Shop System，🆕 v1.27） ====================
@@ -1503,12 +1528,14 @@ namespace DrscfZ.Survival
     }
 
     // ==================== §34 Layer 2 组 A 新手友好（B1/B5/B8/B9，🆕 v1.27） ====================
-    // 协议：work_command_response 扩展 playerStats（B9）；fairy_wand_maxed 独立消息（B8）。
-    // B1 StatusLineBanner / B5 OreRepairFloatingText 不依赖新协议，仅监听既有 resource_update / gift_impact。
+    // 🔴 audit-r28 GAP-A26-09 死代码清理：work_command_response 协议双轨问题已确认 — 服务端 0 emit
+    //   'work_command_response'，playerStats 实际捎带在 work_command 广播上（HandleWorkCommand 路径分发 OnPlayerStatsUpdated）。
+    //   选 B 决策：WorkCommandResponseData 类已死代码（case 路由删除 — SurvivalGameManager.cs 注释中保留历史参考）。
+    //   PlayerStatsData 类保留 — 仍在 WorkCommandData.playerStats 字段中使用（HandleWorkCommand 路径）。
 
     /// <summary>§34 B9 个人贡献条 —— 每次 work_command 响应附带的玩家统计。
-    /// 服务端将 playerStats 嵌入 work_command_response.data；客户端在 case "work_command_response" 中反序列化。
-    /// 无响应消息时（老服务端）前端保持隐藏不展示。
+    /// 服务端将 playerStats 嵌入 work_command 广播（非独立 work_command_response），客户端在 HandleWorkCommand 中分发。
+    /// 无 playerStats 时（兼容场景）前端保持隐藏不展示。
     /// fairyWandBonus 对应 §34 B8 累计加成（0-100 百分比整数；≥100 时满级）。</summary>
     [Serializable]
     public class PlayerStatsData
@@ -1518,18 +1545,10 @@ namespace DrscfZ.Survival
         public int fairyWandBonus;   // 仙女棒累计效率加成（0-100 百分比整数）
     }
 
-    /// <summary>§34 B9 work_command_response 完整响应体（S→C）。
-    /// 服务端 work_command 后单播给发送者；字段顺序对齐策划案 §34.3。
-    /// 老服务端若未下发本消息，前端不触发 PersonalContribUI，保持隐藏。</summary>
-    [Serializable]
-    public class WorkCommandResponseData
-    {
-        public string          playerId;
-        public string          playerName;
-        public int             commandId;     // 1-6，与 WorkCommandData.commandId 对齐
-        public string          commandName;   // "food"/"coal"/"ore"/"heat"/"repair"/"attack"
-        public PlayerStatsData playerStats;   // 可为 null（兼容老服务端），前端 null 判空跳过
-    }
+    // ⚠️ audit-r28 GAP-A26-09 死代码清理：原 WorkCommandResponseData 类已删除（无占位）。
+    //   原由：服务端 0 emit 'work_command_response'，playerStats 实际捎带在 work_command 广播上；
+    //   客户端 case "work_command_response" 路由也已删除（详见 SurvivalGameManager.cs 注释保留）；
+    //   PlayerStatsData 类保留作 work_command.data.playerStats 字段使用（HandleWorkCommand 路径分发 OnPlayerStatsUpdated）。
 
     /// <summary>§34 B8 仙女棒满级（≥100% fairyWandBonus）的玩家。
     /// 服务端 fairy_wand 累计跨过 100% 阈值时 unicast 给该玩家，客户端全屏金闪 + 跑马灯。
@@ -1601,7 +1620,7 @@ namespace DrscfZ.Survival
         public int    totalCycles;                 // 总循环次数（_enterSettlement 计数）
         public string streamerKingTitle;           // "堡垒之王" 或 null
         public int    currentSeasonId;             // 当前赛季 id
-        public string lastThemeId;                 // 上个赛季主题（防连抽记忆）
+        public string lastThemeId;                 // 🔴 audit-r25 GAP-D25-09：服务端实发当前主题（与 themeId 同值，作为持久化保留入口；非"上个赛季"语义）
         public string themeId;                     // 本赛季主题 id
         public string phase;                       // "day"/"night"/"recovery"/"idle"/... 与 SurvivalGameStateData.state 同源
         public string variant;                     // "normal"/"recovery"/... 与 PhaseChangedData.variant 同源
@@ -1666,19 +1685,15 @@ namespace DrscfZ.Survival
     }
 
     // ---- A12. §35 P2 反击/攻击扩展 ----
-    /// <summary>攻防战反击/主动攻击（type=tribe_war_retaliate）。
-    /// audit-r12 GAP-B10 注释精化：本类型同时承载两个方向：
-    ///   - C→S（客户端发起反击请求）：客户端**仅传** targetRoomId；damageMultiplier **不传**（服务端忽略客户端入参，防伪造）
-    ///   - S→C（服务端推送反击状态/战报）：服务端填 targetRoomId + damageMultiplier
-    /// ⚠️ audit-r24 GAP-D24-04 注释方向修正（r12 注释方向语义颠倒）：
-    /// damageMultiplier 由服务端依据**反击发起方（即原防守方）**是否有 beacon 建筑决定（1.5 有 / 1.0 无）。
-    /// 服务端 SurvivalRoom.js:961 `(this.survivalEngine && ... this._buildings.has('beacon')) ? 1.5 : 1.0` —
-    /// `this.survivalEngine` 是反击发起方的引擎，与策划案 §35.6 / §37.2 文案"防守方若建有 beacon"对齐。</summary>
+    /// <summary>攻防战反击请求（type=tribe_war_retaliate，C→S only）。
+    /// 🔴 audit-r27 死代码清理：S→C 推送路径从未实装（服务端 0 emit 此 type，仅 SurvivalRoom.js:945 是 C→S inbound handler，
+    ///   反击成功后服务端走 tribe_war_attack_started 路径广播）；客户端 case 路由 + OnTribeWarRetaliate Action 已删除。
+    ///   原 damageMultiplier 字段（S→C only）一并删除 — 防止未来开发者按错误注释认为是双向协议。
+    ///   保留：本类用作 C→S 请求时序列化 targetRoomId 字段。</summary>
     [Serializable]
     public class TribeWarRetaliateData
     {
         public string targetRoomId;
-        public float  damageMultiplier;  // S→C only: 1.5 if 反击发起方（原防守方）has beacon, 1.0 otherwise (C→S 客户端不传)
     }
 
     // ==================== §34 B7 新手引导（🆕 v1.27+ audit-r3/P1） ====================
@@ -1803,14 +1818,28 @@ namespace DrscfZ.Survival
         public string applyAt;      // "next_night" | "next_season"（生效时机）
     }
 
-    /// <summary>§30.4 每日不活跃玩家等级衰减 ×0.95（type=daily_tier_decay，S→C，广播）。
-    /// 服务端在 UTC+8 00:00 _tickDailyDecayIfDue 触发时对不活跃玩家广播。</summary>
+    /// <summary>🔴 audit-r26 GAP-E26-01 / GAP-A26-04：r25 GAP-E25-06 半成品闭环 — entrance_spark 装备时服务端 broadcast。
+    /// 服务端 SurvivalGameEngine.js:9572-9582 实装 emit；客户端订阅 OnEntranceSparkTriggered 触发入场特效（VIPAnnouncementUI 路径或独立 EntranceFXUI）。</summary>
+    [Serializable]
+    public class EntranceSparkTriggeredData
+    {
+        public string playerId;
+        public string playerName;
+    }
+
+    /// <summary>§30.4 每日等级衰减（type=daily_tier_decay，S→C，广播）。
+    /// 🔴 audit-r26 GAP-D26-03：补 mode 字段（'active' / 'inactive'）+ 注释纠正语义。
+    /// 服务端 SurvivalGameEngine.js:7831 _applyDailyTierDecay 对所有玩家在 UTC+8 00:00 触发：
+    ///   - 'active' 路径：×0.975（每日活跃过的玩家小幅减免）
+    ///   - 'inactive' 路径：×0.95（不活跃玩家衰减更大）
+    /// 客户端可按 mode 显示差异化反馈（"昨夜未活跃，矿工等级 ×0.95" vs "活跃日衰减 ×0.975"）。</summary>
     [Serializable]
     public class DailyTierDecayData
     {
         public string playerId;
         public int    oldLevel;
         public int    newLevel;
+        public string mode;     // 🔴 audit-r26 GAP-D26-03：'active' | 'inactive'
     }
 
     /// <summary>§30.7 限时皮肤激活（type=gift_skin_applied，S→C，广播）。

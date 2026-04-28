@@ -66,6 +66,10 @@ namespace DrscfZ.Survival
         /// 订阅者：BroadcasterPanel / SettingsPanelUI 可据此在主播 HUD 显示"当前阶段不可结束"提示。</summary>
         public event Action<EndGameFailedData> OnEndGameFailed;
         public event Action<PhaseChangedData> OnPhaseChanged;    // 🆕 §4.2 昼夜/恢复期切换（携带 variant）
+
+        // 🔴 audit-r35 GAP-A25-04 game_paused 完整版（90% → 100%）：PauseOverlayUI 订阅这两个事件显示/隐藏全屏遮罩
+        public event System.Action OnGamePaused;
+        public event System.Action OnGameResumed;
         public event Action<string> OnPlayerActivityMessage;     // 弹幕消息文本
         public event Action<int> OnScorePoolUpdated;             // 积分池变动（实时推送）
         public event Action<WeeklyRankingData>   OnWeeklyRankingReceived;   // 本周贡献榜（服务器推送）
@@ -242,7 +246,11 @@ namespace DrscfZ.Survival
         public event Action<RoomStateData>                 OnRoomState;
         public event Action<FeatureUnlockedData>           OnFeatureUnlocked;
         public event Action<RouletteEffectPreventedData>   OnRouletteEffectPrevented;
-        public event Action<TribeWarRetaliateData>         OnTribeWarRetaliate;
+        // ⚠️ audit-r27 GAP-D26-02/E26-07 死代码清理：OnTribeWarRetaliate 事件已删除
+        //   原因：服务端 0 emit 'tribe_war_retaliate' (S→C only)，仅 SurvivalRoom.js:945 是 C→S inbound handler；
+        //   客户端 case 路由永不触发，0 订阅者。TribeWarRetaliateData 保留作 C→S 请求构造时序列化 targetRoomId 字段。
+        // 🔴 audit-r26 GAP-E26-01 / GAP-A26-04：r25 GAP-E25-06 半成品闭环 — entrance_spark 装备时服务端 broadcast
+        public event Action<EntranceSparkTriggeredData>    OnEntranceSparkTriggered;
 
         /// <summary>§36.12 seasonDay 从 N→N+1 递增的那一秒新解锁的功能 id 列表（由 world_clock_tick 触发）。
         /// 参数是该 tick 携带的 newlyUnlockedFeatures 字段内容，UI 层据此逐条播放解锁横幅。</summary>
@@ -627,8 +635,17 @@ namespace DrscfZ.Survival
                 case "gate_effect_triggered":
                     HandleGateEffectTriggered(dataJson);
                     break;
+                // 🔴 audit-r31 GAP-A25-04 协议对称化 + audit-r35 完整版（90% → 100%）：触发 OnGamePaused/OnGameResumed 事件
+                //   PauseOverlayUI 订阅事件显示持久全屏遮罩；同时保留 toast/跑马灯反馈
                 case "game_paused":
                     Debug.Log("[SGM] game_paused received (GM command)");
+                    OnGamePaused?.Invoke();
+                    UI.HorizontalMarqueeUI.Instance?.AddMessage("GM", null, "游戏已暂停");
+                    break;
+                case "game_resumed":
+                    Debug.Log("[SGM] game_resumed received (GM command)");
+                    OnGameResumed?.Invoke();
+                    UI.HorizontalMarqueeUI.Instance?.AddMessage("GM", null, "游戏已恢复");
                     break;
                 case "boss_appeared":
                     HandleBossAppeared(type, dataJson);
@@ -808,6 +825,18 @@ namespace DrscfZ.Survival
                     var set_ = JsonUtility.FromJson<ShopEffectTriggeredData>(dataJson);
                     if (set_ != null) HandleShopEffectTriggered(set_);
                     break;
+                // 🔴 audit-r26 GAP-E26-01 / GAP-A26-04：r25 GAP-E25-06 半成品闭环 — entrance_spark 装备时服务端 broadcast 客户端 case 路由
+                case "entrance_spark_triggered":
+                    var est = JsonUtility.FromJson<EntranceSparkTriggeredData>(dataJson);
+                    if (est != null)
+                    {
+                        OnEntranceSparkTriggered?.Invoke(est);
+                        // 跑马灯反馈（VIP 入场特效装备效果） — 美术待补全屏入场粒子时可订阅 OnEntranceSparkTriggered 触发独立 EntranceFXUI
+                        string pName = string.IsNullOrEmpty(est.playerName) ? "玩家" : est.playerName;
+                        UI.HorizontalMarqueeUI.Instance?.AddMessage("入场特效", null, $"✨ {pName} 火花入场！");
+                        Debug.Log($"[SGM] entrance_spark_triggered: playerId={est.playerId} playerName={est.playerName}");
+                    }
+                    break;
 
                 // ----- §35 跨直播间攻防战 -----
                 case "tribe_war_room_list_result":
@@ -951,17 +980,11 @@ namespace DrscfZ.Survival
                     break;
 
                 // ----- §34 Layer 2 组 A 新手友好（🆕 v1.27） -----
-                // B9 work_command_response：协议预留 type（当前服务端实际把 playerStats 捎带在 work_command 广播上，
-                //   由 HandleWorkCommand 统一分发 OnPlayerStatsUpdated；此 case 作为未来拆分独立 response type 的兜底）。
-                //   若老服务端不下发本消息，前端保持静默（PersonalContribUI 不显示）。
-                case "work_command_response":
-                    var wcr = JsonUtility.FromJson<WorkCommandResponseData>(dataJson);
-                    if (wcr != null && wcr.playerStats != null)
-                    {
-                        LastPlayerStats = wcr.playerStats;
-                        OnPlayerStatsUpdated?.Invoke(wcr.playerStats);
-                    }
-                    break;
+                // ⚠️ audit-r28 GAP-A26-09 死代码清理：原 case "work_command_response" 永不触发
+                //   服务端 0 emit 'work_command_response'（grep 全代码 0 命中）；playerStats 实际捎带在
+                //   work_command 广播上，由 HandleWorkCommand 统一分发 OnPlayerStatsUpdated（HandleMessage:1356-1358）。
+                //   选 B 决策：删除客户端 case 路由 + WorkCommandResponseData 类（仅注释保留作历史参考）。
+                //   PersonalContribUI 订阅 OnPlayerStatsUpdated 不受影响（HandleWorkCommand 路径仍触发）。
 
                 // B8 fairy_wand_maxed：服务端 fairy_wand 累计跨过 +100% 时 unicast；
                 //   前端全屏金闪 + 跑马灯 "满级矿工达成！{playerName}"。
@@ -971,11 +994,30 @@ namespace DrscfZ.Survival
                     break;
 
                 // §34 Batch D：单人贡献增量（Batch I 补齐透传）
+                // 🔴 audit-r25 GAP-D25-03：r24 加 source 字段但 0 UI 订阅者 → 半成品延续第 5 轮
+                //   仅在 T6 礼物路径 emit（'gift_t6_max_level_bonus' / 'gift_t6_upgrade_bonus' +100 贡献奖励）
+                //   修复：在此处加跑马灯反馈，让玩家感知 T6 升级 / 满级奖励差异化路径
                 case "contribution_update":
                     var cu = JsonUtility.FromJson<ContributionUpdateData>(dataJson);
                     if (cu != null)
                     {
                         OnContributionUpdate?.Invoke(cu);
+                        // 🔴 audit-r25 GAP-D25-03：T6 路径专属跑马灯
+                        if (!string.IsNullOrEmpty(cu.source) && cu.delta > 0)
+                        {
+                            string flavorMsg = cu.source switch
+                            {
+                                "gift_t6_max_level_bonus" => $"+{cu.delta} 贡献：T6 城门已满级奖励！",
+                                "gift_t6_upgrade_bonus"   => $"+{cu.delta} 贡献：T6 触发城门升级奖励！",
+                                _                          => null,
+                            };
+                            if (flavorMsg != null)
+                            {
+                                UI.HorizontalMarqueeUI.Instance?.AddMessage(
+                                    string.IsNullOrEmpty(cu.playerName) ? "贡献" : cu.playerName,
+                                    null, flavorMsg);
+                            }
+                        }
                     }
                     break;
 
@@ -1016,14 +1058,9 @@ namespace DrscfZ.Survival
                         OnRouletteEffectPrevented?.Invoke(rep);
                     }
                     break;
-                case "tribe_war_retaliate":
-                    var twR = JsonUtility.FromJson<TribeWarRetaliateData>(dataJson);
-                    if (twR != null)
-                    {
-                        Debug.Log($"[SGM] tribe_war_retaliate target={twR.targetRoomId} dmgMul={twR.damageMultiplier}");
-                        OnTribeWarRetaliate?.Invoke(twR);
-                    }
-                    break;
+                // ⚠️ audit-r27 GAP-D26-02/E26-07 死代码删除：原 case "tribe_war_retaliate" 永不触发（服务端 0 emit）
+                //   服务端仅在 SurvivalRoom.js:945 处理 C→S inbound，反击成功后走 tribe_war_attack_started 路径
+                //   TribeWarRetaliateData 类保留作 C→S 请求 targetRoomId 字段（damageMultiplier 字段 S→C only 已删）
 
                 // ----- audit-r5 客户端补齐（🆕 v1.27+） -----
                 // §19/§34.4 E9 难度生效：E9 UI / 跑马灯订阅
@@ -1092,15 +1129,26 @@ namespace DrscfZ.Survival
                     }
                     break;
 
-                // §30.4 每日不活跃等级衰减：BarrageMessageUI / 名牌刷新
+                // §30.4 每日等级衰减：BarrageMessageUI / 名牌刷新
                 case SurvivalMessageProtocol.DailyTierDecay:
                     var dtd = JsonUtility.FromJson<DailyTierDecayData>(dataJson);
                     if (dtd != null)
                     {
-                        Debug.Log($"[SGM] daily_tier_decay playerId={dtd.playerId} {dtd.oldLevel}→{dtd.newLevel}");
+                        Debug.Log($"[SGM] daily_tier_decay playerId={dtd.playerId} {dtd.oldLevel}→{dtd.newLevel} mode={dtd.mode}");
                         OnDailyTierDecay?.Invoke(dtd);
                         if (WorkerManager.Instance != null)
                             WorkerManager.Instance.HandleDailyTierDecay(dtd.playerId, dtd.oldLevel, dtd.newLevel);
+                        // 🔴 audit-r26 GAP-D26-03 / MINOR-D26-04：玩家可见衰减反馈（之前仅 Debug.Log，玩家不知道发生衰减）
+                        //   服务端 _applyDailyTierDecay 对所有玩家：'active' ×0.975 / 'inactive' ×0.95
+                        if (dtd.oldLevel > dtd.newLevel)
+                        {
+                            string flavor = dtd.mode == "inactive"
+                                ? "昨夜未活跃，矿工等级 ×0.95"
+                                : "活跃日小幅衰减 ×0.975";
+                            UI.HorizontalMarqueeUI.Instance?.AddMessage(
+                                "等级衰减", null,
+                                $"{flavor}（{dtd.oldLevel}→{dtd.newLevel}）");
+                        }
                     }
                     break;
 
@@ -1173,6 +1221,9 @@ namespace DrscfZ.Survival
                     break;
 
                 // §34.3 E3b 不朽证明：累计贡献 20000 触发免死豁免，矿工原地满血复活
+                // 🔴 audit-r30 GAP-D25-12/D26-09 MVP 实装：复用 AnnouncementUI 全屏大字 + 跑马灯 + 镜头震动
+                //   "巅峰荣耀时刻"视觉反馈（之前仅跑马灯文本，付费动机弱化）
+                // 🔴 audit-r35 完整版（60% → 90%）：加矿工头顶金色光柱（WorkerVisual.TriggerFreeDeathPassFlash）
                 case SurvivalMessageProtocol.FreeDeathPassTriggered:
                     var fdp = JsonUtility.FromJson<FreeDeathPassTriggeredData>(dataJson);
                     if (fdp != null)
@@ -1180,7 +1231,22 @@ namespace DrscfZ.Survival
                         Debug.Log($"[SGM] free_death_pass_triggered playerId={fdp.playerId} playerName={fdp.playerName}");
                         OnFreeDeathPassTriggered?.Invoke(fdp);
                         var nm = string.IsNullOrEmpty(fdp.playerName) ? fdp.playerId : fdp.playerName;
+                        // 🔴 audit-r30 MVP：全屏 AnnouncementUI 金色大字（5s）+ 跑马灯 + 轻微镜头震动
+                        UI.AnnouncementUI.Instance?.ShowAnnouncement(
+                            $"★ 不朽证明 ★",
+                            $"{nm} 触发 20000 贡献荣耀！矿工免死复活！",
+                            new Color(1f, 0.84f, 0.1f), // 金色 #FFD700
+                            5f);
+                        UI.HorizontalMarqueeUI.Instance?.AddMessage(
+                            nm, null, $"<color=#FFD700>★ 触发不朽证明，矿工免死复活！</color>");
                         OnPlayerActivityMessage?.Invoke($"<color=#FFD700>★ {nm} 触发不朽证明，矿工免死复活！</color>");
+                        // 镜头轻微震动 0.15 强度 0.5s（与 §27.2 加冕场景同级）
+                        SurvivalCameraController.Shake(0.15f, 0.5f);
+                        // 🔴 audit-r35 完整版：矿工头顶金色光柱（3s 淡入持续淡出）
+                        if (WorkerManager.Instance != null)
+                        {
+                            WorkerManager.Instance.HandleFreeDeathPass(fdp.playerId);
+                        }
                     }
                     break;
 
@@ -1337,6 +1403,36 @@ namespace DrscfZ.Survival
                         ChangeState(SurvivalState.Settlement);
                     }
                     break;
+            }
+
+            // 🔴 audit-r25 GAP-A25-01 + 🔴 audit-r26 GAP-A26-02/A26-10 重构：
+            //   r25 修复仅 Invoke 事件，跳过 HandleSeasonState/HandleFortressDayChanged 完整链路（CurrentSeasonState 缓存 + ApplyTheme + UpdateFortressDay 等 5+ 步）。
+            //   r26 修复：直接调用完整 Handler 方法（reconnect_sync 兜底快照路径）；CurrentSeasonState.phase 也同步缓存供 BroadcasterDecisionHUD 推荐规则使用。
+            if (!string.IsNullOrEmpty(data.themeId))
+            {
+                HandleSeasonState(new SeasonStateData
+                {
+                    seasonId  = data.seasonId,
+                    seasonDay = data.seasonDay,
+                    themeId   = data.themeId,
+                    // unlockedFeatures: 同步快照不重传（已由上方 data.unlockedFeatures 走 SyncUnlockedFeatures 路径处理）
+                });
+                // 🔴 audit-r26 GAP-A26-02：CurrentSeasonState.phase / phaseRemainingSec 缓存（SeasonStateData 不带这两字段，单独写入）
+                if (CurrentSeasonState != null && !string.IsNullOrEmpty(data.phase))
+                {
+                    CurrentSeasonState.phase             = data.phase;
+                    CurrentSeasonState.phaseRemainingSec = data.phaseRemainingSec;
+                }
+            }
+            if (data.fortressDay > 0)
+            {
+                HandleFortressDayChanged(new FortressDayChangedData
+                {
+                    oldFortressDay = data.fortressDay,
+                    newFortressDay = data.fortressDay,  // 同步快照（非变更事件）
+                    reason         = "reconnect_sync",
+                    seasonDay      = data.seasonDay,
+                });
             }
         }
 
@@ -1725,6 +1821,21 @@ namespace DrscfZ.Survival
                         });
                 }
 
+                // 🔴 audit-r32 GAP-A26-08 r31 半成品闭环：tailRewards 数组映射 → SettlementUI 帧 B 渲染
+                global::System.Collections.Generic.List<global::DrscfZ.UI.TailRewardSummary> tailList = null;
+                if (data.tailRewards != null && data.tailRewards.Length > 0)
+                {
+                    tailList = new global::System.Collections.Generic.List<global::DrscfZ.UI.TailRewardSummary>(data.tailRewards.Length);
+                    foreach (var tr in data.tailRewards)
+                    {
+                        tailList.Add(new global::DrscfZ.UI.TailRewardSummary
+                        {
+                            Nickname = string.IsNullOrEmpty(tr.playerName) ? tr.playerId : tr.playerName,
+                            Share    = tr.share,
+                        });
+                    }
+                }
+
                 // 🆕 v1.26 永续模式：IsVictory 固定 false（无胜利分支）；
                 // reason 映射表补 all_dead / manual（§16.5）
                 var settlement = new global::DrscfZ.UI.SettlementData
@@ -1743,6 +1854,8 @@ namespace DrscfZ.Survival
                     FortressDayBefore = data.fortressDayBefore,  // 🆕 §16.6
                     FortressDayAfter  = data.fortressDayAfter,   // 🆕 §16.6
                     NewbieProtected   = data.newbieProtected,    // 🆕 §16.6
+                    TailRewards       = tailList,                // 🔴 audit-r32 r31 半成品闭环
+                    TailEligibleCount = data.tailEligibleCount,  // 🔴 audit-r32：>tailList.Count 时显示"还有 N 名"
                     IsManual          = data.reason == "manual", // 🆕 §16.4 区分主动终止
                     Rankings = rankList,
                 };
@@ -2098,11 +2211,19 @@ namespace DrscfZ.Survival
             cityGateSystem?.HandleUpgrade(data.newLevel, data.newMaxHp, hpBonus, data.tierName, data.newFeatures);
 
             string tierLabel = string.IsNullOrEmpty(data.tierName) ? "" : $"「{data.tierName}」";
+            // 🔴 audit-r25 GAP-D25-07：data.source 区分三种升级路径（r6 加字段但 UI 0 消费第 19 轮 audit）
+            //   'broadcaster' 主播主动升级（消耗矿石）/ 'gift_t6' T6 礼物联动 / 'expedition_trader' 商队交易
+            string sourceFlavor = data.source switch
+            {
+                "gift_t6"            => "（T6 神秘空投联动）",
+                "expedition_trader"  => "（商队交易）",
+                _                    => "",
+            };
             UI.AnnouncementUI.Instance?.ShowAnnouncement(
-                $"城门升级至 Lv.{data.newLevel}{tierLabel}!",
+                $"城门升级至 Lv.{data.newLevel}{tierLabel}!{sourceFlavor}",
                 $"最大HP提升至 {data.newMaxHp}",
                 new Color(0.2f, 0.8f, 1f), 2f);
-            OnPlayerActivityMessage?.Invoke($"城门已升级至 Lv.{data.newLevel}{tierLabel}（最大HP:{data.newMaxHp}）");
+            OnPlayerActivityMessage?.Invoke($"城门已升级至 Lv.{data.newLevel}{tierLabel}{sourceFlavor}（最大HP:{data.newMaxHp}）");
         }
 
         private void HandleGateUpgradeFailed(string dataJson)
@@ -2433,8 +2554,15 @@ namespace DrscfZ.Survival
         private void HandleGiftSilentFail(GiftSilentFailData data)
         {
             if (data == null) return;
-            // MVP 占位：服务端（§36.12 未实现时）暂不推送，若收到则仅 Debug.Log。
-            // 未来接入 §36.12 后可改为向发送者弹 toast。
+            // 🔴 audit-r26 GAP-D26-04 修付费红线破裂 — §33.4 D1-D5 第 13+ 位观众 T1 仙女棒扣费但 0 效果反馈
+            //   r25 GAP-D26-07 注释已修：服务端 SurvivalGameEngine.js:1924 早已实装 emit（不再是"MVP 占位"）
+            //   修复：补 toast UI，让付费观众感知"扣费但因 D1-D5 super_mode 未解锁，礼物未生效"
+            int unlockDay = data.unlockDay > 0 ? data.unlockDay : 6;
+            string toastTitle = "礼物未生效";
+            string toastBody  = $"D{unlockDay} 起所有观众礼物生效，当前为 D1-D5 — 已扣费但效果暂不累加";
+            UI.AnnouncementUI.Instance?.ShowAnnouncement(toastTitle, toastBody,
+                new Color(1f, 0.7f, 0.3f), 2.5f);
+            UI.HorizontalMarqueeUI.Instance?.AddMessage("礼物提示", null, toastBody);
             Debug.Log($"[SGM] gift_silent_fail received: giftId={data.giftId} reason={data.reason} unlockDay={data.unlockDay} priceFen={data.priceFen}");
             OnGiftSilentFail?.Invoke(data);
         }
@@ -2456,11 +2584,18 @@ namespace DrscfZ.Survival
 
         // ==================== §24.4 主播事件轮盘（🆕 v1.27）====================
 
-        /// <summary>轮盘充能完成/剩余秒数同步（RouletteUI 订阅后自行处理）</summary>
+        /// <summary>轮盘充能完成/剩余秒数同步（RouletteUI 订阅后自行处理）
+        /// 🔴 audit-r25 GAP-D25-05：data.source 区分"正常 300s 充能完成"vs"§38.3 神秘符文事件瞬间补满"。</summary>
         private void HandleRouletteReady(RouletteReadyData data)
         {
             OnRouletteReady?.Invoke(data);
-            Debug.Log($"[SGM] broadcaster_roulette_ready: readyAt={data.readyAt}");
+            // 🔴 audit-r25 GAP-D25-05：mystic_rune 路径加专属跑马灯反馈（付费驱动力差异化）
+            if (data.source == "mystic_rune")
+            {
+                UI.HorizontalMarqueeUI.Instance?.AddMessage(
+                    "神秘符文", null, "轮盘充能瞬间补满！");
+            }
+            Debug.Log($"[SGM] broadcaster_roulette_ready: readyAt={data.readyAt} source={data.source}");
         }
 
         /// <summary>服务端已定格 cardId，客户端播转轴动画</summary>
@@ -2528,7 +2663,8 @@ namespace DrscfZ.Survival
 
         /// <summary>
         /// 探险外域事件：UI 层显示事件图标/提示；trader_caravan 且有 options 时弹 TraderCaravanUI。
-        /// 非 trader_caravan 的事件仅推到 ExpeditionMarkerUI.ShowEvent 做气泡提示（MVP：Log 降级）。
+        /// 🔴 audit-r30 GAP-D25-11/E26-04 MVP 实装：5 类外域事件（wild_beasts/meteor_fragment/lost_cache/bandit_raid/mystic_rune）
+        /// 加专属中文跑马灯 + AnnouncementUI toast。之前仅 trader_caravan 有 UI，其他 5 类完全静默 — §38.3 付费驱动力丢失。
         /// </summary>
         private void HandleExpeditionEvent(ExpeditionEventData data)
         {
@@ -2551,6 +2687,64 @@ namespace DrscfZ.Survival
                         new Color(1f, 0.85f, 0.1f),
                         4f);
                     Debug.LogWarning("[SGM] expedition_event trader_caravan：TraderCaravanUI.Instance 为 null，已降级到 AnnouncementUI");
+                }
+            }
+            else
+            {
+                // 🔴 audit-r30：5 类外域事件 MVP 反馈（§38.3 付费驱动力 — 之前 5/6 类静默丢失）
+                // 🔴 audit-r34 增强（70% → 85%）：加镜头震动差异化 — 战斗类强震动 / 收获类轻震动 / 神秘类中震动
+                string eventTitle = null;
+                string eventBody  = null;
+                Color  eventColor = Color.white;
+                float  shakeIntensity = 0f;
+                float  shakeDuration  = 0f;
+                switch (data.eventId)
+                {
+                    case "lost_cache":
+                        eventTitle = "拾到宝藏！";
+                        eventBody  = "矿工在外域发现遗弃的物资箱";
+                        eventColor = new Color(1f, 0.85f, 0.3f);  // 金黄
+                        shakeIntensity = 0.05f;                    // 🔴 r34: 轻震动（收获类）
+                        shakeDuration  = 0.15f;
+                        break;
+                    case "wild_beasts":
+                        eventTitle = "遭遇荒野猛兽！";
+                        eventBody  = "矿工正在搏斗，30% 概率阵亡";
+                        eventColor = new Color(0.9f, 0.3f, 0.2f); // 警告红
+                        shakeIntensity = 0.15f;                    // 🔴 r34: 强震动（战斗类）
+                        shakeDuration  = 0.4f;
+                        break;
+                    case "meteor_fragment":
+                        eventTitle = "拾到陨石碎片！";
+                        eventBody  = "下次 666 弹幕效率翻倍";
+                        eventColor = new Color(0.7f, 0.6f, 1f);   // 神秘紫
+                        shakeIntensity = 0.12f;                    // 🔴 r34: 中等震动（陨石冲击感）
+                        shakeDuration  = 0.3f;
+                        break;
+                    case "bandit_raid":
+                        eventTitle = "遭遇强盗袭击！";
+                        eventBody  = "矿工奋力反抗中";
+                        eventColor = new Color(0.8f, 0.4f, 0.2f); // 暗橙
+                        shakeIntensity = 0.15f;                    // 🔴 r34: 强震动（战斗类）
+                        shakeDuration  = 0.4f;
+                        break;
+                    case "mystic_rune":
+                        eventTitle = "拾到神秘符文！";
+                        eventBody  = "主播事件轮盘瞬间充能完成";
+                        eventColor = new Color(0.5f, 0.85f, 1f);  // 神秘蓝
+                        shakeIntensity = 0.08f;                    // 🔴 r34: 神秘类中震动
+                        shakeDuration  = 0.25f;
+                        break;
+                }
+                if (eventTitle != null)
+                {
+                    UI.AnnouncementUI.Instance?.ShowAnnouncement(eventTitle, eventBody, eventColor, 3f);
+                    UI.HorizontalMarqueeUI.Instance?.AddMessage("外域事件", null, $"{eventTitle} {eventBody}");
+                    // 🔴 r34: 镜头震动差异化反馈（事件感官强度区分）
+                    if (shakeIntensity > 0f)
+                    {
+                        SurvivalCameraController.Shake(shakeIntensity, shakeDuration);
+                    }
                 }
             }
 
@@ -2744,8 +2938,14 @@ namespace DrscfZ.Survival
         private void HandleMonsterWaveIncoming(MonsterWaveIncomingData data)
         {
             OnMonsterWaveIncoming?.Invoke(data);
-            UI.AnnouncementUI.Instance?.ShowAnnouncement("即将来袭",
-                "瞭望塔预警：10 秒后怪物出现",
+            // 🔴 audit-r25 GAP-E25-01：r24 加 leadSec 字段但 UI 文案硬编码 "10 秒"
+            //   修复：读 data.leadSec（watchtower=10 / emergency_alert=10/30）+ 30s 路径区分文案
+            int leadSec = data.leadSec > 0 ? data.leadSec : 10;
+            string title = leadSec >= 30 ? "紧急警报" : "即将来袭";
+            string body  = leadSec >= 30
+                ? $"紧急警报：{leadSec} 秒后怪物出现"
+                : $"瞭望塔预警：{leadSec} 秒后怪物出现";
+            UI.AnnouncementUI.Instance?.ShowAnnouncement(title, body,
                 new Color(1f, 0.85f, 0.1f), 3f);
         }
 
@@ -2908,11 +3108,15 @@ namespace DrscfZ.Survival
                 }
                 case "spotlight":
                 {
-                    // targetPlayerId 通常 == sourcePlayerId；UI 高亮/弹幕星标等效果由后续 LiveRankingUI 或 BarrageMessageUI 消费时自行识别
+                    // targetPlayerId 通常 == sourcePlayerId；§39.2 A4 设计 — 自己名字在 Top5 高亮金色 10s + BarrageMessageUI ★ 前缀 + 跑马灯提示
                     float dur = data.durationSec > 0 ? data.durationSec : 10f;
-                    // MVP 占位：Log + 跑马灯提示；具体 LiveRankingUI 金色高亮留待后续视觉任务实现
-                    UI.HorizontalMarqueeUI.Instance?.AddMessage(sourceName, null, $"成为聚光灯焦点（{Mathf.RoundToInt(dur)}s）");
-                    Debug.Log($"[SGM] shop_effect_triggered spotlight: source={data.sourcePlayerId} target={data.targetPlayerId} duration={dur}s (占位：UI 高亮效果待视觉任务实现)");
+                    string targetId = string.IsNullOrEmpty(data.targetPlayerId) ? data.sourcePlayerId : data.targetPlayerId;
+                    // 🔴 audit-r30 GAP-D26-06 MVP 实装：SurvivalLiveRankingUI 金色高亮 + ★ 前缀
+                    UI.SurvivalLiveRankingUI.Instance?.TriggerSpotlight(targetId, dur);
+                    // 🔴 audit-r33 GAP-D26-06 spotlight UI 完整版（80% → 100%）：BarrageMessageUI ★ 前缀
+                    UI.BarrageMessageUI.Instance?.TriggerSpotlight(sourceName, dur);
+                    UI.HorizontalMarqueeUI.Instance?.AddMessage(sourceName, null, $"<color=#FFD700>★ 成为聚光灯焦点（{Mathf.RoundToInt(dur)}s）</color>");
+                    Debug.Log($"[SGM] shop_effect_triggered spotlight: source={data.sourcePlayerId} target={targetId} duration={dur}s (Top5 高亮 + Barrage ★ 已触发)");
                     break;
                 }
                 default:
@@ -2986,14 +3190,16 @@ namespace DrscfZ.Survival
             Debug.Log($"[SGM] tribe_war_room_list_result: rooms={n}");
         }
 
-        /// <summary>攻击/反击失败（unicast 发起方）：跑马灯 + 活动消息。</summary>
+        /// <summary>攻击/反击失败（unicast 发起方）：跑马灯 + 活动消息。
+        /// 🔴 audit-r25 GAP-D25-04：cooldownMs 字段定义但之前 FormatTribeWarFailReason 0 消费 → 显示静态"冷却中（60s）"。
+        ///   修复：FormatTribeWarFailReason 加 cooldownMs 参数，in_cooldown 时拼接实时倒计时秒数。</summary>
         private void HandleTribeWarAttackFailed(TribeWarAttackFailedData data)
         {
             OnTribeWarAttackFailed?.Invoke(data);
-            string reasonText = FormatTribeWarFailReason(data.reason);
+            string reasonText = FormatTribeWarFailReason(data.reason, data.cooldownMs);
             OnPlayerActivityMessage?.Invoke($"攻防战操作失败：{reasonText}");
             UI.HorizontalMarqueeUI.Instance?.AddMessage("攻防战", null, reasonText);
-            Debug.Log($"[SGM] tribe_war_attack_failed: reason={data.reason}");
+            Debug.Log($"[SGM] tribe_war_attack_failed: reason={data.reason} cooldownMs={data.cooldownMs}");
         }
 
         /// <summary>攻击开始广播（双方房间均广播）：
@@ -3087,8 +3293,9 @@ namespace DrscfZ.Survival
             Debug.Log($"[SGM] tribe_war_attack_ended: sessionId={data.sessionId} reason={data.reason} stolen=({data.stolenFood},{data.stolenCoal},{data.stolenOre})");
         }
 
-        /// <summary>§35.10 attack_failed.reason → 中文（MVP 仅活动消息/跑马灯用）</summary>
-        private static string FormatTribeWarFailReason(string reason)
+        /// <summary>§35.10 attack_failed.reason → 中文（MVP 仅活动消息/跑马灯用）
+        /// 🔴 audit-r25 GAP-D25-04：加 cooldownMs 参数，in_cooldown 时显示实时倒计时秒数（替代静态"60s"）。</summary>
+        private static string FormatTribeWarFailReason(string reason, long cooldownMs = 0)
         {
             if (string.IsNullOrEmpty(reason)) return "未知原因";
             switch (reason)
@@ -3099,7 +3306,11 @@ namespace DrscfZ.Survival
                 case "attacker_busy":               return "已在攻击目标";
                 case "target_busy":                 return "目标已被其他房间攻击";
                 case "cannot_attack_self":          return "不能攻击自己";
-                case "in_cooldown":                 return "冷却中（60s）";
+                case "in_cooldown":
+                    // 🔴 audit-r25 GAP-D25-04：实时倒计时秒数（cooldownMs 0 时回退静态文案）
+                    return cooldownMs > 0
+                        ? $"冷却中（剩余 {Mathf.CeilToInt(cooldownMs / 1000f)}s）"
+                        : "冷却中（60s）";
                 case "already_attacking":           return "已在攻击目标";
                 case "target_already_under_attack": return "目标已被其他房间攻击";
                 case "target_unavailable":          return "目标房间不可攻击";
@@ -3112,7 +3323,8 @@ namespace DrscfZ.Survival
             }
         }
 
-        /// <summary>§35.10 attack_ended.reason → 中文（r15 GAP-D-MAJOR-05：与服务端 TribeWarManager.js:180 / TribeWarSession.js:58 实发 reason 对齐）</summary>
+        /// <summary>§35.10 attack_ended.reason → 中文（r15 GAP-D-MAJOR-05：与服务端 TribeWarManager.js:180 / TribeWarSession.js:58 实发 reason 对齐）
+        /// 🔴 audit-r25 GAP-D25-08：补 'room_destroyed' case（一方主播退出 onRoomDestroyed 触发，之前显示原文 "结束: room_destroyed"）。</summary>
         private static string FormatTribeWarEndReason(string reason)
         {
             if (string.IsNullOrEmpty(reason)) return "结束";
@@ -3123,6 +3335,7 @@ namespace DrscfZ.Survival
                 case "no_energy":           return "3 分钟无能量自动断开";
                 case "settlement":          return "游戏结算";
                 case "season_reset":        return "赛季切换";
+                case "room_destroyed":      return "对方主播离开";  // 🔴 audit-r25 GAP-D25-08
                 // 旧 case 保留作向后兼容
                 case "manual_stop":         return "手动停止";
                 case "zero_energy_timeout": return "3 分钟无能量自动断开";
@@ -3377,26 +3590,33 @@ namespace DrscfZ.Survival
             Debug.Log($"[SGM] roulette_spin_failed: reason={reason} unlockDay={unlockDay}");
         }
 
-        /// <summary>broadcaster_action_failed：主播 ⚡加速/🌊事件触发失败（含 feature_locked）→ 跑马灯 + 活动消息。</summary>
+        /// <summary>broadcaster_action_failed：主播 ⚡加速/🌊事件触发失败（含 feature_locked）→ 跑马灯 + 活动消息。
+        /// 🔴 audit-r26 GAP-A26-03：FormatBroadcasterActionFailReason 加 cooldownMs 参数（r25 GAP-D25-04 半成品延续：
+        /// TribeWar 路径已加 cooldownMs 实时倒计时，但 BroadcasterAction 同字段漏修）</summary>
         private void HandleBroadcasterActionFailed(BroadcasterActionFailedData data)
         {
             OnBroadcasterActionFailed?.Invoke(data);
-            string reasonText = FormatBroadcasterActionFailReason(data.reason, data.unlockDay);
+            string reasonText = FormatBroadcasterActionFailReason(data.reason, data.unlockDay, data.cooldownMs);
             string actionText = GetBroadcasterActionName(data.action);
             string msg = $"{actionText}：{reasonText}";
             UI.AnnouncementUI.Instance?.ShowAnnouncement("主播操作失败", msg, new Color(1f, 0.4f, 0.2f), 2f);
             OnPlayerActivityMessage?.Invoke(msg);
-            Debug.Log($"[SGM] broadcaster_action_failed: action={data.action} reason={data.reason} unlockDay={data.unlockDay}");
+            Debug.Log($"[SGM] broadcaster_action_failed: action={data.action} reason={data.reason} unlockDay={data.unlockDay} cooldownMs={data.cooldownMs}");
         }
 
-        private static string FormatBroadcasterActionFailReason(string reason, int unlockDay)
+        private static string FormatBroadcasterActionFailReason(string reason, int unlockDay, long cooldownMs = 0)
         {
             if (string.IsNullOrEmpty(reason)) return "未知原因";
             switch (reason)
             {
                 case "feature_locked": return unlockDay > 0 ? $"D{unlockDay} 解锁此功能" : "功能未解锁";
-                case "in_cooldown":    return "冷却中";
+                case "in_cooldown":
+                    // 🔴 audit-r26 GAP-A26-03：实时倒计时秒数（cooldownMs 0 时回退静态文案）
+                    return cooldownMs > 0
+                        ? $"冷却中（剩余 {Mathf.CeilToInt(cooldownMs / 1000f)}s）"
+                        : "冷却中";
                 case "wrong_phase":    return "当前阶段不可用";
+                case "not_broadcaster": return "仅主播可操作";  // 🔴 audit-r25 GAP-A25-MINOR-01：服务端 _requireBroadcaster 拒绝时 emit
                 default:               return reason;
             }
         }
