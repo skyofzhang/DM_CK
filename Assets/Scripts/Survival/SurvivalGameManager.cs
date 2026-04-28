@@ -1814,6 +1814,21 @@ namespace DrscfZ.Survival
                         });
                 }
 
+                // 🔴 audit-r32 GAP-A26-08 r31 半成品闭环：tailRewards 数组映射 → SettlementUI 帧 B 渲染
+                global::System.Collections.Generic.List<global::DrscfZ.UI.TailRewardSummary> tailList = null;
+                if (data.tailRewards != null && data.tailRewards.Length > 0)
+                {
+                    tailList = new global::System.Collections.Generic.List<global::DrscfZ.UI.TailRewardSummary>(data.tailRewards.Length);
+                    foreach (var tr in data.tailRewards)
+                    {
+                        tailList.Add(new global::DrscfZ.UI.TailRewardSummary
+                        {
+                            Nickname = string.IsNullOrEmpty(tr.playerName) ? tr.playerId : tr.playerName,
+                            Share    = tr.share,
+                        });
+                    }
+                }
+
                 // 🆕 v1.26 永续模式：IsVictory 固定 false（无胜利分支）；
                 // reason 映射表补 all_dead / manual（§16.5）
                 var settlement = new global::DrscfZ.UI.SettlementData
@@ -1832,6 +1847,8 @@ namespace DrscfZ.Survival
                     FortressDayBefore = data.fortressDayBefore,  // 🆕 §16.6
                     FortressDayAfter  = data.fortressDayAfter,   // 🆕 §16.6
                     NewbieProtected   = data.newbieProtected,    // 🆕 §16.6
+                    TailRewards       = tailList,                // 🔴 audit-r32 r31 半成品闭环
+                    TailEligibleCount = data.tailEligibleCount,  // 🔴 audit-r32：>tailList.Count 时显示"还有 N 名"
                     IsManual          = data.reason == "manual", // 🆕 §16.4 区分主动终止
                     Rankings = rankList,
                 };

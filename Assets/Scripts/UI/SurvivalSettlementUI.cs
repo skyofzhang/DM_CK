@@ -423,6 +423,32 @@ namespace DrscfZ.UI
                     }
                 }
             }
+
+            // 🔴 audit-r32 GAP-A26-08 r31 半成品闭环：§34 F6 双档分配 — tail 30% 池 ≥100 贡献分配
+            //   未绑定独立 UI 槽位时 fallback 用跑马灯 + AnnouncementUI 副标题报告（不阻塞 30s 序列）
+            if (data.TailRewards != null && data.TailRewards.Count > 0)
+            {
+                int totalCount = Mathf.Max(data.TailEligibleCount, data.TailRewards.Count);
+                int totalShare = 0;
+                for (int i = 0; i < data.TailRewards.Count; i++) totalShare += data.TailRewards[i].Share;
+                // 跑马灯反馈（前 3 名 + 汇总）
+                var sb = new System.Text.StringBuilder();
+                sb.Append($"§34 F6 双档分配：{totalCount} 名 ≥100 贡献者瓜分 {totalShare} 积分");
+                if (data.TailRewards.Count > 0)
+                {
+                    int showN = Mathf.Min(3, data.TailRewards.Count);
+                    sb.Append("（");
+                    for (int i = 0; i < showN; i++)
+                    {
+                        if (i > 0) sb.Append(" / ");
+                        sb.Append($"{data.TailRewards[i].Nickname} +{data.TailRewards[i].Share}");
+                    }
+                    if (data.TailRewards.Count > showN) sb.Append($" 等 {totalCount - showN} 名");
+                    sb.Append("）");
+                }
+                HorizontalMarqueeUI.Instance?.AddMessage("结算分配", null, sb.ToString());
+                Debug.Log($"[SettlementUI] tailRewards rendered: {data.TailRewards.Count} entries, total {totalShare}");
+            }
         }
 
         // ─── Screen C: Top3 贡献者 + 动态标语 ──────────────────────────────────
@@ -575,6 +601,9 @@ namespace DrscfZ.UI
         public bool   NewbieProtected;       // 🆕 §16.6 Day 1-10 新手保护
         public bool   IsManual;              // 🆕 §16.4 GM 手动终止（reason == "manual"）
         public List<RankEntry> Rankings;     // null = 由 PlaySettlementSequence 自动从 RankingSystem 获取
+        // 🔴 audit-r32 GAP-A26-08 r31 半成品闭环：tail 30% 池 ≥100 贡献分配（非 Top10）— SurvivalGameEndedData.tailRewards 映射后渲染于帧 B
+        public List<TailRewardSummary> TailRewards;  // null/empty 不显示
+        public int    TailEligibleCount;     // §34 F6: tailRewards 总人数（>List.Count 时表示"还有 N 名"）
     }
 
     [System.Serializable]
@@ -582,5 +611,12 @@ namespace DrscfZ.UI
     {
         public string Nickname;
         public int    Score;
+    }
+
+    [System.Serializable]
+    public class TailRewardSummary
+    {
+        public string Nickname;
+        public int    Share;
     }
 }
