@@ -865,13 +865,26 @@ class SurvivalRoom {
       //     真实抖音模式下同样需要主播身份，防止观众客户端伪造消息触发
       case 'pause_game':
         if (!this._requireBroadcaster(ws, 'pause_game')) break;
-        // 暂停/恢复游戏（仅限调试）
+        // 🔴 audit-r31 GAP-A25-04 协议对称化修复：原仅 emit game_paused，无 game_resumed 对称消息
+        //   修复：根据当前 _gmPaused 状态切换；resume 时调 _startTick 真恢复 + emit game_resumed
         if (this.survivalEngine.state === 'day' || this.survivalEngine.state === 'night') {
-          this.survivalEngine._clearAllTimers();
-          this.broadcast({ type: 'game_paused', data: { paused: true } });
-          console.log(`[SurvivalRoom:${this.roomId}] GM: game paused`);
+          if (!this._gmPaused) {
+            // pause: 清 timers + emit game_paused
+            this.survivalEngine._clearAllTimers();
+            this._gmPaused = true;
+            this.broadcast({ type: 'game_paused', data: { paused: true } });
+            console.log(`[SurvivalRoom:${this.roomId}] GM: game paused`);
+          } else {
+            // resume: 重启 _startTick + emit game_resumed
+            if (typeof this.survivalEngine._startTick === 'function') {
+              this.survivalEngine._startTick();
+            }
+            this._gmPaused = false;
+            this.broadcast({ type: 'game_resumed', data: { paused: false } });
+            console.log(`[SurvivalRoom:${this.roomId}] GM: game resumed`);
+          }
         }
-        this._gmAudit(ws, 'pause_game', { state: this.survivalEngine.state });
+        this._gmAudit(ws, 'pause_game', { state: this.survivalEngine.state, paused: this._gmPaused });
         break;
 
       case 'simulate_gift': {

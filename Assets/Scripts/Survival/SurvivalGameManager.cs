@@ -631,8 +631,20 @@ namespace DrscfZ.Survival
                 case "gate_effect_triggered":
                     HandleGateEffectTriggered(dataJson);
                     break;
+                // 🔴 audit-r31 GAP-A25-04 协议对称化：服务端 game_paused/game_resumed 切换；客户端 toast 反馈让 GM 测试时看到状态
                 case "game_paused":
                     Debug.Log("[SGM] game_paused received (GM command)");
+                    UI.AnnouncementUI.Instance?.ShowAnnouncement(
+                        "游戏已暂停", "GM 调试：所有 timer 已停止；再次发 pause_game 恢复",
+                        new Color(0.7f, 0.7f, 0.9f), 3f);
+                    UI.HorizontalMarqueeUI.Instance?.AddMessage("GM", null, "游戏已暂停");
+                    break;
+                case "game_resumed":
+                    Debug.Log("[SGM] game_resumed received (GM command)");
+                    UI.AnnouncementUI.Instance?.ShowAnnouncement(
+                        "游戏已恢复", "GM 调试：tick 重启，游戏继续",
+                        new Color(0.5f, 0.9f, 0.6f), 2f);
+                    UI.HorizontalMarqueeUI.Instance?.AddMessage("GM", null, "游戏已恢复");
                     break;
                 case "boss_appeared":
                     HandleBossAppeared(type, dataJson);

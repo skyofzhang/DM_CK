@@ -3140,17 +3140,26 @@ class SurvivalGameEngine {
     });
 
     // ---- Tail 30%: 从 this.contributions 全量取 Top10 之外 + contribution ≥ 100 ----
-    //   {playerId → share} 单独广播字段 contributionRewards，客户端可另行展示
+    //   🔴 audit-r31 GAP-A26-08 实装：原 contributionRewards 用 {playerId → share} Dictionary 结构，
+    //   但 Unity JsonUtility 不支持 Dictionary 反序列化 → 客户端静默丢失整个字段无法消费。
+    //   修复：同步 emit `tailRewards: [{playerId, playerName, share}]` 数组结构（JsonUtility 友好），
+    //   保留 contributionRewards 老字段以兼容老客户端（双轨过渡期）。
     const tailEligibleList = Object.entries(this.contributions)
       .filter(([pid, c]) => !top10Ids.has(pid) && (c || 0) >= TAIL_MIN_CONTRIB);
     const tailTotalContrib = tailEligibleList.reduce((s, [, c]) => s + (c || 0), 0);
-    const contributionRewards = {};
+    const contributionRewards = {};        // Dictionary 旧字段（兼容）
+    const tailRewards         = [];        // 🔴 r31 新字段（JsonUtility 数组结构）
     let tailAssigned = 0;
     if (tailEligibleList.length > 0 && tailTotalContrib > 0) {
       tailEligibleList.forEach(([pid, c]) => {
         const share = Math.floor(tailPool * (c || 0) / tailTotalContrib);
         if (share > 0) {
           contributionRewards[pid] = share;
+          tailRewards.push({
+            playerId:   pid,
+            playerName: this._getPlayerName ? this._getPlayerName(pid) : pid,
+            share,
+          });
           tailAssigned += share;
         }
       });
@@ -3196,7 +3205,8 @@ class SurvivalGameEngine {
       top10Pool,                               // Top10 瓜分总额
       tailPool,                                // 剩余 30% 池总额
       tailEligibleCount: tailEligibleList.length, // 参与 tail 分配的人数
-      contributionRewards,                     // { playerId → share }（仅非 Top10 且 ≥100 贡献者）
+      contributionRewards,                     // { playerId → share }（旧字段，兼容老客户端）
+      tailRewards,                             // 🔴 r31 GAP-A26-08：[{playerId, playerName, share}] 数组（JsonUtility 友好，新客户端消费）
     };
 
     // Fix A (组 B Reviewer P0)：settlement_highlights 必须 **先** 于 survival_game_ended 广播。

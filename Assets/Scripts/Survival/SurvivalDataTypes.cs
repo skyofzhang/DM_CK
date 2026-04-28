@@ -376,7 +376,19 @@ namespace DrscfZ.Survival
         public int    top10Pool;          // 🆕 audit-r18 §34 F6：Top10 双档分配总额（70% 池）
         public int    tailPool;           // 🆕 audit-r18 §34 F6：剩余 30% 池总额（按贡献 ≥100 分配给非 Top10）
         public int    tailEligibleCount;  // 🆕 audit-r18 §34 F6：参与 tail 分配的玩家数（贡献 ≥100 的非 Top10）
-        // contributionRewards: object<playerId, share> — JsonUtility 不支持 Dictionary，客户端如需消费可改用 Dictionary<string,int> + JObject 解析；目前仅 fortress 总览统计可用
+        // 🔴 audit-r31 GAP-A26-08 实装：原 contributionRewards 用 Dictionary 结构 JsonUtility 不支持→静默丢失。
+        //   服务端 r31 改 emit `tailRewards: [{playerId, playerName, share}]` 数组结构（兼容 JsonUtility）。
+        //   旧字段 contributionRewards Dict 保留作老客户端兼容（新客户端不消费）。
+        public TailRewardEntry[] tailRewards;  // 🆕 audit-r31：非 Top10 且 ≥100 贡献者的奖励数组
+    }
+
+    /// <summary>🆕 audit-r31 GAP-A26-08：tail 30% 池单条奖励记录（数组元素，替代 contributionRewards Dictionary 结构）</summary>
+    [Serializable]
+    public class TailRewardEntry
+    {
+        public string playerId;
+        public string playerName;
+        public int    share;
     }
 
     /// <summary>end_game 被服务端拒绝（仅 state !∈ {day,night} 时返回，§16.4）</summary>
