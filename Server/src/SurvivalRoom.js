@@ -161,7 +161,24 @@ class SurvivalRoom {
     if (this.roomCreatorOpenId && this.roomCreatorOpenId === openId) return;
     this.roomCreatorOpenId = openId;
     this._refreshVeteranStatus();
+    // 🔴 audit-r44 GAP-E44-01：r43 GAP-D43-05 仅在 setRoomContext (SurvivalGameEngine.js:992) 末尾按 room.roomCreatorOpenId 注入 _roomCreatorId，
+    //   但 setRoomContext 在 SurvivalRoom 构造函数 line 121 调用，此时真实抖音模式 roomCreatorOpenId 可能由 /api/douyin/init 已预设、
+    //   也可能 bindDouyinAnchor 在房间生命周期中后续才被调用 (e.g. RoomManager 路径) → 引擎 _roomCreatorId 永久为 null
+    //   → 主播 AFK 60s 仍被替补（违背 §33.5「主播永不替换」），跨 r37→r43 共 7 轮 audit 漏检（r43 commit 标"已闭环"实为半成品延续）。
+    //   修复：所有设置 roomCreatorOpenId 的路径（bindDouyinAnchor / addClient 真实抖音 / addClient GM first-client）都同步注入引擎字段。
+    this._syncRoomCreatorIdToEngine();
     console.log(`[SurvivalRoom:${this.roomId}] bindDouyinAnchor: roomCreatorOpenId=${openId}`);
+  }
+
+  /**
+   * 🔴 audit-r44 GAP-E44-01：把 roomCreatorOpenId 同步到 SurvivalGameEngine._roomCreatorId
+   * 调用点：bindDouyinAnchor / addClient 真实抖音 openId 命中 / addClient GM first-client 兜底 / handleJoinRoom 升级 creator / handleDouyinComment fallback-bind
+   * 容错：survivalEngine 未初始化时静默 skip（构造函数 line 121 后才进入此 helper）
+   */
+  _syncRoomCreatorIdToEngine() {
+    if (this.survivalEngine && this.roomCreatorOpenId) {
+      this.survivalEngine._roomCreatorId = this.roomCreatorOpenId;
+    }
   }
 
   /**
@@ -200,6 +217,8 @@ class SurvivalRoom {
       if (!this.isGMMode && this.roomCreatorOpenId && !String(this.roomCreatorOpenId).startsWith('gm_creator_')
           && ws._playerId && ws._playerId === this.roomCreatorOpenId) {
         this.roomCreatorWs = ws;
+        // 🔴 audit-r44 GAP-E44-01：handleJoinRoom 升级 creator 路径同步
+        this._syncRoomCreatorIdToEngine();
         console.log(`[SurvivalRoom:${this.roomId}] Creator upgraded on late join_room (douyin mode): openId=${ws._playerId}`);
       }
       // 回补 join_room_confirm（客户端可重读 isRoomCreator）
@@ -227,6 +246,8 @@ class SurvivalRoom {
       // 真实抖音模式：只认 openId 匹配
       if (ws._playerId && ws._playerId === this.roomCreatorOpenId) {
         this.roomCreatorWs = ws;
+        // 🔴 audit-r44 GAP-E44-01：addClient 真实抖音 openId 命中路径同步引擎字段
+        this._syncRoomCreatorIdToEngine();
         console.log(`[SurvivalRoom:${this.roomId}] Creator identified by openId match (douyin mode): openId=${ws._playerId}`);
       } else {
         console.log(`[SurvivalRoom:${this.roomId}] Client joined as viewer (douyin mode, openId=${ws._playerId || 'none'}, expected=${this.roomCreatorOpenId})`);
@@ -241,6 +262,8 @@ class SurvivalRoom {
           this.roomCreatorOpenId = ws._playerId;
         }
         this._refreshVeteranStatus();
+        // 🔴 audit-r44 GAP-E44-01：addClient GM 模式 first-client 兜底路径同步引擎字段
+        this._syncRoomCreatorIdToEngine();
         console.log(`[SurvivalRoom:${this.roomId}] Room creator assigned (first client fallback, openId=${this.roomCreatorOpenId || 'pending'}, isGMMode=${this.isGMMode})`);
       }
     }
@@ -368,6 +391,15 @@ class SurvivalRoom {
     // §36 销毁前保存一次快照
     if (this.roomPersistence) {
       try { this.roomPersistence.save(this); } catch (e) { /* ignore */ }
+    }
+
+    // 🔴 audit-r44 GAP-E44-02：r? 起 TribeWarManager 已实现 onRoomDestroyed (TribeWarManager.js:205) 但全代码 0 调用方
+    //   后果：30min 无人 → 房间 destroy → 旧 TribeWarSession 仍残留在 _sessions / _attackerToSession / _defenderToSession Map
+    //   → 同 roomId 重新开播时 startAttack 查 _attackerToSession.has(roomId) 命中残留旧 session → 攻击拒绝 'attacker_busy'
+    //   → tribe_war_attack_ended.reason='room_destroyed' (§35.10 5 种 reason 之一) 永不被广播。
+    //   修复：destroy 时清理 TribeWar session（在 globalClock.unregisterRoom 之前，对齐资源清理顺序）。
+    if (this.tribeWarMgr && typeof this.tribeWarMgr.onRoomDestroyed === 'function') {
+      try { this.tribeWarMgr.onRoomDestroyed(this.roomId); } catch (e) { /* ignore */ }
     }
 
     // §36 从 GlobalClock 注销
@@ -1114,6 +1146,8 @@ class SurvivalRoom {
     if (!this.roomCreatorOpenId && secOpenId && (this.isGMMode || !this._modeInitialized)) {
       this.roomCreatorOpenId = secOpenId;
       this._refreshVeteranStatus();
+      // 🔴 audit-r44 GAP-E44-01：handleDouyinComment fallback-bind 路径同步引擎字段
+      this._syncRoomCreatorIdToEngine();
       console.log(`[SurvivalRoom:${this.roomId}] roomCreatorOpenId fallback-bound to ${secOpenId} (isGMMode=${this.isGMMode})`);
     }
 

@@ -55,6 +55,10 @@ namespace DrscfZ.Survival
         // ⚠️ audit-r24 GAP-A24-07：r23 注释 "T5 神秘空投" 错位（T5=爱的爆炸 / T6=神秘空投，r23 GAP-C23-02 已修 AudioConstants 注释 + §29.2 doc，但漏修本字段注释）。
         private bool _isPaused = false;
 
+        // 🔴 audit-r44 GAP-PRE44-01：r37 GAP-E37-21 双层守门 streamer_prompt 需 _isRoomCreator 字段，但漏声明导致 main 编译断（CS0103）。
+        // 设值点：HandleJoinRoomConfirm 收到 join_room_confirm 时按 data.isRoomCreator 同步。
+        private bool _isRoomCreator = false;
+
         // 事件（UI订阅）
         public event Action<SurvivalState> OnStateChanged;
         public event Action<DifficultyLevel> OnDifficultySet;
@@ -497,7 +501,9 @@ namespace DrscfZ.Survival
                     var wd = JsonUtility.FromJson<WorkerDiedData>(dataJson);
                     WorkerManager.Instance?.HandleWorkerDied(wd.playerId, wd.respawnAt);
                     // audit-r21 GAP-A21-01：消费 wd.reason 推送差异化跑马灯（r19 加字段，r21 补 UI 链路）
-                    // 服务端 emit reason: 'blizzard' / 'expedition_died' / 'expedition_night_kia' / ''（普通战斗）
+                    // 🔴 audit-r44 GAP-C44-01：r37 GAP-A37-03 服务端补 reason='wave'（普通波次战死）但客户端 switch 始终漏 case "wave"
+                    //   → 跨 r37→r43 共 7 轮 audit 漏检，常规波次 ~80% 死亡场景跑马灯静默无反馈（半成品延续模式第 13 轮）
+                    // 服务端 emit reason: 'blizzard' / 'expedition_died' / 'expedition_night_kia' / 'wave'（普通战斗）
                     if (!string.IsNullOrEmpty(wd.reason))
                     {
                         string deathDisplayName = ResolveDisplayName(wd.playerId);
@@ -507,6 +513,7 @@ namespace DrscfZ.Survival
                             case "blizzard":             deathHint = "被暴风雪夺命"; break;
                             case "expedition_died":      deathHint = "外域遇险阵亡"; break;
                             case "expedition_night_kia": deathHint = "外域夜战阵亡"; break;
+                            case "wave":                 deathHint = "战死沙场";     break;
                             default:                     deathHint = null; break;
                         }
                         if (!string.IsNullOrEmpty(deathHint))
@@ -1290,6 +1297,9 @@ namespace DrscfZ.Survival
 
         private void HandleJoinRoomConfirm(JoinRoomConfirmData data)
         {
+            // 🔴 audit-r44 GAP-PRE44-01：同步主播身份用于 case "streamer_prompt" 双层守门（recipient=broadcaster_only 时过滤）
+            _isRoomCreator = data?.isRoomCreator ?? false;
+
             // 服务器确认连接成功：进入 Waiting，等待主播点击"开始挑战"
             if (_state == SurvivalState.Connecting || _state == SurvivalState.Idle)
             {

@@ -1505,7 +1505,10 @@ class SurvivalGameEngine {
       // audit-r4 §19.2 workers[] 全量快照：断线重连 + 客户端 WorkerManager 一次性同步全员 level/skinTier/state
       // 🔴 audit-r37 GAP-A37-05 补 playerName + skinId 字段（与客户端 WorkerStateData 对齐）：
       //   - playerName：取自 this.playerNames[pid]（worker_join 时缓存），缺失时 fallback pid
-      //   - skinId：取自 this._activeGiftSkin[pid]（限时礼物皮肤 G01/G02/G03），无礼物期间为 null（客户端走 skinTier 兜底）
+      //   - skinId：取自 _getActiveGiftSkinId(pid)（限时礼物皮肤 G01/G02/G03），无礼物期间为 null（客户端走 skinTier 兜底）
+      //     🔴 audit-r44 GAP-A44-04：r37 原写 `(this._activeGiftSkin && this._activeGiftSkin[pid]) || null`
+      //     但 `_activeGiftSkin` 字段从未声明（构造函数无 init / 全代码 0 处赋值），只有 line 1516 单点引用 → 始终返回 null。
+      //     真实存储在 `_giftSkinExpiryMs[pid] = { skinId, expireAt }`，应通过 `_getActiveGiftSkinId(pid)` helper（line 7611）读取。
       //   - state 取值与客户端 WorkerStateData.state 注释完整 6 取值不一致（仅 dead/frozen/active）—— 是设计妥协，
       //     idle/working/combat/expedition 在客户端由 WorkerManager 自维护；此 emit 仅做断线快照同步
       workers:      Object.entries(this._workerHp).map(([pid, w]) => ({
@@ -1513,7 +1516,7 @@ class SurvivalGameEngine {
         playerName: (this.playerNames && this.playerNames[pid]) || pid,
         level:      (this._playerLevel && this._playerLevel[pid]) || 1,
         skinTier:   (this._playerSkinTier && this._playerSkinTier[pid]) || 1,
-        skinId:     (this._activeGiftSkin && this._activeGiftSkin[pid]) || null,
+        skinId:     this._getActiveGiftSkinId(pid),
         maxHp:      w.maxHp,
         currentHp:  w.hp,
         state:      w.isDead ? 'dead' : (this._frozenWorkers && this._frozenWorkers.has(pid) ? 'frozen' : 'active'),
@@ -2383,6 +2386,21 @@ class SurvivalGameEngine {
           },
         });
       }
+    }
+
+    // 🔴 audit-r44 GAP-D44-02：§39.2 B6 entrance_spark "首次进房时名字发光动画 2s"
+    //   r25 GAP-E25-06 仅在 handleShopEquip（line 9717）emit entrance_spark_triggered，但 handlePlayerJoined 路径漏触发
+    //   后果：玩家花 3000 贡献购买 + 装备后，下次进房（断线重连 / 重启 / 跨场景）入场特效永不再触发，付费视觉链路不闭合
+    //   修复：进房时若已装备 entrance_spark，broadcast 同 payload 触发入场特效
+    if (playerId && equipped && equipped.entrance === 'entrance_spark') {
+      this.broadcast({
+        type: 'entrance_spark_triggered',
+        timestamp: Date.now(),
+        data: {
+          playerId,
+          playerName: this._getPlayerName(playerId),
+        },
+      });
     }
   }
 
@@ -5349,6 +5367,11 @@ class SurvivalGameEngine {
         spawnSide: this._lastBossSpawnSide || 'all',
         monsters: guardList,
         isBossGuardSpawn: true,
+        // 🔴 audit-r44 GAP-A44-03：Boss 卫兵必须跟随 Boss 出场，不受客户端 maxAliveMonsters=15 排队影响。
+        //   服务端 _spawnBossGuards 已绕过自身 cap（直接写 _activeMonsters Map），但客户端 MonsterWaveSpawner.cs:165
+        //   仅按 data.bypassCap 判定是否跳过 cap 排队。原 r37 仅 elite_raid 路径设 bypassCap:true（line 8295），
+        //   Boss guards 路径漏注入 → 客户端在 cap 满时排队，guards 与 Boss 出场时序不一致（违背 §8.7 设计意图）。
+        bypassCap: true,
       }
     });
     console.log(`[SurvivalEngine] Boss guards spawned: ${guardList.length} (HP=${guardHp} ATK=${guardAtk}, side=${this._lastBossSpawnSide})`);
@@ -7584,17 +7607,27 @@ class SurvivalGameEngine {
   // ==================== audit-r6 P1-E6 §30.7 限时皮肤（G01/G02/G03）====================
 
   /**
-   * 计算"下一次昼夜切换结束"时刻（当前 phase 结束时间）
-   * - day:   now + remainingTime × 1000
-   * - night: now + remainingTime × 1000
+   * 计算"下一次昼夜切换结束"时刻（当前 phase 结束 + 下一 phase 完整时长）
+   * 🔴 audit-r44 GAP-D44-01：策划案 §30.7 行 3631 明确示例「白天刷 T4 → 持续到当晚结束」「夜晚刷 T5 → 持续到天亮结束」
+   *   r6 原实装仅返回 `now + remainingTime × 1000`（仅覆盖当前 phase 剩余），与策划案设计意图错位 38 轮 audit 漏检 ——
+   *   实际玩家送 T4 在白天 60s 时激活 G01 +2 炉温被动，到夜晚开始（60s 后）立即过期 → 夜晚 cmd=4 添柴不再 +2℃ 加成。
+   * 修复后逻辑：
+   * - day:   now + remainingTime（当前白天剩余）+ nightDuration（完整下一夜）
+   * - night: now + remainingTime（当前夜晚剩余）+ dayDuration（完整下一白天）
    * - 其他: 返回 now + 60_000（兜底 1 分钟，避免永远不过期）
    * @returns {number} 绝对时间戳 ms
    */
   _computeGiftSkinExpireAt() {
     const now = Date.now();
-    if (this.state === 'day' || this.state === 'night') {
+    if (this.state === 'day') {
       const remainSec = Math.max(0, Number(this.remainingTime) || 0);
-      return now + remainSec * 1000;
+      const nextNightSec = Math.max(0, Number(this.nightDuration) || 0);
+      return now + (remainSec + nextNightSec) * 1000;
+    }
+    if (this.state === 'night') {
+      const remainSec = Math.max(0, Number(this.remainingTime) || 0);
+      const nextDaySec = Math.max(0, Number(this.dayDuration) || 0);
+      return now + (remainSec + nextDaySec) * 1000;
     }
     return now + 60_000;
   }

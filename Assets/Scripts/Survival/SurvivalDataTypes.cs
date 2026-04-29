@@ -566,7 +566,9 @@ namespace DrscfZ.Survival
     {
         public string playerId;
         public long   respawnAt;  // Unix毫秒时间戳
-        public string reason;     // audit-r19 §22 死亡原因（'blizzard' | 'expedition_died' | 'expedition_night_kia' | ''；服务端 L7440/L8776/L8782/L8953 emit；普通战斗死亡时为空字符串）
+        // 🔴 audit-r44 GAP-C44-01：r37 GAP-A37-03 服务端把"普通战斗"reason 从 ''→'wave' 但客户端 switch 漏 case "wave"，跨 r37→r43 共 7 轮 audit 漏检
+        // 服务端实发 reason: 'wave'（普通波次战斗，r37 起，SurvivalGameEngine.js:5022）/ 'blizzard'（暴风雪夜，L7559）/ 'expedition_died'（外域阵亡，L8913/L8919/L9089）/ 'expedition_night_kia'（外域夜战阵亡）
+        public string reason;
     }
 
     /// <summary>矿工复活通知（type=worker_revived）</summary>
