@@ -519,6 +519,18 @@ namespace DrscfZ.Survival
         public float z;
     }
 
+    /// <summary>🔴 audit-r43 GAP-A43-01 §10.6.2/§10.7.3 城门 Lv3+ 减伤双色飘字
+    /// 服务端 SurvivalGameEngine.js _spawnWave 减伤路径在 reducedDamage &lt; rawDamage 时下发；
+    /// 客户端 SurvivalGameManager case 'gate_damage_taken' handler 调 DamageNumber.Show 双色重载（青色，与 hp delta 黄色区分）。</summary>
+    [Serializable]
+    public class GateDamageTakenData
+    {
+        public int rawDamage;       // 原始伤害（未减免前；远征怪/普通怪累计）
+        public int reducedDamage;   // 实际伤害（减免后扣除 gateHp）
+        public int dmgRedPct;       // 减伤百分比（Lv3=10 / Lv4=15 / Lv5=20 / Lv6=25）
+        public int gateLevel;       // 当前城门等级（1-6）
+    }
+
     // ==================== §31 怪物多样性系统（🆕 v1.27）====================
 
     /// <summary>矿工被冰封怪冻结（type=worker_frozen）

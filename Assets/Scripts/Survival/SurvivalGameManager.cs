@@ -635,6 +635,10 @@ namespace DrscfZ.Survival
                 case "gate_effect_triggered":
                     HandleGateEffectTriggered(dataJson);
                     break;
+                // 🔴 audit-r43 GAP-A43-01 §10.6.2/§10.7.3 城门 Lv3+ 减伤双色飘字
+                case "gate_damage_taken":
+                    HandleGateDamageTaken(dataJson);
+                    break;
                 // 🔴 audit-r31 GAP-A25-04 协议对称化 + audit-r35 完整版（90% → 100%）：触发 OnGamePaused/OnGameResumed 事件
                 //   PauseOverlayUI 订阅事件显示持久全屏遮罩；同时保留 toast/跑马灯反馈
                 case "game_paused":
@@ -1568,10 +1572,22 @@ namespace DrscfZ.Survival
             else if (data.effect == "frozen_all")
             {
                 float dur = data.duration > 0 ? data.duration : 30f;
-                workerManager?.ActivateAllWorkersFrozen(dur);
-                ShowAnnouncementBanner($"【冰冻】全体守护者冻结 {dur:F0}秒！", 3f);
-                UI.FrozenStatusUI.ShowFrozen(dur);
-                Debug.Log("[SGM] special_effect: frozen_all");
+                // 🔴 audit-r43 GAP-A43-03：按 source 分流（time_freeze 主播轮盘卡 vs GM/666 默认）
+                if (data.source == "time_freeze")
+                {
+                    // 主播轮盘"时空凝滞"卡：怪物伤害暂停 8s，矿工不冻 → 仅横幅 + 状态UI（含"喘息之机"语义）
+                    ShowAnnouncementBanner($"【时空凝滞】怪物冻结 {dur:F0} 秒，喘息之机！", 3f);
+                    UI.FrozenStatusUI.ShowFrozen(dur);
+                    Debug.Log($"[SGM] special_effect: frozen_all (time_freeze) duration={dur}s — 怪物冻结，矿工不受影响");
+                }
+                else
+                {
+                    // GM simulate_freeze / 默认路径：冻矿工（向下兼容，保持原行为）
+                    workerManager?.ActivateAllWorkersFrozen(dur);
+                    ShowAnnouncementBanner($"【冰冻】全体守护者冻结 {dur:F0}秒！", 3f);
+                    UI.FrozenStatusUI.ShowFrozen(dur);
+                    Debug.Log($"[SGM] special_effect: frozen_all (default) duration={dur}s");
+                }
             }
         }
 
@@ -2433,6 +2449,24 @@ namespace DrscfZ.Survival
         }
 
         // ==================== §10 v1.22 城门升级系统 v2 ====================
+
+        /// <summary>🔴 audit-r43 GAP-A43-01 §10.6.2/§10.7.3 城门 Lv3+ 减伤双色飘字
+        /// 服务端 SurvivalGameEngine.js _spawnWave 减伤路径在 reducedDamage &lt; rawDamage 时下发；
+        /// 客户端调 DamageNumber.Show 双色重载（青色 actualColor，与 CityGateSystem.SyncFromServer 黄色 hp delta 区分）。
+        /// 飘字位置在城门顶部 +4 高度（hp delta 是 +3，避免重叠）。</summary>
+        private void HandleGateDamageTaken(string dataJson)
+        {
+            var d = JsonUtility.FromJson<GateDamageTakenData>(dataJson);
+            if (d == null || d.reducedDamage <= 0 || d.rawDamage <= d.reducedDamage) return;
+
+            // 城门位置：优先用 cityGateSystem.transform，回退到固定坐标
+            Vector3 gatePos = (cityGateSystem != null)
+                ? cityGateSystem.transform.position + Vector3.up * 4f
+                : new Vector3(0f, 4f, -4f);
+            // 青色双色飘字：actualDamage 为主显，rawDamage 用括号副显（DamageNumber.Show 重载自动处理）
+            DamageNumber.Show(gatePos, d.reducedDamage, d.rawDamage, new Color(0.4f, 0.85f, 1f));  // 青色
+            Debug.Log($"[GateFX] gate_damage_taken Lv{d.gateLevel}: raw={d.rawDamage} → reduced={d.reducedDamage} (-{d.dmgRedPct}%)");
+        }
 
         /// <summary>🆕 v1.22 §10 城门等级特性触发（Lv4反伤 / Lv5光环 / Lv6冲击波）
         /// audit-r7 §19 扩展：优先使用 hitMonsters（legacy），退回 targets（通用别名）；
@@ -3773,6 +3807,10 @@ namespace DrscfZ.Survival
     {
         public string effect;        // "glow_all" | "frozen_all"
         public float  duration;      // 秒
+        // 🔴 audit-r43 GAP-A43-03：source 字段区分 frozen_all 双语义
+        //   "time_freeze" → 主播轮盘"时空凝滞"卡（怪物伤害暂停 8s，矿工不冻；客户端只显示横幅）
+        //   "" / "gm_simulate" / null → GM 测试路径或 666 弹幕路径（保持原冻矿工行为）
+        public string source;
     }
 
     [Serializable] public class RandomEventData

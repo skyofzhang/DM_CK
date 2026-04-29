@@ -983,6 +983,13 @@ class SurvivalGameEngine {
     if (this.seasonMgr && typeof this.loadSeason === 'function') {
       this.loadSeason(this.seasonMgr.seasonId);
     }
+
+    // 🔴 audit-r43 GAP-D43-05：注入 _roomCreatorId（来自 SurvivalRoom.roomCreatorOpenId）
+    //   修复：r1-r42 41 轮 audit 漏抓 — line 2686 主播 AFK 替补豁免代码 `if (this._roomCreatorId && pid === this._roomCreatorId) continue;`
+    //   依赖 _roomCreatorId 真值，但该字段从未被赋值（仅有读取点 line 2686 / 8137 / 8140 与"暂不引入 TODO"注释）→ 主播实际可被替换
+    //   §33.5 "主播 ✅ 永不替换" 设计意图与代码完全错位 11 个月。
+    //   注入路径：setRoomContext 是引擎与 room 关联的唯一入口，room.roomCreatorOpenId 由 SurvivalRoom 构造时设置（SurvivalRoom.js:117）。
+    this._roomCreatorId = (this.room && this.room.roomCreatorOpenId) || null;
   }
 
   /**
@@ -2026,8 +2033,36 @@ class SurvivalGameEngine {
       }
     } catch (e) { /* ignore */ }
 
-    // 贡献值 = 礼物得分（策划案 §9）
-    this._trackContribution(playerId, gift.score, 'gift');
+    // 🔴 audit-r43 GAP-D43-04：D1-D5 ghost guardian 送 T2-T6 不写入 contributions（避免 ghost 挂榜）
+    //   场景：满员 + 玩家未注册守护者 + 未晋升助威者（supporter_mode 未解锁，D1-D5）+ T2+ 礼物
+    //   设计意图：策划案 §33.4 line 4731-4732「全局效果照常执行；contributions 处理：不累加（D1-D5 不存在任何位置可挂榜）」
+    //   修复：跳过 _trackContribution（避免 contributions / _dayStats / _checkCoopMilestones 污染），
+    //        但仍累加 _lifetimeContrib + _contribBalance（个人持久水位，与排行榜无关）
+    let _isOverflowGhost = false;
+    if (playerId
+        && !isSupporter
+        && this.contributions[playerId] === undefined
+        && this.totalPlayers >= SurvivalGameEngine.MAX_PLAYERS
+        && giftTierNum >= 2) {
+      try {
+        const { isFeatureUnlocked: _isFeatUnl } = require('./config/FeatureUnlockConfig');
+        const _supUnlocked = (typeof _isFeatUnl === 'function' && this.room) ? !!_isFeatUnl(this.room, 'supporter_mode') : false;
+        if (!_supUnlocked) {
+          _isOverflowGhost = true;
+        }
+      } catch (e) { /* ignore */ }
+    }
+    if (_isOverflowGhost) {
+      // ghost 路径：仅累加 _lifetimeContrib + _contribBalance（与 _trackContribution 内部一致），跳过 contributions / _dayStats / 协作里程碑
+      const _lc = this._lifetimeContrib[playerId] || 0;
+      const _catchUpMult = (_lc < 100) ? 3 : 1;
+      this._lifetimeContrib[playerId] = _lc + gift.score * _catchUpMult;
+      this._contribBalance[playerId]  = (this._contribBalance[playerId] || 0) + gift.score * _catchUpMult;
+      console.log(`[SurvivalEngine] D1-D5 overflow ghost: pid=${playerId} giftId=${gift.id} score=${gift.score} → 仅累加 _lifetimeContrib（策划案 §33.4 line 4731-4732）`);
+    } else {
+      // 贡献值 = 礼物得分（策划案 §9）
+      this._trackContribution(playerId, gift.score, 'gift');
+    }
     // §35 Tribe War 攻击能量（策划案 §35.3）：T1=1 / T2=5 / T3=10 / T4=20 / T5=50 / T6=100
     // 按 tier 映射（gift.tier 是 1~6）；兜底按 score 阈值
     const _tribeEnergyByTier = { 1: 1, 2: 5, 3: 10, 4: 20, 5: 50, 6: 100 };
@@ -2925,6 +2960,10 @@ class SurvivalGameEngine {
     // §30.6 动态难度：每夜进入前刷新（避免每 tick 都算）
     // §30.3 阶10 传奇免死每晚 1 次 → 重置标记
     this._legendReviveUsed = {};
+    // 🔴 audit-r43 GAP-D43-01：阶9 5s 无敌护盾"每晚 1 次" → 重置标记
+    this._invincibleShieldUsed = new Set();
+    // 🔴 audit-r43 GAP-D43-02：阶10 10s 50%减伤护盾"每晚 1 次" → 重置标记
+    this._legendShieldUsed = new Set();
     this._updateDynamicDifficulty();
 
     // audit-r8 §34 F4: 重置 Boss 弱点窗口调度
@@ -3770,13 +3809,17 @@ class SurvivalGameEngine {
       },
     });
 
+    // 🔴 audit-r43 GAP-B43-01：room_failed.demotionReason 必须使用 failReason（语义化 4 种）
+    //   而非 'newbie_protected'/'demoted' — 否则客户端 RoomFailedBannerUI switch 永远走 default 显示英文 reason
+    //   修复：emit 时优先用 failReason（已写入 _lastFortressDayChangeReason，line 3751）
+    //   兼容：失败原因未透传时回退到 newbieProtected ? 'newbie_protected' : 'demoted'
     this.broadcast({
       type: 'room_failed',
       timestamp: Date.now(),
       data: {
         oldFortressDay,
         newFortressDay: this.fortressDay,
-        demotionReason,
+        demotionReason: this._lastFortressDayChangeReason || demotionReason,
         newbieProtected,
       },
     });
@@ -4900,30 +4943,40 @@ class SurvivalGameEngine {
       return 0;
     }
 
-    // audit-r4 §30.3 阶9 HP≤20% 触发 5s 无敌护盾（每次进入低血段触发一次，5s 内再次被击不触发）
-    //   - 仅在 HP 进入低血段时首次激活（防止每次被击都重置 5s）
-    //   - 无敌期内所有伤害直接返回 0（不扣 HP、不消耗 dmg）
+    // 🔴 audit-r43 GAP-D43-01 + GAP-D43-02：阶9 5s 无敌护盾 + 阶9/阶10 互斥
+    //   - 修复 GAP-D-02：tier === 9（不再含阶10），与策划案 §30.13 "拥有阶10时阶9被动自动失效" 对齐
+    //   - 修复 GAP-D-01：用 _invincibleShieldUsed Set "每晚1次"语义，替换原 20s 冷却（_enterNight 重置）
     //   - 复活后 _invincibleShieldUntil 清零（走 _reviveWorker 已有清理路径）
+    //   - 注：_invincibleShieldUsed 仅作"本夜已触发"标记；_invincibleShieldUntil 维护当前生效窗口
     const nowMs = Date.now();
-    if (this._getWorkerTier(pid) >= 9) {
+    if (this._getWorkerTier(pid) === 9) {
       if (!this._invincibleShieldUntil) this._invincibleShieldUntil = {};
-      if (!this._invincibleShieldArmedAt) this._invincibleShieldArmedAt = {};
+      if (!this._invincibleShieldUsed)  this._invincibleShieldUsed  = new Set();
       // 正在无敌期内：免疫
       if ((this._invincibleShieldUntil[pid] || 0) > nowMs) {
         return 0;
       }
-      // 非无敌期：若 HP≤20% 且上次触发已超过 20s（防刷触发），激活护盾
+      // 非无敌期：若 HP≤20% 且本夜未触发过，激活 5s 护盾（每晚 1 次）
       const maxHp = this._getWorkerMaxHp(pid);
       const hpRatio = maxHp > 0 ? (w.hp / maxHp) : 1.0;
-      if (hpRatio <= 0.20 && (nowMs - (this._invincibleShieldArmedAt[pid] || 0)) >= 20000) {
+      if (hpRatio <= 0.20 && !this._invincibleShieldUsed.has(pid)) {
         this._invincibleShieldUntil[pid] = nowMs + 5000;
-        this._invincibleShieldArmedAt[pid] = nowMs;
+        this._invincibleShieldUsed.add(pid);
         this._broadcast({
           type: 'worker_shield_activated',
           data: { playerId: pid, playerName: this._getPlayerName(pid), durationMs: 5000 }
         });
         return 0;
       }
+    }
+
+    // 🔴 audit-r43 GAP-D43-02：阶10 10s 50%减伤护盾（每晚 1 次，由 legend revive 触发）
+    //   策划案 §30.13 line 3935 "阶10 传奇矿工：每晚首次濒死回复至25% HP + 10s 50%减伤护盾（每晚1次）"
+    //   实现：legend revive 触发时写入 _legendShieldUntil[pid] = nowMs + 10000；
+    //         _damageWorker 入口在 shield 期内 dmg ×0.5（floor 但保底 1）
+    //   "每晚 1 次" 通过 _legendReviveUsed 间接保证（shield 仅在 revive 时激活，revive 已是每晚 1 次）
+    if (this._legendShieldUntil && (this._legendShieldUntil[pid] || 0) > nowMs) {
+      dmg = Math.max(1, Math.floor(dmg * 0.5));
     }
 
     const actualDmg = Math.min(w.hp, dmg);
@@ -4937,11 +4990,14 @@ class SurvivalGameEngine {
         w.hp = Math.ceil(maxHp * 0.25);
         w.isDead = false;
         w.respawnAt = 0;
+        // 🔴 audit-r43 GAP-D43-02：legend revive 触发时同步激活 10s 50%减伤护盾（每晚 1 次，与 revive 共享 _legendReviveUsed 标记）
+        if (!this._legendShieldUntil) this._legendShieldUntil = {};
+        this._legendShieldUntil[pid] = nowMs + 10000;
         this._broadcast({
           type: 'legend_revive_triggered',
-          data: { playerId: pid, playerName: this._getPlayerName(pid) }
+          data: { playerId: pid, playerName: this._getPlayerName(pid), shieldDurationMs: 10000 }
         });
-        console.log(`[SurvivalEngine] Legend revive: ${this._getPlayerName(pid)} saved from death (${w.hp}/${maxHp} HP)`);
+        console.log(`[SurvivalEngine] Legend revive: ${this._getPlayerName(pid)} saved from death (${w.hp}/${maxHp} HP) + 10s 50%-shield`);
         return actualDmg;
       }
 
@@ -5136,65 +5192,12 @@ class SurvivalGameEngine {
       for (const [pid] of aliveWorkers) {
         const w = this._workerHp[pid];
         if (!w || w.isDead) continue;
-        // §30.3 阶6 15% 格挡（本次伤害归零）
-        if (this._calcWorkerBlock(pid)) {
-          this._broadcast({
-            type: 'worker_blocked',
-            data: { playerId: pid, playerName: this._getPlayerName(pid) }
-          });
-          continue;
-        }
-
-        const actualDmg = Math.min(w.hp, damagePerWorker);
-        w.hp -= actualDmg;
+        // 🔴 audit-r43 GAP-D43-03：均摊伤害走 _damageWorker 完整链路（替换原内联扣血+死亡逻辑）
+        //   原内联逻辑跳过阶9 5s 无敌护盾检查（仅刺客路径走 _damageWorker），导致阶9 玩家被普通怪/精英怪打死时护盾不生效。
+        //   修复：直接复用 _damageWorker，统一阶6 格挡 / 阶9 shield / 阶10 revive / freeDeathPass / worker_died 广播 / _frozenWorkers 清理 / setTimeout 重生 全链路。
+        //   blockZeroes:false（默认）→ 阶6 格挡 / 阶9 shield 返回 0 不消耗 remainingDamage；正常扣血返回 actualDmg。
+        const actualDmg = this._damageWorker(pid, damagePerWorker);
         remainingDamage -= actualDmg;
-
-        if (w.hp <= 0) {
-          // §30.3 阶10 每晚1次免死（优先消费；阶10 本身免死 → 不再消费 free_death_pass）
-          if (this._getWorkerTier(pid) >= 10 && !this._legendReviveUsed[pid]) {
-            this._legendReviveUsed[pid] = true;
-            const maxHp = this._getWorkerMaxHp(pid);
-            w.hp = Math.ceil(maxHp * 0.25);
-            w.isDead = false;
-            w.respawnAt = 0;
-            this._broadcast({
-              type: 'legend_revive_triggered',
-              data: { playerId: pid, playerName: this._getPlayerName(pid) }
-            });
-            console.log(`[SurvivalEngine] Legend revive: ${this._getPlayerName(pid)} saved from death (${w.hp}/${maxHp} HP)`);
-            continue;
-          }
-
-          // §34.4 E3b immortal 里程碑（20000）：一次全局免死豁免
-          if (this._consumeFreeDeathPass(pid)) {
-            continue;
-          }
-
-          w.hp = 0;
-          w.isDead = true;
-          const respawnSec = this._getWorkerRespawnSec(pid);
-          const respawnMs  = respawnSec * 1000;
-          w.respawnAt = Date.now() + respawnMs;
-
-          this._broadcast({
-            type: 'worker_died',
-            timestamp: Date.now(),
-            // 🔴 audit-r37 GAP-A37-03 第二处：常规波次伤害路径补 reason='wave'（_spawnWave 内部 _distributeDamage 后死亡分支）
-            data: { playerId: pid, respawnAt: w.respawnAt, reason: 'wave' }
-          });
-          console.log(`[SurvivalEngine] Worker ${pid} died, respawn at +${respawnSec}s (tier=${this._getWorkerTier(pid)})`);
-
-          // §31 冻结清理：死亡矿工立即解冻
-          if (this._frozenWorkers.has(pid)) {
-            this._frozenWorkers.delete(pid);
-            this._broadcast({ type: 'worker_unfrozen', data: { playerId: pid } });
-          }
-
-          const respawnTimer = setTimeout(() => {
-            if (this._workerHp[pid]?.isDead) this._reviveWorker(pid);
-          }, respawnMs);
-          this._waveTimers.push(respawnTimer);
-        }
       }
     }
 
@@ -5207,6 +5210,24 @@ class SurvivalGameEngine {
     const reducedDamage = remainingDamage > 0 ? Math.floor(remainingDamage * (1 - dmgRed)) : 0;
     if (reducedDamage > 0) {
       this.gateHp = Math.max(0, this.gateHp - reducedDamage);
+    }
+    // 🔴 audit-r43 GAP-A43-01：城门减伤双色飘字（半成品延续模式第 12 轮闭环）
+    //   策划案 §10.6.2 / §10.7.3 设计：Lv3+ 受击飘字"-{actual}(-{raw})"实际伤害蓝色，让玩家感知减免效果
+    //   r1-r42 41 轮漏抓：DamageNumber 双色重载 (DamageNumber.cs:36-44) 已实装但 0 调用 +
+    //                     CityGateSystem.cs:267 仍用单参 Show + 服务端从未下发 rawDamage
+    //   修复：rawDamage > reducedDamage 时（Lv3+ 减伤生效）单独 emit gate_damage_taken
+    //         客户端 case 'gate_damage_taken' handler 调 DamageNumber.Show 双色重载（青色，与 hp delta 黄色区分）
+    if (remainingDamage > 0 && reducedDamage < remainingDamage) {
+      this._broadcast({
+        type: 'gate_damage_taken',
+        timestamp: Date.now(),
+        data: {
+          rawDamage:     remainingDamage,
+          reducedDamage,
+          dmgRedPct:     Math.round(dmgRed * 100),  // 例 Lv3=10 / Lv4=15 / Lv5=20 / Lv6=25
+          gateLevel:     this.gateLevel,
+        },
+      });
     }
 
     // 反伤（Lv4+）：按 reducedDamage × thornsRatio 对整波怪物平均分摊（无怪位置，均分到 _activeMonsters）
@@ -5531,6 +5552,9 @@ class SurvivalGameEngine {
           extraData.scoutCount = scoutCount;
           extraData.scoutIds   = scoutIds;
           extraData.isDaytimeScout = true;
+          // 🔴 audit-r43 GAP-B43-07：补 durationMs（§19.2 r23 字段精确化要求 4 字段对齐）
+          //   策划案 §11 / §19.2 描述 E03 daytime scout 持续 30s；客户端 RandomEventData.durationMs 读取此字段
+          extraData.durationMs = 30000;
 
           // Fix D (组 B Reviewer P0) §34B B3 E03 daytime scout：
           //   原实现只在 _activeMonsters 新增 scout，未广播 monster_wave，客户端无法渲染侦察兵。
@@ -7516,9 +7540,12 @@ class SurvivalGameEngine {
           w.hp = Math.ceil(maxHp * 0.25);
           w.isDead = false;
           w.respawnAt = 0;
+          // 🔴 audit-r43 GAP-D43-02：blizzard 路径同步激活 10s 50%减伤护盾
+          if (!this._legendShieldUntil) this._legendShieldUntil = {};
+          this._legendShieldUntil[pid] = Date.now() + 10000;
           this._broadcast({
             type: 'legend_revive_triggered',
-            data: { playerId: pid, playerName: this._getPlayerName(pid) }
+            data: { playerId: pid, playerName: this._getPlayerName(pid), shieldDurationMs: 10000 }
           });
           continue;
         }
@@ -8313,7 +8340,10 @@ class SurvivalGameEngine {
 
   /**
    * time_freeze：全场存活怪物冻结 8s（对城门伤害暂停）
-   * 复用 special_effect { frozen_all, duration: 8 }，客户端已有冻结动画
+   * 🔴 audit-r43 GAP-A43-03：special_effect 增 source='time_freeze' 字段，与 GM simulate_freeze（默认）区分
+   *   - source='time_freeze' → 客户端"冻结怪物"语义（不冻矿工，仅显示"时空凝滞 / 喘息之机"横幅）
+   *   - 默认（无 source 或 source='gm_simulate'）→ 客户端 GM 测试路径冻矿工（保持向下兼容）
+   * 服务端逻辑层只管 _freezeUntilMs（怪物伤害暂停 8s），矿工冻结由客户端 source 分流处理。
    * 返回 endsAt（effect 结束时广播 effect_ended）
    */
   _applyTimeFreeze(nowMs) {
@@ -8322,7 +8352,7 @@ class SurvivalGameEngine {
     this.broadcast({
       type: 'special_effect',
       timestamp: nowMs,
-      data: { effect: 'frozen_all', duration: 8 },
+      data: { effect: 'frozen_all', duration: 8, source: 'time_freeze' },
     });
     this.broadcast({
       type: 'bobao',

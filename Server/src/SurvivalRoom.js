@@ -694,8 +694,10 @@ class SurvivalRoom {
           console.log(`[SurvivalRoom:${this.roomId}] GM 手动结束游戏`);
         } else {
           // §16.4：loading / settlement / recovery / idle 下 GM 按钮应灰化；服务端兜底返回 wrong_phase
-          // 按 upgrade_gate 失败消息风格广播 end_game_failed（主播客户端会据此收敛 UI）
-          this.broadcast({
+          // 🔴 audit-r43 GAP-B43-04：单播给主播本人（与 r41 GAP-PM41-01 单播大潮收敛模式一致）
+          //   原 broadcast 路径会骚扰其他观众；客户端 HandleEndGameFailed 虽有 _isRoomCreator 过滤兜底，
+          //   但服务端层应统一"主播失败反馈一律单播"，避免依赖客户端兜底
+          this._sendToClient(ws, {
             type: 'end_game_failed',
             timestamp: Date.now(),
             data: { reason: 'wrong_phase', currentState: engineState },
@@ -978,6 +980,10 @@ class SurvivalRoom {
       // ==================== §35 Tribe War C→S ====================
       // 🔴 audit-r41 GAP-PM41-01: 全部改用 _sendToClient helper，自动注入 B01 协议头三字段
       case 'tribe_war_room_list': {
+        // 🔴 audit-r43 GAP-E43-04：策划案 §35 line 6062 "**均仅主播**" — 加守门与同表 attack/stop/retaliate 一致
+        //   原代码无主播守门 → 任意客户端可查跨房列表泄露元信息（roomId/streamerName/state/fortressDay/...）
+        //   修复：与 _requireBroadcaster 行为一致，非主播单播 broadcaster_action_failed { reason: 'not_broadcaster' }
+        if (!this._requireBroadcaster(ws, 'tribe_war_room_list')) break;
         if (!this.tribeWarMgr) {
           this._sendToClient(ws, { type: 'tribe_war_room_list_result', data: { rooms: [] } });
           break;
@@ -1063,11 +1069,12 @@ class SurvivalRoom {
         break;
 
       case 'disable_onboarding_for_session':
-        // 主播"关闭引导"开关：仅房间创建者可发，非主播静默忽略（不回 failed）
-        if (this._isRoomCreator(ws)) {
-          this.survivalEngine._onboardingDisabled = true;
-          console.log(`[SurvivalRoom:${this.roomId}] Onboarding disabled for session by broadcaster`);
-        }
+        // 🔴 audit-r43 GAP-C43-09：与 §24.3 同表其他主播指令一致走 _requireBroadcaster
+        //   原"非主播静默忽略"违反 §24.3 line 2909 "实际单播 broadcaster_action_failed { reason: 'not_broadcaster' }"统一规则
+        //   修复：用 _requireBroadcaster 守门，非主播会收到单播 broadcaster_action_failed
+        if (!this._requireBroadcaster(ws, 'disable_onboarding')) break;
+        this.survivalEngine._onboardingDisabled = true;
+        console.log(`[SurvivalRoom:${this.roomId}] Onboarding disabled for session by broadcaster`);
         break;
 
       // ==================== §34.3 B2 主播跳过结算倒计时 ====================

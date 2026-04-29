@@ -27,6 +27,7 @@ namespace DrscfZ.Survival
         // ----- 城门系统 -----
         public const string GateUpgradeFailed   = "gate_upgrade_failed";
         public const string GateEffectTriggered = "gate_effect_triggered"; // 🆕 v1.22 §10 城门等级特性触发
+        public const string GateDamageTaken     = "gate_damage_taken";     // 🔴 audit-r43 GAP-A43-01 §10.6.2/§10.7.3 Lv3+ 减伤双色飘字
 
         // ----- §16 永续模式失败降级 -----
         // EndGameFailed：end_game 在非 day/night 时被服务端拒（reason='wrong_phase'，§16.4）
