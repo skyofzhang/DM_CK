@@ -86,7 +86,7 @@ namespace DrscfZ.Systems
         // 调用方 SurvivalGameManager.cs:2131/2140 (LegendPromote/TierPromote) + WorkerController.cs:909 (WorkerShield) 在
         // r24 之前永远报 SFX not found warning；现 _sfxMap 字典 + LoadFromResources 都已注册，等待美术交付 mp3 即可生效。
         [SerializeField] private AudioClip sfxTierPromote;          // 矿工阶段晋升（含 SFX_LEGEND_PROMOTE 共用 clip）
-        [SerializeField] private AudioClip sfxWorkerShieldActivate; // §30.3 阶8 护盾激活
+        [SerializeField] private AudioClip sfxWorkerShieldActivate; // §30.3 阶9 护盾激活（r45 GAP-C45-03 修正阶号失真）
 
         [Header("Settings")]
         public int maxConcurrentSFX = 5;

@@ -99,6 +99,10 @@ namespace DrscfZ.Survival
         public event Action<SupporterActionData>   OnSupporterAction;
         public event Action<SupporterPromotedData> OnSupporterPromoted;
         public event Action<GiftSilentFailData>    OnGiftSilentFail;
+        // 🔴 audit-r45 GAP-D45-06：survival_game_state 携带 supporters[] + supporterCount 时同步事件
+        //   专为 SupporterTopBarUI / SupporterPanel 等"快照同步"场景，与 OnSupporterJoined（实时 join push）分离
+        //   避免重连时复用 OnSupporterJoined 触发 SupporterJoinedToastUI 弹"X 加入助威"误报
+        public event Action<int>                   OnSupporterCountSync;
 
         // §30 矿工成长系统
         public event Action<WorkerLevelUpData>       OnWorkerLevelUp;
@@ -216,7 +220,7 @@ namespace DrscfZ.Survival
 
         // ----- audit-r5 客户端补齐（🆕 v1.27+） -----
         public event Action<DifficultyChangedData>     OnDifficultyChanged;     // §19/§34.4 E9 难度生效广播
-        public event Action<WorkerShieldActivatedData> OnWorkerShieldActivated; // §30.3 阶8 护盾触发视效
+        public event Action<WorkerShieldActivatedData> OnWorkerShieldActivated; // §30.3 阶9 护盾触发视效（r45 GAP-C45-03 注释失真修正：实装 _damageWorker:4970 tier===9）
         public event Action<FairyWandAppliedData>      OnFairyWandApplied;      // §34 B8 仙女棒累计光点
 
         // audit-r6 客户端补齐
@@ -1098,7 +1102,7 @@ namespace DrscfZ.Survival
                     }
                     break;
 
-                // §30.3 阶8 护盾触发：WorkerController 订阅播放 5s 蓝 tint + 无敌气泡
+                // §30.3 阶9 护盾触发：WorkerController 订阅播放 5s 蓝 tint + 无敌气泡（r45 GAP-C45-03 注释失真修正）
                 case SurvivalMessageProtocol.WorkerShieldActivated:
                     var wsa = JsonUtility.FromJson<WorkerShieldActivatedData>(dataJson);
                     if (wsa != null)
@@ -1474,6 +1478,12 @@ namespace DrscfZ.Survival
             {
                 workerManager.HandleWorkersFullSnapshot(data.workers);
             }
+
+            // 🔴 audit-r45 GAP-D45-06：§33 助威者断线重连恢复
+            //   服务端 getFullState 末尾 emit supporters[] + supporterCount，此处 invoke OnSupporterCountSync
+            //   让 SupporterTopBarUI "守护者:N 助威:M" 计数初始化（不复用 OnSupporterJoined 避免 Toast 误报）
+            //   data.supporterCount 缺失时 JsonUtility 默认 0 → SupporterTopBarUI 清空 label 让 SurvivalTopBarUI 原始 "参与:N人" 生效
+            OnSupporterCountSync?.Invoke(data.supporterCount);
 
             // 🔴 audit-r25 GAP-A25-01 + 🔴 audit-r26 GAP-A26-02/A26-10 重构：
             //   r25 修复仅 Invoke 事件，跳过 HandleSeasonState/HandleFortressDayChanged 完整链路（CurrentSeasonState 缓存 + ApplyTheme + UpdateFortressDay 等 5+ 步）。
@@ -3004,7 +3014,11 @@ namespace DrscfZ.Survival
             OnBuildDemolished?.Invoke(data);
             string name = GetBuildingChineseName(data.buildId);
             Debug.Log($"[SGM] build_demolished: {data.buildId} reason={data.reason}");
-            OnPlayerActivityMessage?.Invoke($"{name} 已拆除（{data.reason}）");
+            // 🔴 audit-r45 GAP-B45-04：reason 走 FailureToastLocale 中央化映射，避免英文字面量直接展示
+            //   (FailureToastLocale.cs:50 已声明 demoted_during_build/manual/attacked/demoted 中文映射)
+            //   原"{name} 已拆除（demoted_during_build）"→ "{name} 已拆除（建造期间被降级,无法继续）"
+            string reasonText = DrscfZ.UI.FailureToastLocale.Get(data.reason);
+            OnPlayerActivityMessage?.Invoke($"{name} 已拆除（{reasonText}）");
         }
 
         private void HandleBuildProposeFailed(BuildProposeFailedData data)

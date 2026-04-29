@@ -44,6 +44,11 @@ class TribeWarManager {
     const list = [];
     if (!this._roomMgr || !this._roomMgr.rooms) return list;
 
+    // 🔴 audit-r45 GAP-D45-05：自身 attacker_busy 时所有目标都不可攻击（§35.2 「同时只能攻击一个目标」）
+    //   原 attackable 仅检查目标 defender_busy，主播自己已攻击 A 房间时仍标记 B/C 房间 attackable=true
+    //   → UI 按钮 enabled，点击后服务端 startAttack 拒 attacker_busy 返失败 toast，徒劳点击
+    const selfBusy = excludeRoomId && this._attackerToSession.has(excludeRoomId);
+
     for (const [roomId, room] of this._roomMgr.rooms.entries()) {
       if (roomId === excludeRoomId) continue;
       if (!room || room.status === 'destroyed') continue;
@@ -61,7 +66,7 @@ class TribeWarManager {
         day: engine ? (engine.fortressDay || 0) : 0,
         fortressDay: engine ? (engine.fortressDay || 0) : 0,
         underAttack: this._defenderToSession.has(roomId),
-        attackable: isRunning && !this._defenderToSession.has(roomId),
+        attackable: isRunning && !this._defenderToSession.has(roomId) && !selfBusy,
       });
     }
     return list;
@@ -112,9 +117,14 @@ class TribeWarManager {
     }
     const atkSt = attacker.survivalEngine && attacker.survivalEngine.state;
     const defSt = defender.survivalEngine && defender.survivalEngine.state;
-    if ((atkSt !== 'day' && atkSt !== 'night') ||
-        (defSt !== 'day' && defSt !== 'night')) {
+    // 🔴 audit-r45 GAP-D45-03：拆分 wrong_phase（attacker 自己阶段不对）/ target_not_playing（defender 阶段不对）
+    //   策划案 §19.2 行 2485 明示「wrong_phase = 发起方 state ∉ {day,night}；防守方走 target_not_playing/target_unavailable」
+    //   原合并检查导致客户端 UI 文案误导（"当前阶段不允许发起" vs "目标房间未在游戏中"）
+    if (atkSt !== 'day' && atkSt !== 'night') {
       return { ok: false, reason: 'wrong_phase' };
+    }
+    if (defSt !== 'day' && defSt !== 'night') {
+      return { ok: false, reason: 'target_not_playing' };
     }
 
     const TribeWarSession = require('./TribeWarSession');

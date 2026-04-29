@@ -489,10 +489,17 @@ class BroadcasterRoulette {
   apply(nowMs) {
     if (!this._pending) return false;
     const cardId = this._pending.cardId;
+    // 🔴 audit-r45 GAP-B45-02：保存 _pending 副本，若 dispatch 返回 -1（被阻挡如 elite_raid overflow）则恢复，可重试
+    const savedPending = this._pending;
     this._pending = null;
 
-    // 调度到对应 _applyXxx（若返回 endsAt，则记录 effectActive）
+    // 调度到对应 _applyXxx（若返回 endsAt，则记录 effectActive；返回 -1 表示被阻挡，恢复 _pending）
     const endsAt = this._dispatch(cardId, nowMs);
+    if (endsAt === -1) {
+      this._pending = savedPending; // 恢复让主播可重新触发 apply
+      console.log(`[Roulette] apply blocked: ${cardId} (pending restored)`);
+      return false;
+    }
     if (endsAt && endsAt > nowMs) {
       this._effectActive = { cardId, endsAt };
     } else {
@@ -1539,6 +1546,18 @@ class SurvivalGameEngine {
       dailyCapBlocked:        this._dailyCapBlocked || false,
       // §36.12 分时段功能解锁：已解锁功能全集（断线重连/初始化用；与 season_state.unlockedFeatures 对齐）
       unlockedFeatures:       this._getUnlockedFeaturesForClient(),
+      // 🔴 audit-r45 GAP-D45-06：§33 助威者断线重连恢复（spec line 5194「supporters 数组新增」）
+      //   原 getFullState 无 supporters 字段 → 助威者重连后 SupporterTopBarUI 守护者:N 助威:M 显示无法初始化
+      //   + 重连的 supporter 自身不知道是助威者身份；服务端重启 / 跨场景切换同样受影响
+      supporters:             (this._supporters && typeof this._supporters.entries === 'function')
+        ? Array.from(this._supporters.entries()).map(([pid, d]) => ({
+            playerId:     pid,
+            playerName:   (d && d.name) || pid,
+            joinedAt:     (d && d.joinedAt) || 0,
+            totalContrib: (d && d.totalContrib) || 0,
+          }))
+        : [],
+      supporterCount:         (this._supporters && typeof this._supporters.size === 'number') ? this._supporters.size : 0,
     };
   }
 
@@ -1690,6 +1709,10 @@ class SurvivalGameEngine {
       if (Date.now() - cd < 60000) return;  // 60s 冷却静默丢弃
       this._playerSkinCooldown[playerId] = Date.now();
       this._playerSkinId[playerId] = TIER_SKINS[targetTier - 1];
+      // 🔴 audit-r45 GAP-C45-02：手动换肤后同步 _playerSkinTier（getFullState.workers[].skinTier 数据源）
+      //   原 _playerSkinTier 仅 loadSnapshot 写入，运行时 0 处更新 → 重连后客户端渲染回退到旧 tier 见习矿工皮肤
+      if (!this._playerSkinTier) this._playerSkinTier = {};
+      this._playerSkinTier[playerId] = targetTier;
       this._broadcast({
         type: 'worker_skin_changed',
         data: {
@@ -2186,14 +2209,19 @@ class SurvivalGameEngine {
           this._upgradeGate(playerId, 'gift_t6');
         }
         if (playerId) {
-          this.contributions[playerId] = (this.contributions[playerId] || 0) + 100;
+          // 🔴 audit-r45 GAP-E45-01：原直接 += contributions 绕过 _addContribution，导致 +100 漏更新 _lifetimeContrib + _contribBalance
+          //   （大 R 玩家送 100 张 T6 漏 10000 终身贡献——影响等级/老用户豁免/B 类装备购买余额）
+          //   改用 _addContribution 走双轨货币三字段同步累加。source 标 'gift' 让 _trackContribution 走礼物奖励路径
+          //   （新玩家 lifetimeContrib<100 时享 catchUpMult ×3 = +300，符合"奖励"语义；老玩家恒为 ×1）
+          const beforeContrib = this.contributions[playerId] || 0;
+          this._addContribution(playerId, 100, 'gift');
           // 推送明细：让客户端能识别这 +100 是 T6 升级 / 满级的额外奖励
           this._broadcast({
             type: 'contribution_update',
             data: {
               playerId,
-              delta:  100,
-              total:  this.contributions[playerId],
+              delta:  (this.contributions[playerId] || 0) - beforeContrib,  // 实际差值（含 catchUpMult 倍率）
+              total:  this.contributions[playerId] || 0,
               source: (this.gateLevel >= GATE_MAX_HP_BY_LEVEL.length) ? 'gift_t6_max_level_bonus' : 'gift_t6_upgrade_bonus',
             },
           });
@@ -2493,6 +2521,9 @@ class SurvivalGameEngine {
     // 助威者贡献值 +1（与正式守护者一致），计入 live_ranking
     this._trackContribution(playerId, 1);
 
+    // 🔴 audit-r45 GAP-D45-02：助威者弹幕也产生攻击能量（§35.8 行 6047 兼容性条款），与守护者 cmd 1-4/6 路径一致
+    this._tribeWarAddEnergy(1);
+
     // 🔴 audit-r25 GAP-D25-06 + 🔴 audit-r26 GAP-D26-08: emit 加 atkBuffPct/atkBuffTimer，
     //   仅在夜晚 cmd=6 路径携带这两字段（其他 cmd 不带 → JsonUtility 反序列化为 0 默认值）
     //   r25 在所有 cmd 都 emit 这两字段会让客户端 UI 误读"残留值"作为 buff 进度
@@ -2535,6 +2566,9 @@ class SurvivalGameEngine {
     // §37 market 抬升 ×1.1
     this._trackContribution(playerId, 1);
     this.scorePool += 1 * (this._buildings.has('market') ? 1.1 : 1.0);
+
+    // 🔴 audit-r45 GAP-D45-02：助威者 T1 仙女棒也产生攻击能量（§35.8 兼容性条款），与守护者 T1 路径一致
+    this._tribeWarAddEnergy(1);
 
     const giftData = {
       playerId,
@@ -2611,6 +2645,9 @@ class SurvivalGameEngine {
     // 贡献 + 积分池（§37 market 抬升 ×1.1）
     this._trackContribution(playerId, gift.score);
     this.scorePool += gift.score * (this._buildings.has('market') ? 1.1 : 1.0);
+
+    // 🔴 audit-r45 GAP-D45-02：助威者 T5 爱的爆炸也产生攻击能量（§35.8 兼容性条款 + §35.3 T5=50）
+    this._tribeWarAddEnergy(50);
 
     const giftData = {
       playerId,
@@ -2689,6 +2726,9 @@ class SurvivalGameEngine {
     // 贡献 + 积分池（§37 market 抬升 ×1.1）
     this._trackContribution(playerId, gift.score);
     this.scorePool += gift.score * (this._buildings.has('market') ? 1.1 : 1.0);
+
+    // 🔴 audit-r45 GAP-D45-02：助威者 T4 能量电池也产生攻击能量（§35.8 兼容性条款 + §35.3 T4=20）
+    this._tribeWarAddEnergy(20);
 
     const giftData = {
       playerId,
@@ -4946,7 +4986,9 @@ class SurvivalGameEngine {
    * 返回实际扣血（用于扣除 remainingDamage 计入城门溢出）
    * 若格挡成功返回 0（伤害归零，不顺延城门）；仅刺客伤害路径用 blockZeroes=true。
    */
-  _damageWorker(pid, dmg, { blockZeroes = false, skipBlockForwarding = false } = {}) {
+  _damageWorker(pid, dmg, { blockZeroes = false, skipBlockForwarding = false, reason = 'wave' } = {}) {
+    // 🔴 audit-r45 GAP-C45-01：reason 参数让 blizzard_night 路径能保留 'blizzard' 跑马灯文案（"被暴风雪夺命"）
+    //   default 'wave' 与 r37 GAP-A37-03 修复一致；调用方按场景传 'blizzard'/'wave'/'expedition_*' 等
     const w = this._workerHp[pid];
     if (!w || w.isDead) return 0;
 
@@ -5033,11 +5075,11 @@ class SurvivalGameEngine {
       this._broadcast({
         type: 'worker_died',
         timestamp: Date.now(),
-        // 🔴 audit-r37 GAP-A37-03：常规波次伤害路径补 reason='wave'
+        // 🔴 audit-r37 GAP-A37-03：常规波次伤害路径补 reason='wave'（default 由 r45 GAP-C45-01 改为参数化）
         //   r19 GAP-A19-02 仅修了 blizzard 路径；expedition_died/expedition_night_kia 已有 reason
         //   常规战斗死亡走 default 分支 → 客户端 SurvivalGameManager.cs:501 跑马灯无差异化反馈
-        //   r37 补 reason='wave' 让客户端 case "wave" 显示"战死"跑马灯
-        data: { playerId: pid, respawnAt: w.respawnAt, reason: 'wave' }
+        //   r37 补 reason='wave' 让客户端 case "wave" 显示"战死"跑马灯；r45 调用方可覆盖（如 blizzard）
+        data: { playerId: pid, respawnAt: w.respawnAt, reason }
       });
       console.log(`[SurvivalEngine] Worker ${pid} died, respawn at +${respawnSec}s (tier=${this._getWorkerTier(pid)})`);
 
@@ -7547,41 +7589,14 @@ class SurvivalGameEngine {
     const now = Date.now();
     if (this._blizzardLastTickAt && (now - this._blizzardLastTickAt) < MODIFIER_BLIZZARD_TICK_SEC * 1000) return;
     this._blizzardLastTickAt = now;
-    // 所有存活矿工 -2HP（不走 block，直接扣）
+    // 🔴 audit-r45 GAP-C45-01：原内联扣血 + 重复实现阶10 / free_death_pass 检查，**绕过阶6 格挡 + 阶9 5s 无敌护盾**
+    //   阶9 神话矿工被 blizzard -2HP 打到 ≤20% HP 时，spec line 3516「夜晚 HP≤20% 触发 5s 无敌护盾（每晚1次）」失效
+    //   修复：直接复用 _damageWorker(pid, dmg, { reason:'blizzard' })，统一阶6/9/10 + free_death_pass + worker_died 全路径
+    //   reason='blizzard' 保留客户端 SurvivalGameManager.cs:513 跑马灯「被暴风雪夺命」（r19 GAP-A19-02）
     for (const pid of Object.keys(this._workerHp || {})) {
       const w = this._workerHp[pid];
       if (!w || w.isDead) continue;
-      w.hp = Math.max(0, w.hp - MODIFIER_BLIZZARD_DAMAGE);
-      if (w.hp <= 0) {
-        // 走正常死亡路径（阶10 免死 / free_death_pass 在 _damageWorker 里消费；此处已越过 _damageWorker 但仍需同一结果）
-        // MVP 简化：复用 _damageWorker 的副作用——模拟扣到 0 并走死亡判定
-        // 直接设置 dead + 广播（避免重复 HP 逻辑）
-        // 阶10 免死 / free_death_pass
-        if (this._getWorkerTier(pid) >= 10 && !this._legendReviveUsed[pid]) {
-          this._legendReviveUsed[pid] = true;
-          const maxHp = this._getWorkerMaxHp(pid);
-          w.hp = Math.ceil(maxHp * 0.25);
-          w.isDead = false;
-          w.respawnAt = 0;
-          // 🔴 audit-r43 GAP-D43-02：blizzard 路径同步激活 10s 50%减伤护盾
-          if (!this._legendShieldUntil) this._legendShieldUntil = {};
-          this._legendShieldUntil[pid] = Date.now() + 10000;
-          this._broadcast({
-            type: 'legend_revive_triggered',
-            data: { playerId: pid, playerName: this._getPlayerName(pid), shieldDurationMs: 10000 }
-          });
-          continue;
-        }
-        if (this._consumeFreeDeathPass(pid)) continue;
-        w.isDead = true;
-        const respawnSec = this._getWorkerRespawnSec(pid);
-        w.respawnAt = Date.now() + respawnSec * 1000;
-        this._broadcast({
-          type: 'worker_died',
-          // audit-r19 GAP-A19-02：统一字段名（cause → reason）— 与 L8776/L8782/L8953 expedition_died/expedition_night_kia 一致
-          data: { playerId: pid, respawnAt: w.respawnAt, reason: 'blizzard' },
-        });
-      }
+      this._damageWorker(pid, MODIFIER_BLIZZARD_DAMAGE, { reason: 'blizzard' });
     }
     this._broadcastWorkerHp();
   }
@@ -7924,6 +7939,10 @@ class SurvivalGameEngine {
     if (newTier > oldTier) {
       // 跨阶段：自动换肤（不受 60s 冷却限制）+ 广播
       this._playerSkinId[playerId] = TIER_SKINS[newTier - 1];
+      // 🔴 audit-r45 GAP-C45-02：升级跨阶后同步 _playerSkinTier（getFullState.workers[].skinTier 数据源）
+      //   与 line 1692-1695 手动换肤路径一致；重连后渲染最新 tier 皮肤而非旧值
+      if (!this._playerSkinTier) this._playerSkinTier = {};
+      this._playerSkinTier[playerId] = newTier;
       this._broadcast({
         type: 'worker_level_up',
         data: {
@@ -8178,7 +8197,19 @@ class SurvivalGameEngine {
   }
 
   _buildRankings() {
-    return Object.entries(this.contributions)
+    // 🔴 audit-r45 GAP-D45-07：合并 _supporters.totalContrib（被替换降级的旧守护者历史贡献）
+    //   原仅排序 contributions，但 _promoteSupporter 会把旧守护者 contributions[oldId] 转入 _supporters[oldId].totalContrib 并 delete 原条目
+    //   旧守护者后续 supporter 身份贡献从 0 起步 → weekly + 本局排行榜丢失前 N 历史贡献（违反 §33.9 行 5191「contributions + _supporters.totalContrib 合并统计」）
+    //   合并优先级：以 _supporters.totalContrib 为基线，叠加新守护者继任后的 contributions（同 playerId 累加）
+    const merged = { ...this.contributions };
+    if (this._supporters && typeof this._supporters.forEach === 'function') {
+      for (const [pid, d] of this._supporters) {
+        if (d && d.totalContrib > 0) {
+          merged[pid] = (merged[pid] || 0) + d.totalContrib;
+        }
+      }
+    }
+    return Object.entries(merged)
       .sort(([, a], [, b]) => b - a)
       .slice(0, 10)
       .map(([id, score], i) => ({
@@ -8294,6 +8325,28 @@ class SurvivalGameEngine {
    * 即时效果（无持续 buff），返回 0
    */
   _applyEliteRaid(nowMs) {
+    // 🔴 audit-r45 GAP-B45-02：overflow 检查 — 上一只 elite_raid 怪未击杀时，不应覆盖 _eliteRaidMonsterId
+    //   原直接覆盖导致第一只精英怪变"游离怪"（_tickEliteRaid 不再追踪、不会"穿门"扣城门，主播误以为卡用掉了）
+    //   修复：检测到 overflow → emit broadcaster_roulette_effect_prevented + 返回 -1 让 Roulette.apply 保留 _pending 可重试
+    if (this._eliteRaidMonsterId && this._activeMonsters.has(this._eliteRaidMonsterId)) {
+      const failMsg = {
+        type: 'broadcaster_roulette_effect_prevented',
+        timestamp: nowMs,
+        data: {
+          cardId: 'elite_raid',
+          preventReason: 'elite_overflow',
+          message: '上一只精英怪未击杀',
+        },
+      };
+      if (this._roomCreatorId) {
+        this._sendToPlayer(this._roomCreatorId, failMsg);
+      } else {
+        this._broadcast(failMsg);
+      }
+      console.log(`[SurvivalEngine] elite_raid prevented: previous monster ${this._eliteRaidMonsterId} still alive`);
+      return -1; // Roulette.apply 据此保留 _pending 可重试
+    }
+
     const cfg = getWaveConfig(this.currentDay || 1);
     // elite 基础（若当日无 elite 配置，用 normal 兜底）
     const baseHp  = (cfg.elite?.hp  || cfg.normal?.hp  || 300);
@@ -8328,6 +8381,18 @@ class SurvivalGameEngine {
         bypassCap: true,           // 前端据此跳过 maxAliveMonsters
         eliteHp:   hp,
         eliteAtk:  atk,
+        // 🔴 audit-r45 GAP-B45-01：补 monsters[] 数组让客户端走 SpawnWithVariants 路径享受 bypassCap 守卫
+        //   r37 GAP-A37-02 仅修了 SpawnWithVariants 路径的 bypassCap 守卫，但 elite_raid 旧 emit 无 monsters[] 数组
+        //   → 客户端 SpawnWave (line 134) 走旧 SpawnBatch 路径（line 312）完全不识别 bypassCap
+        //   → _activeMonsters.Count == 15 时精英怪进队列 0.5s/tick 排队（30s deadline 体感失效）
+        //   半成品延续模式第 14 轮——补 monsters[] 让客户端 SpawnWave 走新路径
+        monsters: [{
+          monsterId: id,
+          type:      'elite_raid',
+          variant:   'normal',
+          hp,
+          speed:     1.0,
+        }],
       },
     });
 

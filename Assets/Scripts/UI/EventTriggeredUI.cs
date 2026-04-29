@@ -70,14 +70,14 @@ namespace DrscfZ.UI
             { "E05_ore_vein",     ("矿脉显现",   "矿石产量大幅提升",   new Color(0.75f, 0.55f, 0.95f, 0.9f))}, // 紫
             // §34.3 B3 新增 10 种
             { "airdrop_supply",   ("空投补给",   "天降全员资源加成",   new Color(1.0f, 0.95f, 0.4f, 0.9f)) }, // 金
-            { "ice_ground",       ("地面冰封",   "工人移速减缓",       new Color(0.6f, 0.8f, 1.0f, 0.9f))  }, // 冰蓝
+            { "ice_ground",       ("地面冰封",   "采集效率降低20%",     new Color(0.6f, 0.8f, 1.0f, 0.9f))  }, // 冰蓝（audit-r45 GAP-A45-03：服务端实装为采矿产出 ×0.8，项目无移速概念）
             { "aurora_flash",     ("极光闪现",   "全员效率短时提升",   new Color(0.5f, 1.0f, 0.85f, 0.9f)) }, // 青绿
             { "earthquake",       ("地震",       "炉温与城门受损",     new Color(0.85f, 0.45f, 0.3f, 0.9f))}, // 深红
             { "meteor_shower",    ("流星雨",     "流星击杀怪物",       new Color(0.9f, 0.4f, 0.9f, 0.9f))  }, // 粉紫
             { "heavy_fog",        ("浓雾",       "怪物血条暂时隐藏",   new Color(0.7f, 0.7f, 0.75f, 0.9f)) }, // 灰
-            { "hot_spring",       ("温泉涌出",   "全员恢复生命",       new Color(1.0f, 0.75f, 0.75f, 0.9f))}, // 粉
+            { "hot_spring",       ("温泉涌出",   "炉温每5秒+2℃ 持续30秒", new Color(1.0f, 0.75f, 0.75f, 0.9f))}, // 粉（audit-r45 GAP-A45-01：服务端实装为 _tickHotSpringIfActive 升炉温，不治矿工 HP）
             { "food_spoil",       ("食物变质",   "食物减少",           new Color(0.6f, 0.55f, 0.4f, 0.9f)) }, // 深米
-            { "inspiration",      ("灵感爆发",   "城门加固奖励",       new Color(0.95f, 1.0f, 0.55f, 0.9f))}, // 黄绿
+            { "inspiration",      ("灵感爆发",   "下一次采集产出翻倍",   new Color(0.95f, 1.0f, 0.55f, 0.9f))}, // 黄绿（audit-r45 GAP-A45-02：服务端实装为 _oneShotWorkMult=2.0 仅影响下次工作产出，不修城门）
             { "morale_boost",     ("矿工士气",   "矿工鼓舞气泡",       new Color(1.0f, 0.78f, 0.25f, 0.9f))}, // 橙黄
         };
 

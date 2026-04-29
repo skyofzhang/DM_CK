@@ -1,5 +1,7 @@
 ﻿using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
 using System.Net.WebSockets;
 using System.Text;
 using System.Threading;
@@ -108,7 +110,14 @@ namespace DrscfZ.Core
 
         private ClientWebSocket _ws;
         private CancellationTokenSource _cts;
-        private readonly ConcurrentQueue<(string type, string data)> _messageQueue = new();
+        // 🔴 audit-r45 GAP-B45-03：服务端 SurvivalRoom._injectProtocolHeader 已注入 priority/tick/serverTime 三字段（r35 GAP-E25-08 + r40 GAP-PM40-02 共 5 轮闭环）
+        //   原 _messageQueue 仅 (type, data) 元组完全丢弃这些字段，Update 纯 FIFO 派发 → 同帧多消息无法按 priority 升序处理
+        //   策划案 §19.0 行 2330-2346 明示「客户端 NetworkManager 收到消息先进优先级队列，LateUpdate 时统一 drain + 按 (priority, tick) 排序后派发」
+        //   半成品延续模式（服务端注入 5 轮 vs 客户端 0 实装）— r45 真闭环
+        //   改动：(1) 队列加 priority/tick 字段 (2) ParseAndEnqueue 提取 (3) Update drain 全部到 List 排序后 invoke
+        //   保持 Update 不改 LateUpdate（避免 input 帧序干扰），按"每帧批次"内排序而非全局排序
+        private readonly ConcurrentQueue<(string type, string data, int priority, long tick)> _messageQueue = new();
+        private readonly List<(string type, string data, int priority, long tick)> _frameMessages = new();
         private readonly ConcurrentQueue<Action> _actionQueue = new();
         private int _reconnectCount;
         private bool _intentionalClose;
@@ -146,9 +155,27 @@ namespace DrscfZ.Core
 
         private void Update()
         {
-            // 主线程分发消息
+            // 🔴 audit-r45 GAP-B45-03：drain 全部到本地 List 后按 (priority asc, tick asc) 稳定排序，再 invoke
+            //   priority 默认 5（缺失 → JSON 解析返 0；服务端约定 0 = 未注入兼容兜底）
+            //   同帧批次内排序保证策划案 §19.0「UI 状态机依赖顺序不闪烁」；跨帧批次仍 FIFO 不影响 TCP 保序
+            _frameMessages.Clear();
             while (_messageQueue.TryDequeue(out var msg))
             {
+                _frameMessages.Add(msg);
+            }
+            if (_frameMessages.Count > 1)
+            {
+                // OrderBy + ThenBy 是 stable sort（同 priority + 同 tick 保入队顺序）
+                _frameMessages.Sort((a, b) =>
+                {
+                    int pc = a.priority.CompareTo(b.priority);
+                    if (pc != 0) return pc;
+                    return a.tick.CompareTo(b.tick);
+                });
+            }
+            for (int i = 0; i < _frameMessages.Count; i++)
+            {
+                var msg = _frameMessages[i];
                 // 心跳回应：更新最后收到时间
                 // SurvivalRoom.js 回 heartbeat_ack，Room.js 回 heartbeat，两种都接受
                 if (msg.type == "heartbeat" || msg.type == "heartbeat_ack")
@@ -370,14 +397,39 @@ namespace DrscfZ.Core
                 string type = ExtractField(json, "type");
                 if (string.IsNullOrEmpty(type)) return;
 
+                // 🔴 audit-r45 GAP-B45-03：提取协议头 priority/tick（服务端 _injectProtocolHeader 注入）
+                //   缺失/解析失败默认 priority=5（中等），tick=0（最早），与服务端 PRIORITY_BY_TYPE 默认值一致
+                int priority = 5;
+                long tick = 0L;
+                string priStr = ExtractNumberField(json, "priority");
+                if (!string.IsNullOrEmpty(priStr) && int.TryParse(priStr, out var p)) priority = p;
+                string tickStr = ExtractNumberField(json, "tick");
+                if (!string.IsNullOrEmpty(tickStr) && long.TryParse(tickStr, out var t)) tick = t;
+
                 // 提取 data 子对象
                 string dataJson = ExtractDataJson(json);
-                _messageQueue.Enqueue((type, dataJson));
+                _messageQueue.Enqueue((type, dataJson, priority, tick));
             }
             catch (Exception e)
             {
                 Debug.LogWarning($"[Net] Parse error: {e.Message}");
             }
+        }
+
+        /// <summary>🔴 audit-r45 GAP-B45-03：提取 envelope 顶层 number 字段（priority/tick）</summary>
+        private string ExtractNumberField(string json, string field)
+        {
+            string key = $"\"{field}\":";
+            int idx = json.IndexOf(key);
+            if (idx < 0) return null;
+            int start = idx + key.Length;
+            // 跳过空白
+            while (start < json.Length && (json[start] == ' ' || json[start] == '\t')) start++;
+            // 数字字段（无引号），读到 ',' 或 '}' 结束
+            int end = start;
+            while (end < json.Length && json[end] != ',' && json[end] != '}' && json[end] != ' ') end++;
+            if (end <= start) return null;
+            return json.Substring(start, end - start);
         }
 
         private string ExtractField(string json, string field)

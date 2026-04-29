@@ -96,6 +96,9 @@ namespace DrscfZ.Survival
         public const string ShopEquipFailed           = "shop_equip_failed";            // S→C：装备切换失败（unicast）
         public const string ShopInventoryData         = "shop_inventory_data";          // S→C：进房/重连推送 owned + equipped
         public const string ShopEffectTriggered       = "shop_effect_triggered";        // S→C：A 类效果触发房间广播
+        // 🔴 audit-r45 GAP-E45-02：B6 entrance_spark 触发广播（spec §39.2 行 7139；服务端 handlePlayerJoined + handleShopEquip 双路径 emit）
+        //   原仅 SurvivalGameManager.cs:840 字面量 case 路由，缺常量声明与同段 ShopXxx 命名规范不一致
+        public const string EntranceSparkTriggered    = "entrance_spark_triggered";     // S→C：B6 入场特效触发（购买/装备/重连/玩家加入）
         // C→S 消息（客户端发送时直接用字面量，无需此常量解析）：
         //   shop_list / shop_purchase_prepare / shop_purchase / shop_equip
 
@@ -197,7 +200,7 @@ namespace DrscfZ.Survival
 
         // ----- audit-r5 客户端补齐（🆕 v1.27+） -----
         public const string DifficultyChanged       = "difficulty_changed";        // S→C：§19/§34.4 E9 难度已应用（next_night/next_season）
-        public const string WorkerShieldActivated   = "worker_shield_activated";   // S→C：§30.3 阶8 矿工 5s 护盾触发视觉反馈
+        public const string WorkerShieldActivated   = "worker_shield_activated";   // S→C：§30.3 阶9 矿工 5s 护盾触发视觉反馈（r45 GAP-C45-03 注释失真修正）
         public const string FairyWandApplied        = "fairy_wand_applied";        // S→C：§34 B8 仙女棒累计光点（每次送都广播，含 capped）
 
         // ----- audit-r6 客户端补齐（🆕 v1.27+） -----

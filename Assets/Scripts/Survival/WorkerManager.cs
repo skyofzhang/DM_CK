@@ -581,7 +581,7 @@ namespace DrscfZ.Survival
         }
 
         /// <summary>
-        /// 🆕 audit-r5 §30.3 阶8 护盾触发 → 客户端 5s 染蓝 tint + "无敌" 气泡。
+        /// 🆕 audit-r5 §30.3 阶9 护盾触发 → 客户端 5s 染蓝 tint + "无敌" 气泡（r45 GAP-C45-03 修正阶号失真）。
         /// </summary>
         public void HandleWorkerShieldActivated(string playerId, long durationMs)
         {

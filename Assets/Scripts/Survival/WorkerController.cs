@@ -905,12 +905,12 @@ namespace DrscfZ.Survival
             if (_state == State.Frozen) Unfreeze();
         }
 
-        // ==================== §30.3 阶8 无敌护盾视效（audit-r5）====================
+        // ==================== §30.3 阶9 无敌护盾视效（audit-r5；r45 GAP-C45-03 注释失真修正）====================
         private Coroutine _shieldCoroutine;
         private static readonly Color SHIELD_TINT = new Color(0.533f, 0.9f, 1.0f, 0.95f);
 
         /// <summary>
-        /// 🆕 audit-r5 §30.3 阶8 矿工 5s 护盾触发视效。
+        /// 🆕 audit-r5 §30.3 阶9 矿工 5s 护盾触发视效（r45 GAP-C45-03 修正阶号失真：实装 _damageWorker:4970 tier===9）。
         /// 服务端在 HP=0 但 _invincibleShield 抵消致命伤时广播 worker_shield_activated；
         /// 客户端：durationMs 期内染浅蓝 tint + 头顶气泡"无敌"。
         /// TODO(美术)：替换为 VFX_Shield_Activate.prefab 粒子特效（美术清单 v4 未交付，现用材质染色占位）。

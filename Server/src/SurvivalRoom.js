@@ -1031,12 +1031,14 @@ class SurvivalRoom {
         if (!this.tribeWarMgr) break;
         const targetRoomId = data && data.targetRoomId;
         if (!targetRoomId) {
-          this._sendToClient(ws, { type: 'tribe_war_attack_failed', data: { reason: 'room_not_found' } });
+          // 🔴 audit-r45 GAP-D45-09：tribe_war_attack_failed 补 targetRoomId 字段（客户端 SurvivalDataTypes.cs:1217 已声明）
+          //   原 5 处 emit 全 0 emit → 客户端无法定位失败属于哪个目标房间（用户连点失败时按钮无法对应回原始行）
+          this._sendToClient(ws, { type: 'tribe_war_attack_failed', data: { reason: 'room_not_found', targetRoomId: targetRoomId || '' } });
           break;
         }
         const res = this.tribeWarMgr.startAttack(this.roomId, targetRoomId);
         if (!res.ok) {
-          const failData = { reason: res.reason };
+          const failData = { reason: res.reason, targetRoomId };  // r45 GAP-D45-09 补 targetRoomId
           if (res.cooldownMs !== undefined) failData.cooldownMs = res.cooldownMs;
           this._sendToClient(ws, { type: 'tribe_war_attack_failed', data: failData });
         }
@@ -1068,14 +1070,15 @@ class SurvivalRoom {
         const targetRoomId = (data && data.targetRoomId) ||
                              (atkSession && atkSession.attacker && atkSession.attacker.roomId);
         if (!targetRoomId) {
-          this._sendToClient(ws, { type: 'tribe_war_attack_failed', data: { reason: 'room_not_found' } });
+          // 🔴 audit-r45 GAP-D45-09：补 targetRoomId（即使 fallback 失败也传空字符串保字段一致）
+          this._sendToClient(ws, { type: 'tribe_war_attack_failed', data: { reason: 'room_not_found', targetRoomId: '' } });
           break;
         }
         // §37.2 beacon 反击联动：建有 beacon 时 damageMultiplier=1.5，否则 1.0
         const _dm = (this.survivalEngine && this.survivalEngine._buildings && this.survivalEngine._buildings.has('beacon')) ? 1.5 : 1.0;
         const res = this.tribeWarMgr.startAttack(this.roomId, targetRoomId, { damageMultiplier: _dm });
         if (!res.ok) {
-          const failData = { reason: res.reason };
+          const failData = { reason: res.reason, targetRoomId };  // r45 GAP-D45-09 补 targetRoomId
           if (res.cooldownMs !== undefined) failData.cooldownMs = res.cooldownMs;
           this._sendToClient(ws, { type: 'tribe_war_attack_failed', data: failData });
         }

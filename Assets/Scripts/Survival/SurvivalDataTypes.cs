@@ -54,6 +54,22 @@ namespace DrscfZ.Survival
         public WorkerStateData[] workers;
         // 注：服务端还发送 workerHp（dict），因 JsonUtility 不支持 Dictionary，
         //     由独立的 worker_hp_update 消息负责同步，此处忽略
+        // 🔴 audit-r45 GAP-D45-06：§33 助威者断线重连恢复（spec line 5194「supporters 数组新增」）
+        //   原 SurvivalGameStateData 无此两字段 → 重连后 SupporterTopBarUI 守护者:N 助威:M 计数无法初始化
+        //   服务端 SurvivalGameEngine.js getFullState 末尾 emit；缺失时 supporters=null / supporterCount=0
+        public SupporterStateEntry[] supporters;
+        public int                   supporterCount;
+    }
+
+    /// <summary>🔴 audit-r45 GAP-D45-06：助威者断线重连快照（embedded in SurvivalGameStateData.supporters[]）。
+    /// 服务端 _supporters Map 序列化输出；客户端 SupporterTopBarUI 据 supporterCount 刷新计数。</summary>
+    [Serializable]
+    public class SupporterStateEntry
+    {
+        public string playerId;
+        public string playerName;
+        public long   joinedAt;       // Unix ms（30s 冷却倒计时锚点）
+        public int    totalContrib;   // 累计贡献值（含降级前快照，§33.9 weekly_ranking 合并源）
     }
 
     /// <summary>🆕 §19.1 P0-B3：矿工运行态（embedded in SurvivalGameStateData.workers[]）
@@ -1799,7 +1815,7 @@ namespace DrscfZ.Survival
         public int    seasonId;            // 仅 applyAt=next_season 时非 0
     }
 
-    /// <summary>§30.3 阶8 矿工护盾触发（type=worker_shield_activated，S→C）。
+    /// <summary>§30.3 阶9 矿工护盾触发（type=worker_shield_activated，S→C）。
     /// 服务端在矿工 HP=0 但消耗 _invincibleShield 抵消致命伤时广播；客户端 5s 染蓝 tint + "无敌" 气泡。
     /// 字段对齐 SurvivalGameEngine.js:4388。</summary>
     [Serializable]

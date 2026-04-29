@@ -53,8 +53,10 @@ namespace DrscfZ.UI
             if (_subscribed) return;
             var sgm = SurvivalGameManager.Instance;
             if (sgm == null) return;
-            sgm.OnSupporterJoined   += HandleSupporterJoined;
-            sgm.OnSupporterPromoted += HandleSupporterPromoted;
+            sgm.OnSupporterJoined    += HandleSupporterJoined;
+            sgm.OnSupporterPromoted  += HandleSupporterPromoted;
+            // 🔴 audit-r45 GAP-D45-06：断线重连/冷启动时 survival_game_state 推送 supporterCount，避免计数滞留
+            sgm.OnSupporterCountSync += HandleSupporterCountSync;
             _subscribed = true;
         }
 
@@ -64,10 +66,18 @@ namespace DrscfZ.UI
             var sgm = SurvivalGameManager.Instance;
             if (sgm != null)
             {
-                sgm.OnSupporterJoined   -= HandleSupporterJoined;
-                sgm.OnSupporterPromoted -= HandleSupporterPromoted;
+                sgm.OnSupporterJoined    -= HandleSupporterJoined;
+                sgm.OnSupporterPromoted  -= HandleSupporterPromoted;
+                sgm.OnSupporterCountSync -= HandleSupporterCountSync;
             }
             _subscribed = false;
+        }
+
+        // 🔴 audit-r45 GAP-D45-06：快照同步回调（重连/冷启动）
+        private void HandleSupporterCountSync(int count)
+        {
+            _supporterCount = count;
+            Refresh();
         }
 
         // ── 事件回调 ──────────────────────────────────────────────────────

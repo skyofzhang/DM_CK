@@ -145,27 +145,13 @@ class TribeWarSession {
 
     const attackerName = this.attacker.streamerName || this.attacker.roomId;
 
-    // ── 广播客户端 monster_wave（远征怪走 SpawnTop）──
-    try {
-      this.defender.broadcast({
-        type: 'monster_wave',
-        timestamp: Date.now(),
-        data: {
-          waveIndex: 9800,                  // 远征怪专用 waveIndex（与普通/elite_raid 区分）
-          day:       defEngine.currentDay,
-          monsterId: 'tribe_war',
-          monsterType: 'tribe_war',
-          count,
-          spawnSide: 'top',
-          bypassCap: false,                 // 远征怪占名额（策划案 §35.4）
-          tribeWarSessionId: this.id,
-          attackerRoomId: this.attacker.roomId,
-          attackerStreamerName: attackerName,
-        },
-      });
-    } catch (e) {
-      console.warn(`[TribeWarSession:${this.id}] monster_wave broadcast error: ${e.message}`);
-    }
+    // 🔴 audit-r45 GAP-D45-01：原同函数内同时 broadcast `monster_wave` + `tribe_war_expedition_incoming`，
+    //   导致客户端 spawn 2*count 只怪：count 只灰怪（monster_wave 走 SpawnBatch 旧路径）+ count 只红色远征怪
+    //   （tribe_war_expedition_incoming → MonsterWaveSpawner.SpawnTribeWarExpedition）。
+    //   灰怪在客户端 _activeMonsters 但服务端 _activeMonsters 中无对应实例 → 无 monster_died 同步 → 灰怪永不死，
+    //   持续撞墙/攻矿工成为"幽灵无效怪"，污染游戏体验。**audit 史最大未发现 MAJOR**
+    //   修复：删除冗余的 monster_wave broadcast，让客户端只走 tribe_war_expedition_incoming 单一路径
+    //   （SpawnTribeWarExpedition 渲染红色远征怪，attackerName 作为头顶名字 MVP 占位由 §35.4 GAP-D45-04 后续补完）。
 
     // ── 攻击方/防守方协议推送 ──
     try {
