@@ -119,6 +119,8 @@ namespace DrscfZ.Systems
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
+            if (transform.parent != null)
+                transform.SetParent(null, true);
             DontDestroyOnLoad(gameObject);
 
             // 确保有AudioSource

@@ -128,6 +128,8 @@ namespace DrscfZ.Core
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
+            if (transform.parent != null)
+                transform.SetParent(null, true);
             DontDestroyOnLoad(gameObject);
 
             // 从 GameConfig 加载服务器配置（覆盖 Inspector 默认值）
