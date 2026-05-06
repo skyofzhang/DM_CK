@@ -136,10 +136,15 @@ class TribeWarSession {
     const cfg = this._getDefenderWaveConfig();
     const baseHp  = (cfg && cfg.normal && cfg.normal.hp)  || 30;
     const baseAtk = (cfg && cfg.normal && cfg.normal.atk) || 3;
-    const hpMult  = (defEngine._monsterHpMult  || 1.0)
-      * (defEngine._dynamicHpMult || 1.0)
+    // §14 v1.27：废止 _monsterHpMult 后链 = _dynamicHpMult × _themeHpMult × _themeMonsterHpMult × _earlyDayMult(defender.fortressDay)
+    //   远征怪强度跟随防守方 fortressDay 渐进保护曲线，避免 D1-2 被 strong attacker 团灭
+    const _earlyMultExp = (typeof defEngine._getEarlyDayMult === 'function')
+      ? defEngine._getEarlyDayMult(defEngine.fortressDay)
+      : 1.0;
+    const hpMult  = (defEngine._dynamicHpMult || 1.0)
       * (defEngine._themeHpMult || 1.0)
-      * (defEngine._themeMonsterHpMult || 1.0);
+      * (defEngine._themeMonsterHpMult || 1.0)
+      * _earlyMultExp;
     // 🔴 audit-r43 GAP-E43-05：远征怪 ATK 应用 _themeMonsterAtkMult（与防守方普通怪 ATK 一致 — SurvivalGameEngine.js:5046）
     //   原 baseAtk 直接 round 未应用主题倍率 → polar_night night modifier 下普通怪 ATK ×1.2 但远征怪 ATK 不变
     //   修复：补 atkMult 与 hpMult 同结构（_themeMonsterAtkMult 默认 1.0，仅特殊主题修改）
