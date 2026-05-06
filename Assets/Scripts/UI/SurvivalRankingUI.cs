@@ -378,7 +378,7 @@ namespace DrscfZ.UI
                     if (t != null && font != null) t.font = font;
 
                 // audit-r5 §13.3 v1.26 字段：maxFortressDay / totalCycles / streamerKingTitle
-                // （旧 maxDays / totalWins / totalGames / maxDifficulty 弃用，服务端 v1.26 已不写）
+                // （旧 maxDays / totalWins / totalGames 弃用，服务端 v1.26 已不写；v1.27 §14 maxDifficulty 已删除）
                 string info = $"堡垒 D{entry.maxFortressDay} · 第{entry.totalCycles}局";
 
                 // rank=1 且有堡垒之王称号 → 金色富文本前缀
@@ -496,15 +496,7 @@ namespace DrscfZ.UI
             return name.Length <= maxLen ? name : name.Substring(0, maxLen) + "..";
         }
 
-        private string TranslateDifficulty(string diff)
-        {
-            switch (diff)
-            {
-                case "hard": return "困难";
-                case "hell": return "地狱";
-                default:     return "普通";
-            }
-        }
+        // v1.27 §14 难度系统废止：TranslateDifficulty 已删除（无调用方）
 
         private string FormatSubtitle(string week, long resetAtMs)
         {

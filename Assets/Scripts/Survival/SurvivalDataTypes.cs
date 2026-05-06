@@ -226,14 +226,7 @@ namespace DrscfZ.Survival
         public EngagementEntryData[] entries;
     }
 
-    /// <summary>🆕 §34 Layer 3 组 D（E9）周期/赛季间难度切换 —— 仅主播可发（type=change_difficulty C→S）
-    /// 恢复期第一个白天 / 赛季切换时展示按钮，点击后由 E9 UI 收集选择后发送。</summary>
-    [Serializable]
-    public class ChangeDifficultyData
-    {
-        public string difficulty;  // "easy" | "normal" | "hard"
-        public string applyAt;     // "next_night" | "next_season"
-    }
+    // v1.27 §14 / §34.4 E9 废止：ChangeDifficultyData 已删除（difficulty 三档系统不再存在）
 
     /// <summary>单只怪物元数据（🆕 §31 多样性系统：monster_wave.monsters[] 数组元素）。
     /// 字段顺序严格对齐服务端广播（monsterId/type/variant/hp/speed）。</summary>
@@ -1032,7 +1025,7 @@ namespace DrscfZ.Survival
     /// <summary>主播排行榜单条记录（v1.26 重构，audit-r4 补齐客户端字段）
     /// 服务端 StreamerRankingStore 已升至 v1.26（maxFortressDay / totalCycles / streamerKingTitle），
     /// 客户端需同步字段才能显示"堡垒之王"称号 + 总周期数统计。
-    /// v1.25 字段（maxDays/totalWins/totalGames/score/maxDifficulty）保留向下兼容。</summary>
+    /// v1.25 字段（maxDays/totalWins/totalGames/score）保留向下兼容；v1.27 §14 难度系统废止，maxDifficulty 已删除。</summary>
     [Serializable]
     public class StreamerRankingEntry
     {
@@ -1046,11 +1039,11 @@ namespace DrscfZ.Survival
         public string streamerKingTitle; // "堡垒之王" / "" (Top1 持有者)
 
         // v1.25 兼容字段（服务端 addGameResult 向下写入）
-        public string maxDifficulty;     // "normal" | "hard" | "hell"
+        // v1.27 §14 废止：maxDifficulty 已删除（difficulty 三档系统不再存在）
         public int    maxDays;           // 最多坚持天数（最佳完成局）
         public int    totalWins;         // 总胜场数
         public int    totalGames;        // 总场次
-        public int    score;             // 排名得分（difficulty_weight × maxDays）
+        public int    score;             // 排名得分（v1.25 含 difficulty_weight × maxDays，v1.27 后纯 maxDays 系数）
     }
 
     /// <summary>主播排行榜响应（type=streamer_ranking）</summary>
@@ -1893,17 +1886,7 @@ namespace DrscfZ.Survival
 
     // ==================== audit-r5 客户端补齐 Batch ====================
 
-    /// <summary>§19 / §34.4 E9 难度变更生效（type=difficulty_changed，S→C）。
-    /// 服务端在 _consumePendingDifficultyOnNight / onSeasonStart 消费 _pendingDifficulty 后广播。
-    /// 字段对齐 SurvivalGameEngine.js:7099 / 7119。</summary>
-    [Serializable]
-    public class DifficultyChangedData
-    {
-        public string difficulty;          // 请求的原始难度："easy" / "normal" / "hard" / "nightmare"
-        public string appliedDifficulty;   // 实际应用（nightmare → hard 回退）
-        public string applyAt;             // "next_night" | "next_season"
-        public int    seasonId;            // 仅 applyAt=next_season 时非 0
-    }
+    // v1.27 §14 / §19 / §34.4 E9 废止：DifficultyChangedData 已删除（difficulty_changed 协议不再存在）
 
     /// <summary>§30.3 阶9 矿工护盾触发（type=worker_shield_activated，S→C）。
     /// 服务端在矿工 HP=0 但消耗 _invincibleShield 抵消致命伤时广播；客户端 5s 染蓝 tint + "无敌" 气泡。
@@ -1932,27 +1915,7 @@ namespace DrscfZ.Survival
 
     // ==================== audit-r6 客户端补齐 Batch ====================
 
-    /// <summary>§34.4 E9 主播切换难度失败（type=change_difficulty_failed，S→C，单播）。
-    /// r13 修复后服务端实发：not_broadcaster / invalid_difficulty / invalid_args
-    /// 旧 reason（wrong_phase / unknown_difficulty / season_frozen）保留向后兼容（客户端 switch 仍含），但服务端不再发。
-    /// 字段对齐 SurvivalGameEngine.js:7561/7578/7586（r13 audit-r13 GAP-A2 修复）。</summary>
-    [Serializable]
-    public class ChangeDifficultyFailedData
-    {
-        public string   reason;             // not_broadcaster / invalid_difficulty / invalid_args（r13）
-        public int      unlockDay;          // 用于 season_frozen 兜底回答（0 表示无）
-        public string[] supported;          // invalid_difficulty 时附带支持列表
-    }
-
-    /// <summary>§34.4 E9 主播切换难度已排队（type=change_difficulty_accepted，S→C，单播）。
-    /// 字段对齐 SurvivalGameEngine.js:7593-7595。</summary>
-    [Serializable]
-    public class ChangeDifficultyAcceptedData
-    {
-        public string difficulty;   // 请求值
-        // r14 GAP-B-MINOR-01：原 long 类型反序列化字符串失败（SurvivalGameEngine.js:7593-7595 实发 'next_night' | 'next_season'）
-        public string applyAt;      // "next_night" | "next_season"（生效时机）
-    }
+    // v1.27 §14 / §34.4 E9 废止：ChangeDifficultyFailedData / ChangeDifficultyAcceptedData 已删除（change_difficulty_failed / change_difficulty_accepted 协议不再存在）
 
     /// <summary>🔴 audit-r26 GAP-E26-01 / GAP-A26-04：r25 GAP-E25-06 半成品闭环 — entrance_spark 装备时服务端 broadcast。
     /// 服务端 SurvivalGameEngine.js:9572-9582 实装 emit；客户端订阅 OnEntranceSparkTriggered 触发入场特效（VIPAnnouncementUI 路径或独立 EntranceFXUI）。</summary>

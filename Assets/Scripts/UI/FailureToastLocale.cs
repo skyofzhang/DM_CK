@@ -28,7 +28,7 @@ namespace DrscfZ.UI {
             { "not_broadcaster",        "仅主播可操作" },
             { "supporter_not_allowed",  "助威者不可执行此操作" },
             { "invalid_args",           "参数错误" },
-            { "invalid_difficulty",     "难度参数无效" },
+            // v1.27 §14 / §34.4 E9 废止：invalid_difficulty 映射已删除（change_difficulty_failed 协议不再存在）
             { "too_frequent",           "操作过于频繁,请稍候" },
             { "timeout",                "操作超时" },
             { "duplicate",              "重复操作" },

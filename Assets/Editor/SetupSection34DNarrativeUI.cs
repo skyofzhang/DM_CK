@@ -18,8 +18,9 @@ namespace DrscfZ.Editor
     ///   Canvas/NightReportPanel                            (E5b 全屏多行夜战报告 + NightReportUI)
     ///   Canvas/GameUIPanel/EngagementReminder              (E8 短暂浮层 + EngagementReminderUI)
     ///   Canvas/BroadcasterPanel/StreamerPromptCard         (E5a 右上角话术卡 + StreamerPromptUI)
-    ///   Canvas/BroadcasterPanel/DifficultyChangeButton     (E9 恢复期首日切难度按钮 + DifficultyChangeButtonUI)
     ///   SurvivalLightingController                         (E6 光照控制器 + SurvivalLightingController)
+    ///
+    /// v1.27 §14 / §34.4 E9 废止：DifficultyChangeButton 构建已删除（difficulty 三档系统不再存在）
     ///
     /// 兜底策略（对齐 docs/multi_agent_workflow.md 决策 6 "MCP 优先 + Console 监控"）：
     ///   缺 GameObject → 占位建出（不跳过）
@@ -77,13 +78,12 @@ namespace DrscfZ.Editor
             if (chineseFont == null)
                 Debug.LogWarning($"[Setup34D] 未能加载中文字体: {ChineseFontPath}（TMP 可能显示方块）");
 
-            // ---- 5. 构建 7 个模块 ----
+            // ---- 5. 构建 6 个模块 ----（v1.27 §14 / §34.4 E9 废止：DifficultyChangeButton 已删除）
             BuildChapterAnnouncement (canvas.transform,       chineseFont);
             BuildNightModifierBanner (canvas.transform,       chineseFont);
             BuildNightReportPanel    (canvas.transform,       chineseFont);
             BuildEngagementReminder  (gameUIPanel.transform,  chineseFont);
             BuildStreamerPromptCard  (broadcasterPanel.transform, chineseFont);
-            BuildDifficultyChangeButton(broadcasterPanel.transform, chineseFont);
             BuildLightingController();
 
             // ---- 6. 标脏场景 ----
@@ -439,143 +439,8 @@ namespace DrscfZ.Editor
         }
 
         // ==================== E9 DifficultyChangeButton ====================
-
-        private static void BuildDifficultyChangeButton(Transform broadcasterPanel, TMP_FontAsset font)
-        {
-            var host = GetOrCreateChild(broadcasterPanel, "DifficultyChangeButton", () =>
-            {
-                var g  = new GameObject("DifficultyChangeButton");
-                var rt = g.AddComponent<RectTransform>();
-                g.transform.SetParent(broadcasterPanel, false);
-                // 左下角（避开 §24.5 左上 DecisionHUD + §34D 右上 StreamerPromptCard）
-                rt.anchorMin = new Vector2(0f, 0f);
-                rt.anchorMax = new Vector2(0f, 0f);
-                rt.pivot     = new Vector2(0f, 0f);
-                rt.anchoredPosition = new Vector2(10f, 160f);
-                rt.sizeDelta = new Vector2(240f, 320f);  // 包括主按钮 + 3 选项
-                return g;
-            });
-
-            // ButtonRoot 主按钮根（subnode，恢复期首日 SetActive(true)）
-            var buttonRoot = GetOrCreateChild(host.transform, "ButtonRoot", () =>
-            {
-                var g  = new GameObject("ButtonRoot");
-                var rt = g.AddComponent<RectTransform>();
-                g.transform.SetParent(host.transform, false);
-                rt.anchorMin = Vector2.zero;
-                rt.anchorMax = Vector2.one;
-                rt.offsetMin = Vector2.zero;
-                rt.offsetMax = Vector2.zero;
-                return g;
-            });
-
-            // 主按钮（顶部）
-            var mainBtnGO = GetOrCreateChild(buttonRoot.transform, "MainButton", () =>
-            {
-                var g  = new GameObject("MainButton");
-                var rt = g.AddComponent<RectTransform>();
-                g.transform.SetParent(buttonRoot.transform, false);
-                rt.anchorMin = new Vector2(0f, 1f);
-                rt.anchorMax = new Vector2(1f, 1f);
-                rt.pivot     = new Vector2(0.5f, 1f);
-                rt.anchoredPosition = new Vector2(0f, 0f);
-                rt.sizeDelta = new Vector2(0f, 60f);
-                return g;
-            });
-            var mainBtnImg = mainBtnGO.GetComponent<Image>();
-            if (mainBtnImg == null) mainBtnImg = mainBtnGO.AddComponent<Image>();
-            mainBtnImg.color         = new Color(0.35f, 0.55f, 0.85f, 0.95f);
-            mainBtnImg.raycastTarget = true;
-
-            var mainBtn = mainBtnGO.GetComponent<Button>();
-            if (mainBtn == null) mainBtn = mainBtnGO.AddComponent<Button>();
-
-            var mainLabelGO = CreateTMP(mainBtnGO.transform, "Label",
-                new Vector2(0f, 0f), new Vector2(1f, 1f),
-                new Vector2(8f, 4f), new Vector2(-8f, -4f),
-                22f, TextAlignmentOptions.Center, font);
-            var mainLabelTMP = mainLabelGO.GetComponent<TextMeshProUGUI>();
-            mainLabelTMP.text = "切换难度";
-            mainLabelTMP.fontStyle = FontStyles.Bold;
-            SetTMPColor(mainLabelTMP, Color.white);
-
-            // ChoicePanel（3 个难度选项，默认隐藏）
-            var choicePanel = GetOrCreateChild(buttonRoot.transform, "ChoicePanel", () =>
-            {
-                var g  = new GameObject("ChoicePanel");
-                var rt = g.AddComponent<RectTransform>();
-                g.transform.SetParent(buttonRoot.transform, false);
-                rt.anchorMin = new Vector2(0f, 1f);
-                rt.anchorMax = new Vector2(1f, 1f);
-                rt.pivot     = new Vector2(0.5f, 1f);
-                rt.anchoredPosition = new Vector2(0f, -68f);   // 主按钮下方
-                rt.sizeDelta = new Vector2(0f, 228f);          // 3 个按钮 × 68 + spacing
-                return g;
-            });
-            var choiceBg = choicePanel.GetComponent<Image>();
-            if (choiceBg == null) choiceBg = choicePanel.AddComponent<Image>();
-            choiceBg.color         = new Color(0f, 0f, 0f, 0.85f);
-            choiceBg.raycastTarget = true;
-
-            var easyBtn   = BuildChoiceButton(choicePanel.transform, "EasyButton",   "轻松",     0,   font);
-            var normalBtn = BuildChoiceButton(choicePanel.transform, "NormalButton", "困难",     76,  font);
-            var hardBtn   = BuildChoiceButton(choicePanel.transform, "HardButton",   "恐怖",     152, font);
-
-            // 默认隐藏
-            buttonRoot.SetActive(false);
-            choicePanel.SetActive(false);
-
-            var ui = host.GetComponent<DifficultyChangeButtonUI>();
-            if (ui == null) ui = host.AddComponent<DifficultyChangeButtonUI>();
-
-            var so = new SerializedObject(ui);
-            TryBind(so, "_buttonRoot",      buttonRoot);
-            TryBind(so, "_mainButton",      mainBtn);
-            TryBind(so, "_mainButtonLabel", mainLabelTMP);
-            TryBind(so, "_choicePanel",     choicePanel);
-            TryBind(so, "_easyBtn",         easyBtn);
-            TryBind(so, "_normalBtn",       normalBtn);
-            TryBind(so, "_hardBtn",         hardBtn);
-            so.ApplyModifiedPropertiesWithoutUndo();
-            EditorUtility.SetDirty(ui);
-
-            Debug.Log("[Setup34D] E9 DifficultyChangeButton 已挂 DifficultyChangeButtonUI + 字段绑定完成");
-        }
-
-        private static Button BuildChoiceButton(Transform parent, string name, string label, float yOffsetFromTop, TMP_FontAsset font)
-        {
-            var go = GetOrCreateChild(parent, name, () =>
-            {
-                var g  = new GameObject(name);
-                var rt = g.AddComponent<RectTransform>();
-                g.transform.SetParent(parent, false);
-                rt.anchorMin = new Vector2(0f, 1f);
-                rt.anchorMax = new Vector2(1f, 1f);
-                rt.pivot     = new Vector2(0.5f, 1f);
-                rt.anchoredPosition = new Vector2(0f, -8f - yOffsetFromTop);
-                rt.sizeDelta = new Vector2(-16f, 60f);
-                return g;
-            });
-
-            var img = go.GetComponent<Image>();
-            if (img == null) img = go.AddComponent<Image>();
-            img.color         = new Color(0.25f, 0.45f, 0.75f, 0.95f);
-            img.raycastTarget = true;
-
-            var btn = go.GetComponent<Button>();
-            if (btn == null) btn = go.AddComponent<Button>();
-
-            var labelGO = CreateTMP(go.transform, "Label",
-                new Vector2(0f, 0f), new Vector2(1f, 1f),
-                new Vector2(8f, 4f), new Vector2(-8f, -4f),
-                24f, TextAlignmentOptions.Center, font);
-            var labelTMP = labelGO.GetComponent<TextMeshProUGUI>();
-            labelTMP.text = label;
-            labelTMP.fontStyle = FontStyles.Bold;
-            SetTMPColor(labelTMP, Color.white);
-
-            return btn;
-        }
+        // v1.27 §14 / §34.4 E9 废止：BuildDifficultyChangeButton / BuildChoiceButton 已删除
+        // （DifficultyChangeButtonUI / DifficultySelectUI 类已删除，difficulty 三档系统不再存在）
 
         // ==================== E6 SurvivalLightingController ====================
 

@@ -44,12 +44,12 @@ namespace DrscfZ.UI
         private void OnEnable()
         {
             // 🆕 P0-B9：切到 SurvivalGameManager（永续模式）；原 GameManager 是旧角力游戏的遗留单例
+            // v1.27 §14 难度系统废止：不再订阅 OnDifficultySet
             var sgm = SurvivalGameManager.Instance;
             if (sgm != null)
             {
                 sgm.OnStateChanged += HandleSurvivalStateChanged;
                 sgm.OnGameEnded    += HandleSurvivalGameEnded;
-                sgm.OnDifficultySet += HandleDifficultySet;
             }
         }
 
@@ -116,12 +116,12 @@ namespace DrscfZ.UI
 
         private void OnDisable()
         {
+            // v1.27 §14 难度系统废止：不再退订 OnDifficultySet
             var sgm = SurvivalGameManager.Instance;
             if (sgm != null)
             {
                 sgm.OnStateChanged  -= HandleSurvivalStateChanged;
                 sgm.OnGameEnded     -= HandleSurvivalGameEnded;
-                sgm.OnDifficultySet -= HandleDifficultySet;
             }
         }
 
@@ -185,15 +185,7 @@ namespace DrscfZ.UI
             ShowAnnouncement(main, sub, color, 4.0f);
         }
 
-        /// <summary>P0-B9：难度选择确认。</summary>
-        private void HandleDifficultySet(SurvivalGameManager.DifficultyLevel d)
-        {
-            string label = d == SurvivalGameManager.DifficultyLevel.Easy   ? "简单"
-                         : d == SurvivalGameManager.DifficultyLevel.Normal ? "普通"
-                         : d == SurvivalGameManager.DifficultyLevel.Hard   ? "困难"
-                         : "未设置";
-            ShowAnnouncement("难度已设置", label, new Color(0.8f, 0.9f, 1f), 1.5f);
-        }
+        // v1.27 §14 难度系统废止：HandleDifficultySet 已删除（DifficultyLevel enum 不再存在）
 
         private static string LocalizeReason(string reason)
         {
