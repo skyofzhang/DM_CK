@@ -8,13 +8,15 @@ using DrscfZ.Survival;
 namespace DrscfZ.UI
 {
     /// <summary>
-    /// 战场等待覆盖层（Waiting 状态 + 难度已选择 时可见）
+    /// 战场等待覆盖层（Waiting 状态时可见）
     ///
-    /// 显示条件：已连接 + SurvivalState.Waiting + DifficultyLevel != None
+    /// 显示条件：已连接 + SurvivalState.Waiting
     /// 功能：
     ///   - 全屏半透明遮罩，屏幕正中央显示开始挑战按钮
     ///   - 显示已加入玩家数量
     ///   - [开始挑战] 按钮 → 3秒倒计时 → 启动游戏逻辑
+    ///
+    /// v1.27 §14 / §17.5 难度系统废止：取消 DifficultyLevel != None 显示条件，单一 Waiting + 已连接即可显示
     ///
     /// AI准则 #7：挂在 Canvas（始终激活对象）上
     /// AI准则 #2：面板在 Scene 中预创建，初始 inactive，通过 SetActive 控制显隐
@@ -74,12 +76,12 @@ namespace DrscfZ.UI
             }
 
             // 订阅游戏状态事件
+            // v1.27 §14 难度系统废止：不再订阅 OnDifficultySet
             var sgm = SurvivalGameManager.Instance;
             if (sgm != null)
             {
                 sgm.OnStateChanged  += HandleStateChanged;
                 sgm.OnPlayerJoined  += OnPlayerJoined;
-                sgm.OnDifficultySet += HandleDifficultySet;
             }
 
             // 初始化
@@ -102,13 +104,11 @@ namespace DrscfZ.UI
             {
                 sgm.OnStateChanged  -= HandleStateChanged;
                 sgm.OnPlayerJoined  -= OnPlayerJoined;
-                sgm.OnDifficultySet -= HandleDifficultySet;
             }
         }
 
         private void HandleDisconnected(string reason) => HidePanel();
         private void HandleStateChanged(SurvivalGameManager.SurvivalState state) => RefreshVisibility();
-        private void HandleDifficultySet(SurvivalGameManager.DifficultyLevel level) => RefreshVisibility();
 
         // ==================== 显隐逻辑 ====================
 
@@ -117,15 +117,12 @@ namespace DrscfZ.UI
             var net = NetworkManager.Instance;
             var sgm = SurvivalGameManager.Instance;
 
-            bool isConnected       = net != null && net.IsConnected;
-            var  state             = sgm?.State ?? SurvivalGameManager.SurvivalState.Idle;
-            bool difficultyChosen  = sgm != null &&
-                                     sgm.SelectedDifficulty != SurvivalGameManager.DifficultyLevel.None;
+            bool isConnected = net != null && net.IsConnected;
+            var  state       = sgm?.State ?? SurvivalGameManager.SurvivalState.Idle;
 
-            // 只在 Waiting + 已选难度 时显示
+            // v1.27 §14 / §17.5 难度系统废止：单一 Waiting + 已连接即显示（不再需要 SelectedDifficulty 检查）
             bool showPanel = isConnected &&
-                             state == SurvivalGameManager.SurvivalState.Waiting &&
-                             difficultyChosen;
+                             state == SurvivalGameManager.SurvivalState.Waiting;
 
             if (showPanel)
                 ShowPanel();

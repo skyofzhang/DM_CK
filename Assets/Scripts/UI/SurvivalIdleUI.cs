@@ -13,6 +13,7 @@ namespace DrscfZ.UI
     /// - Idle：尚未建立会话，按钮文字"▶ 开始游戏"
     /// - Waiting 状态不再显示此面板，改由 PreGameBannerUI 接管
     ///   （让 3D 战场可见，玩家加入后主播点"开始挑战"才启动游戏逻辑）
+    /// v1.27 §14 难度系统废止：开始按钮直接调 RequestStartGame()，不再经过 Waiting + 难度选择。
     /// </summary>
     public class SurvivalIdleUI : MonoBehaviour
     {
@@ -146,14 +147,11 @@ namespace DrscfZ.UI
 
             // 防止重复点击
             if (_startBtn != null) _startBtn.interactable = false;
-            if (_statusText != null) _statusText.text = "进入战场，请选择难度...";
+            if (_statusText != null) _statusText.text = "进入战场...";
 
-            // 进入 Waiting 阶段（不直接发 start_game！）
-            // Waiting → DifficultySelectUI(选难度) → PreGameBannerUI(开始挑战) → RequestStartGame()
-            sgm.RequestEnterWaiting();
-            // 用户主动点击才允许难度选择面板弹出，防止自动连接后闪现
-            DifficultySelectUI.Instance?.ShowByUserAction();
-            Debug.Log("[SurvivalIdleUI] 切换 Waiting，等待主播选择难度后点击开始挑战");
+            // v1.27 §14 难度系统废止：直接发 start_game，不再走 Waiting → DifficultySelect 中间步
+            sgm.RequestStartGame();
+            Debug.Log("[SurvivalIdleUI] 直接发起 start_game");
         }
 
         private void OnRankingClicked()

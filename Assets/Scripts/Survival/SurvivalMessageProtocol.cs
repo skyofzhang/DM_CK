@@ -169,7 +169,7 @@ namespace DrscfZ.Survival
         public const string StreamerPrompt      = "streamer_prompt";      // S→C：E5a 智能提词器（仅主播可见）
         public const string NightReport         = "night_report";         // S→C：E5b 夜战报告（夜→昼转换 2.5s）
         public const string EngagementReminder  = "engagement_reminder";  // S→C：E8 参与感唤回（每 5 分钟对贡献>0 玩家推送）
-        public const string ChangeDifficulty    = "change_difficulty";    // C→S：E9 周期/赛季间难度切换（仅主播）
+        // v1.27 §14 / §34.4 E9 废止：ChangeDifficulty 常量已删除（change_difficulty 协议不再存在）
 
         // ----- §34 Layer 2 组 B 数据流可视化（🆕 v1.27） -----
         // random_event 沿用 §2 "random_event" 常量；B3 仅扩展 eventId 枚举（前端 fallback 兜底）。
@@ -199,13 +199,12 @@ namespace DrscfZ.Survival
         public const string WaitingPhaseEnded   = "waiting_phase_ended";   // S→C：准备窗口结束（兜底 UI 隐藏）
 
         // ----- audit-r5 客户端补齐（🆕 v1.27+） -----
-        public const string DifficultyChanged       = "difficulty_changed";        // S→C：§19/§34.4 E9 难度已应用（next_night/next_season）
+        // v1.27 §14 / §19 / §34.4 E9 废止：DifficultyChanged 常量已删除
         public const string WorkerShieldActivated   = "worker_shield_activated";   // S→C：§30.3 阶9 矿工 5s 护盾触发视觉反馈（r45 GAP-C45-03 注释失真修正）
         public const string FairyWandApplied        = "fairy_wand_applied";        // S→C：§34 B8 仙女棒累计光点（每次送都广播，含 capped）
 
         // ----- audit-r6 客户端补齐（🆕 v1.27+） -----
-        public const string ChangeDifficultyFailed   = "change_difficulty_failed";   // S→C：§34.4 E9 切换难度失败（not_broadcaster/wrong_phase/unknown_difficulty/season_frozen）
-        public const string ChangeDifficultyAccepted = "change_difficulty_accepted"; // S→C：§34.4 E9 切换难度排队成功
+        // v1.27 §14 / §34.4 E9 废止：ChangeDifficultyFailed / ChangeDifficultyAccepted 常量已删除
         public const string DailyTierDecay           = "daily_tier_decay";           // S→C：§30.4 每日不活跃玩家等级衰减 ×0.95
         public const string GiftSkinApplied          = "gift_skin_applied";          // S→C：§30.7 T4/T5/T6 限时皮肤激活(G01/G02/G03)
         public const string GiftSkinExpired          = "gift_skin_expired";          // S→C：§30.7 限时皮肤到期（昼夜切换结束）
