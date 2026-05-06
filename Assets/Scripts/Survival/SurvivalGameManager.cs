@@ -35,9 +35,7 @@ namespace DrscfZ.Survival
         [SerializeField] private SurvivalState _state = SurvivalState.Idle;
         public SurvivalState State => _state;
 
-        // 难度系统
-        public enum DifficultyLevel { None = 0, Easy = 1, Normal = 2, Hard = 3 }
-        public DifficultyLevel SelectedDifficulty { get; private set; } = DifficultyLevel.None;
+        // 难度系统已废止（v1.27 §14 / §17.5 / §34.4 E9 / §19）—— 不再支持 difficulty 三档选择
 
         // 加载方向（true=进入游戏，false=退出到大厅）
         public bool IsEnteringScene { get; private set; }
@@ -61,7 +59,7 @@ namespace DrscfZ.Survival
 
         // 事件（UI订阅）
         public event Action<SurvivalState> OnStateChanged;
-        public event Action<DifficultyLevel> OnDifficultySet;
+        // v1.27 §14 难度系统废止：OnDifficultySet 事件已删除
         public event Action<WorkCommandData> OnWorkCommand;       // 工作指令 → WorkerManager
         public event Action<SurvivalGiftData> OnGiftReceived;    // 礼物效果
         public event Action<SurvivalPlayerJoinedData> OnPlayerJoined;
@@ -219,13 +217,12 @@ namespace DrscfZ.Survival
         public event Action<FairyWandMaxedData> OnFairyWandMaxed;       // B8 仙女棒满级单播（+100% 满级）
 
         // ----- audit-r5 客户端补齐（🆕 v1.27+） -----
-        public event Action<DifficultyChangedData>     OnDifficultyChanged;     // §19/§34.4 E9 难度生效广播
+        // v1.27 §14 / §19 / §34.4 E9 废止：OnDifficultyChanged 事件已删除（difficulty 三档系统不再存在）
         public event Action<WorkerShieldActivatedData> OnWorkerShieldActivated; // §30.3 阶9 护盾触发视效（r45 GAP-C45-03 注释失真修正：实装 _damageWorker:4970 tier===9）
         public event Action<FairyWandAppliedData>      OnFairyWandApplied;      // §34 B8 仙女棒累计光点
 
         // audit-r6 客户端补齐
-        public event Action<ChangeDifficultyFailedData>   OnChangeDifficultyFailed;   // §34.4 E9 切换难度失败
-        public event Action<ChangeDifficultyAcceptedData> OnChangeDifficultyAccepted; // §34.4 E9 切换难度已排队
+        // v1.27 §34.4 E9 废止：OnChangeDifficultyFailed / OnChangeDifficultyAccepted 事件已删除
         public event Action<DailyTierDecayData>            OnDailyTierDecay;            // §30.4 每日不活跃等级衰减
         public event Action<GiftSkinAppliedData>           OnGiftSkinApplied;           // §30.7 T4/T5/T6 限时皮肤激活
         public event Action<GiftSkinExpiredData>           OnGiftSkinExpired;           // §30.7 限时皮肤到期
@@ -356,6 +353,7 @@ namespace DrscfZ.Survival
         private static void EnsureOptionalRuntimeUI()
         {
             EnsureRuntimeUI<UI.TopFloatingTextUI>("TopFloatingTextUI");
+            EnsureRuntimeUI<UI.FortressDayBadgeUI>("FortressDayBadgeUI");
             EnsureRuntimeUI<UI.TraderOfferUI>("TraderOfferUI");
             EnsureRuntimeUI<UI.TribeWarLobbyUI>("TribeWarLobbyUI");
             EnsureRuntimeUI<UI.TribeWarAttackStatusPanel>("TribeWarAttackStatusPanel");
@@ -1132,15 +1130,7 @@ namespace DrscfZ.Survival
                 //   TribeWarRetaliateData 类保留作 C→S 请求 targetRoomId 字段（damageMultiplier 字段 S→C only 已删）
 
                 // ----- audit-r5 客户端补齐（🆕 v1.27+） -----
-                // §19/§34.4 E9 难度生效：E9 UI / 跑马灯订阅
-                case SurvivalMessageProtocol.DifficultyChanged:
-                    var dc = JsonUtility.FromJson<DifficultyChangedData>(dataJson);
-                    if (dc != null)
-                    {
-                        Debug.Log($"[SGM] difficulty_changed: {dc.difficulty}→{dc.appliedDifficulty} applyAt={dc.applyAt}");
-                        OnDifficultyChanged?.Invoke(dc);
-                    }
-                    break;
+                // v1.27 §14 / §19 / §34.4 E9 废止：difficulty_changed 协议已删除（不再处理）
 
                 // §30.3 阶9 护盾触发：WorkerController 订阅播放 5s 蓝 tint + 无敌气泡（r45 GAP-C45-03 注释失真修正）
                 case SurvivalMessageProtocol.WorkerShieldActivated:
@@ -1164,39 +1154,7 @@ namespace DrscfZ.Survival
                     break;
 
                 // ----- audit-r6 客户端补齐（🆕 v1.27+） -----
-                // §34.4 E9 主播切换难度失败：r13 GAP-A2 — 对齐服务端实际 reason
-                //   服务端 SurvivalGameEngine.handleChangeDifficulty 实发：not_broadcaster / invalid_difficulty / invalid_args
-                //   旧 reason（wrong_phase/unknown_difficulty/season_frozen）保留作向后兼容
-                case SurvivalMessageProtocol.ChangeDifficultyFailed:
-                    var cdf = JsonUtility.FromJson<ChangeDifficultyFailedData>(dataJson);
-                    if (cdf != null)
-                    {
-                        Debug.LogWarning($"[SGM] change_difficulty_failed reason={cdf.reason}");
-                        OnChangeDifficultyFailed?.Invoke(cdf);
-                        var reasonText = cdf.reason switch
-                        {
-                            "not_broadcaster"     => "仅主播可切换难度",
-                            "invalid_difficulty"  => "难度无效（仅支持 easy / normal / hard）",
-                            "invalid_args"        => "参数错误（applyAt 仅支持 next_night / next_season）",
-                            // 向后兼容旧服务端版本
-                            "wrong_phase"         => "当前不可切换（非 day/night）",
-                            "unknown_difficulty"  => "未知难度",
-                            "season_frozen"       => $"赛季末冻结（第 {cdf.unlockDay} 天解锁）",
-                            _                      => "切换失败"
-                        };
-                        UI.HorizontalMarqueeUI.Instance?.AddMessage("系统", null, $"<color=#FF9999>切换难度失败：{reasonText}</color>");
-                    }
-                    break;
-
-                case SurvivalMessageProtocol.ChangeDifficultyAccepted:
-                    var cda = JsonUtility.FromJson<ChangeDifficultyAcceptedData>(dataJson);
-                    if (cda != null)
-                    {
-                        Debug.Log($"[SGM] change_difficulty_accepted {cda.difficulty} applyAt={cda.applyAt}");
-                        OnChangeDifficultyAccepted?.Invoke(cda);
-                        UI.HorizontalMarqueeUI.Instance?.AddMessage("系统", null, $"<color=#9EC5FF>难度切换已排队：{cda.difficulty}</color>");
-                    }
-                    break;
+                // v1.27 §14 / §34.4 E9 废止：change_difficulty_failed / change_difficulty_accepted 协议已删除（不再处理）
 
                 // §30.4 每日等级衰减：BarrageMessageUI / 名牌刷新
                 case SurvivalMessageProtocol.DailyTierDecay:
@@ -2140,27 +2098,19 @@ namespace DrscfZ.Survival
 
         /// <summary>
         /// 从大厅进入等待阶段（本地切换，不发服务器消息）。
-        /// Idle + 已连接 → Waiting，触发 DifficultySelectUI 显示。
+        /// Idle + 已连接 → Waiting。
+        /// v1.27 §14 难度系统废止：进入 Waiting 后由 PreGameBannerUI 直接接管，不再触发难度选择面板。
         /// </summary>
         public void RequestEnterWaiting()
         {
             if (_state != SurvivalState.Idle) return;
             ChangeState(SurvivalState.Waiting);
-            Debug.Log("[SGM] 进入等待阶段（Waiting），等待主播选择难度...");
+            Debug.Log("[SGM] 进入等待阶段（Waiting）");
         }
 
         /// <summary>
-        /// 主播选择难度：记录所选难度并通知 UI。
-        /// </summary>
-        public void SetDifficulty(DifficultyLevel level)
-        {
-            SelectedDifficulty = level;
-            OnDifficultySet?.Invoke(level);
-            Debug.Log($"[SGM] 难度已选择: {level}");
-        }
-
-        /// <summary>
-        /// 主播点击"▶ 开始玩法"：切 Loading → 发 start_game（含难度）→ 等服务器响应。
+        /// 主播点击"▶ 开始玩法"：切 Loading → 发 start_game → 等服务器响应。
+        /// v1.27 §14 难度系统废止：start_game 不再携带 difficulty 字段。
         /// </summary>
         public void RequestStartGame()
         {
@@ -2169,19 +2119,12 @@ namespace DrscfZ.Survival
             IsEnteringScene = true;
             ChangeState(SurvivalState.Loading);
 
-            // 将难度作为参数传给服务器
-            string diffStr = SelectedDifficulty switch
-            {
-                DifficultyLevel.Easy   => "easy",
-                DifficultyLevel.Hard   => "hard",
-                _                      => "normal"
-            };
             long ts = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             NetworkManager.Instance?.SendJson(
-                $"{{\"type\":\"start_game\",\"data\":{{\"difficulty\":\"{diffStr}\"}},\"timestamp\":{ts}}}");
+                $"{{\"type\":\"start_game\",\"data\":{{}},\"timestamp\":{ts}}}");
 
             _loadingTimeoutCoroutine = StartCoroutine(LoadingTimeout());
-            Debug.Log($"[SGM] State→Loading (entering)，已发送 start_game(difficulty={diffStr})，等待服务器确认...");
+            Debug.Log("[SGM] State→Loading (entering)，已发送 start_game，等待服务器确认...");
         }
 
         /// <summary>
@@ -2225,21 +2168,7 @@ namespace DrscfZ.Survival
             Debug.Log("[SGM] §17.15 disable_onboarding_for_session 已发送");
         }
 
-        /// <summary>🆕 §34.4 E9 周期/赛季间难度切换（仅主播发送）。服务端校验 isRoomCreator + applyAt 合法性。
-        /// <paramref name="difficulty"/>: "easy" | "normal" | "hard"
-        /// <paramref name="applyAt"/>: "next_night"（恢复期第一个白天）| "next_season"（赛季切换 30s 窗口）</summary>
-        public void SendChangeDifficulty(string difficulty, string applyAt)
-        {
-            if (string.IsNullOrEmpty(difficulty) || string.IsNullOrEmpty(applyAt))
-            {
-                Debug.LogWarning($"[SGM] SendChangeDifficulty 参数非法：difficulty={difficulty}, applyAt={applyAt}");
-                return;
-            }
-            long ts = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            string json = $"{{\"type\":\"change_difficulty\",\"data\":{{\"difficulty\":\"{difficulty}\",\"applyAt\":\"{applyAt}\"}},\"timestamp\":{ts}}}";
-            NetworkManager.Instance?.SendJson(json);
-            Debug.Log($"[SGM] §34.4 E9 change_difficulty 已发送 difficulty={difficulty} applyAt={applyAt}");
-        }
+        // v1.27 §14 / §34.4 E9 废止：SendChangeDifficulty 已删除（change_difficulty 协议不再存在）
 
         /// <summary>🆕 §34 B2 主播"立即重开"跳过结算（仅主播发送）。
         /// 服务端校验 isRoomCreator + 当前在结算期，校验通过后提前结束 30s 结算并进入 recovery。</summary>
@@ -2255,7 +2184,7 @@ namespace DrscfZ.Survival
         {
             _contributions.Clear();
             _lastSettlementHighlights = null;  // 🆕 §34 B2 清理缓存
-            SelectedDifficulty = DifficultyLevel.None;  // 重置难度选择，让 DifficultySelectUI 再次显示
+            // v1.27 §14 难度系统废止：不再重置 SelectedDifficulty
             resourceSystem?.Reset();
             cityGateSystem?.Reset();
             dayNightManager?.Reset();
@@ -2265,7 +2194,7 @@ namespace DrscfZ.Survival
             if (_returnToWaiting)
             {
                 _returnToWaiting = false;
-                ChangeState(SurvivalState.Waiting);     // 结算后回到等待阶段（可重新选难度）
+                ChangeState(SurvivalState.Waiting);     // 结算后回到等待阶段（v1.27 §14 难度系统废止）
             }
             else
             {
