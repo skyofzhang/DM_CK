@@ -87,6 +87,7 @@ namespace DrscfZ.Systems
         // r24 之前永远报 SFX not found warning；现 _sfxMap 字典 + LoadFromResources 都已注册，等待美术交付 mp3 即可生效。
         [SerializeField] private AudioClip sfxTierPromote;          // 矿工阶段晋升（含 SFX_LEGEND_PROMOTE 共用 clip）
         [SerializeField] private AudioClip sfxWorkerShieldActivate; // §30.3 阶9 护盾激活（r45 GAP-C45-03 修正阶号失真）
+        [SerializeField] private AudioClip sfxFrostPulse;           // §10.7 Lv6 寒冰冲击波
 
         [Header("Settings")]
         public int maxConcurrentSFX = 5;
@@ -199,6 +200,7 @@ namespace DrscfZ.Systems
                 // ⚠️ audit-r24 GAP-C24-02：补 _sfxMap 注册（之前 SFX_TIER_PROMOTE / SFX_LEGEND_PROMOTE / SFX_WORKER_SHIELD_ACTIVATE 永远报 SFX not found）
                 { "sfx_tier_promote",            sfxTierPromote },
                 { "sfx_worker_shield_activate",  sfxWorkerShieldActivate },
+                { "sfx_frost_pulse",             sfxFrostPulse },
             };
 
             _bgmMap = new Dictionary<string, AudioClip>
@@ -274,6 +276,12 @@ namespace DrscfZ.Systems
             // ⚠️ audit-r24 GAP-C24-02：补 LoadFromResources（资源文件待美术交付，目前 Resources.Load 返 null fallback 走 Inspector 默认）
             if (sfxTierPromote          == null) sfxTierPromote          = Resources.Load<AudioClip>("Audio/SFX/sfx_tier_promote");
             if (sfxWorkerShieldActivate == null) sfxWorkerShieldActivate = Resources.Load<AudioClip>("Audio/SFX/sfx_worker_shield_activate");
+            if (sfxFrostPulse           == null) sfxFrostPulse           = Resources.Load<AudioClip>("Audio/SFX/sfx_frost_pulse");
+
+            // 美术音频未交付时使用相近现有音效兜底，避免运行时 SFX not found。
+            if (sfxTierPromote          == null) sfxTierPromote          = sfxUpgrade ?? sfxRankUp ?? sfxUIToast;
+            if (sfxWorkerShieldActivate == null) sfxWorkerShieldActivate = sfxGiftT4 ?? sfxGateAlarm ?? sfxUIToast;
+            if (sfxFrostPulse           == null) sfxFrostPulse           = sfxGiftT4 ?? sfxNightStart ?? sfxMonsterHit;
         }
 
         // ==================== SFX ====================

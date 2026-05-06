@@ -21,6 +21,7 @@ const FeatureFlags = require('./FeatureFlags');
 const DAILY_FORTRESS_CAP_MAX = 150;                 // §36.5.1 每 dayKey 最多 +150 fortressDay
 const DAILY_RESET_HOUR_UTC8  = 5;                    // §36.5.1 UTC+8 05:00 日切
 const FORTRESS_NEWBIE_PROTECT_DAY = 10;              // §36.5 fortressDay ≤ 10 失败免罚
+const SETTLEMENT_RECOVERY_DELAY_MS = 33_000;         // §23.3 3s 失败冻结 + 30s 结算三屏
 
 // ==================== 怪物波次配置 ====================
 // 每天包含：
@@ -587,7 +588,7 @@ class SurvivalGameEngine {
 
     // 游戏状态
     // §16 v1.26 永续模式：状态机 idle | day | night | settlement | recovery
-    //   settlement (~30s) → recovery (120s，不生成新波次) → night(day+1)，无胜利终点（Fix A：8s→30s）
+    //   settlement (~33s) → recovery (120s，不生成新波次) → night(day+1)，无胜利终点（3s冻结+30s结算）
     this.state          = 'idle';
     this.currentDay     = 0;
     this.remainingTime  = 0;
@@ -888,7 +889,7 @@ class SurvivalGameEngine {
     //   _mostDramaticEvent: { type, desc, day } | null
     //                本局内最戏剧性事件（tension 暴跌 ≥65 / Boss 绝杀 <5HP / free_death_pass 触发）
     //   _overallClosestCall: { hpPct, day }  本局所有夜晚城门最低 HP 百分比（初值 1.0 不危险）
-    //   _settleTimerHandle: _enterSettlement 30s 倒计时句柄（可被 streamer_skip_settlement 跳过；Fix A：8s→30s）
+    //   _settleTimerHandle: _enterSettlement 33s 倒计时句柄（可被 streamer_skip_settlement 跳过）
     this._damageLeaderboard = {};
     this._bestRescue        = null;
     this._mostDramaticEvent = null;
@@ -1156,9 +1157,9 @@ class SurvivalGameEngine {
         if (pid) this._supporters.set(pid, data || {});
       }
     }
-    // _dailyBuildVoteUsed：对象 seasonDay → bool
+    // _dailyBuildVoteUsed：对象 seasonId:seasonDay → bool；兼容旧存档的 seasonDay → bool
     if (snap._dailyBuildVoteUsed && typeof snap._dailyBuildVoteUsed === 'object') {
-      this._dailyBuildVoteUsed = { ...snap._dailyBuildVoteUsed };
+      this._dailyBuildVoteUsed = this._normalizeDailyBuildVoteUsedKeys(snap._dailyBuildVoteUsed, snap);
     }
 
     // audit-r7 v4 §30.4：每日衰减元数据恢复
@@ -1209,13 +1210,34 @@ class SurvivalGameEngine {
     return getWaveConfig(day);
   }
 
+  _getCombatDay(preferredDay) {
+    const fd = Number(this.fortressDay);
+    if (Number.isFinite(fd) && fd > 0) return Math.max(1, Math.floor(fd));
+    const d = Number(preferredDay || this.currentDay || 1);
+    return Number.isFinite(d) && d > 0 ? Math.max(1, Math.floor(d)) : 1;
+  }
+
   // ==================== 对外接口 ====================
 
   /** 客户端请求开始（含难度参数）*/
   startGame(difficulty = 'normal') {
     if (this.state !== 'idle') return;
     this._applyDifficulty(difficulty);
-    this._enterDay(1);
+    // §36 GlobalClock 接管后，新房间必须贴合当前全服昼夜相位。
+    // 否则全服已是 night 时，新房间内部仍从 day 跑，客户端会看到 phase/state 错位。
+    const combatDay = this._getCombatDay(1);
+    if (this.globalClock && this.globalClock._phase === 'night') {
+      this._applyThemeRulesForNight();
+      this._enterNight(combatDay);
+      if (typeof this.globalClock.getPhaseRemainingSec === 'function') {
+        this.remainingTime = this.globalClock.getPhaseRemainingSec();
+      }
+      return;
+    }
+    this._enterDay(combatDay);
+    if (this.globalClock && typeof this.globalClock.getPhaseRemainingSec === 'function') {
+      this.remainingTime = this.globalClock.getPhaseRemainingSec();
+    }
   }
 
   /**
@@ -1775,24 +1797,8 @@ class SurvivalGameEngine {
     //   Set.has 判断确保每个 playerId 每局只广播一次
     //   audit-r12 GAP-D01：补 workerId 字段（策划案 §32.2.1 L4005 + §34 B7 L5145 协议规范，
     //                     客户端 NewbieHintUI/WorkerVisual 据此挂金色光柱到正确矿工）
-    if (playerId && cmd >= 1 && cmd <= 6 && !this._firstBarrageReceived.has(playerId)) {
-      this._firstBarrageReceived.add(playerId);
-      const wIdx = (typeof this._getWorkerIndex === 'function')
-        ? this._getWorkerIndex(playerId)
-        : -1;
-      this.broadcast({
-        type: 'first_barrage',
-        timestamp: Date.now(),
-        data: {
-          playerId,
-          playerName: playerName || playerId,
-          cmd,
-          // r14 GAP-B-MAJOR-03 后续：原 null 在 C# JsonUtility 反序列化为 int=0，与"绑定 worker 0"冲突；统一发整数 -1 sentinel
-          workerId: wIdx >= 0 ? wIdx : -1,
-        },
-      });
-      console.log(`[SurvivalEngine] first_barrage: ${playerName || playerId} cmd=${cmd} workerId=${wIdx}`);
-    }
+    const shouldBroadcastFirstBarrage =
+      !!(playerId && cmd >= 1 && cmd <= 6 && !this._firstBarrageReceived.has(playerId));
 
     // §33 助威模式分流：
     // - 已是助威者 → 走助威者分支（优先判断，避免 _trackContribution 污染后被误判为守护者）
@@ -1808,6 +1814,7 @@ class SurvivalGameEngine {
         }
         // 助威者 666 与守护者一致（效果本身就是全局的）→ 继续下方 666 分支
         // 助威者 `探`/`召回` 也放行到下方，由 _handleExpeditionSend 返回 supporter_not_allowed
+        if (shouldBroadcastFirstBarrage) this._broadcastFirstBarrage(playerId, playerName, cmd);
         if (content_trim !== '666' && !isExpeditionCmd) return;
       } else if (this.contributions[playerId] !== undefined) {
         // 已是正式守护者
@@ -1825,9 +1832,12 @@ class SurvivalGameEngine {
           this._handleSupporterComment(playerId, playerName, cmd);
         }
         // 同上：`探`/`召回` 放行到下方发 supporter_not_allowed
+        if (shouldBroadcastFirstBarrage) this._broadcastFirstBarrage(playerId, playerName, cmd);
         if (content_trim !== '666' && !isExpeditionCmd) return;
       }
     }
+
+    if (shouldBroadcastFirstBarrage) this._broadcastFirstBarrage(playerId, playerName, cmd);
 
     // §31.3 冻结矿工：cmd 1-4（工作）/ cmd 6（攻击）期间被冻结则静默丢弃
     //   保留 666 / 探 / 召回 的弹幕响应（这些不依赖矿工动作）
@@ -1908,7 +1918,11 @@ class SurvivalGameEngine {
       // 刷新（不叠加，取最新一次写入）；30s 绝对时间戳过期
       this._buzz666Bonus    = buzzVal;
       this._buzz666ExpireAt = Date.now() + 30000;
-      this._trackContribution(playerId, 2, 'barrage');
+      if (playerId && this._supporters.has(playerId)) {
+        this._trackSupporterContribution(playerId, 2, 'barrage');
+      } else {
+        this._trackContribution(playerId, 2, 'barrage');
+      }
       this._tribeWarAddEnergy(1);  // §35 攻击能量：666 弹幕 +1
       this.broadcast({ type: 'special_effect', timestamp: Date.now(), data: { effect: 'glow_all', duration: 3 } });
       console.log(`[SurvivalEngine] 666 bonus activated by ${playerName}, buzz666 +${Math.round((buzzVal-1)*100)}% for 30s (pill=${this._abilityPillBonus}×pill${this._abilityPillExpireAt > Date.now() ? 'active' : 'idle'})`);
@@ -2087,12 +2101,13 @@ class SurvivalGameEngine {
       console.log(`[SurvivalEngine] D1-D5 overflow ghost: pid=${playerId} giftId=${gift.id} score=${gift.score} → 仅累加 _lifetimeContrib（策划案 §33.4 line 4731-4732）`);
     } else {
       // 贡献值 = 礼物得分（策划案 §9）
-      this._trackContribution(playerId, gift.score, 'gift');
+      if (isSupporter) this._trackSupporterContribution(playerId, gift.score, 'gift');
+      else this._trackContribution(playerId, gift.score, 'gift');
     }
     // §35 Tribe War 攻击能量（策划案 §35.3）：T1=1 / T2=5 / T3=10 / T4=20 / T5=50 / T6=100
-    // 按 tier 映射（gift.tier 是 1~6）；兜底按 score 阈值
+    // 按 tier 映射（gift.tier 是 'T1'~'T6'，使用 giftTierNum 归一化）；兜底 +1
     const _tribeEnergyByTier = { 1: 1, 2: 5, 3: 10, 4: 20, 5: 50, 6: 100 };
-    this._tribeWarAddEnergy(_tribeEnergyByTier[gift.tier] || 1);
+    this._tribeWarAddEnergy(_tribeEnergyByTier[giftTierNum] || 1);
     // 积分池：礼物得分入池（§37 market 抬升 ×1.1）
     const _marketMult = this._buildings.has('market') ? 1.1 : 1.0;
     this.scorePool += gift.score * _marketMult;
@@ -2205,7 +2220,8 @@ class SurvivalGameEngine {
         this.broadcast({ type: 'gift_pause', timestamp: Date.now(), data: { duration: 3000 } });
         // T6 礼物联动：城门自动升级（不扣矿石，不计每日额度），并补送者 +100 贡献
         // §10.7 规则：gateLevel == 6 时跳过升级逻辑，但 +100 贡献无条件发放
-        if (this.gateLevel < GATE_MAX_HP_BY_LEVEL.length) {
+        const wasGateMaxBeforeT6 = this.gateLevel >= GATE_MAX_HP_BY_LEVEL.length;
+        if (!wasGateMaxBeforeT6) {
           this._upgradeGate(playerId, 'gift_t6');
         }
         if (playerId) {
@@ -2222,7 +2238,7 @@ class SurvivalGameEngine {
               playerId,
               delta:  (this.contributions[playerId] || 0) - beforeContrib,  // 实际差值（含 catchUpMult 倍率）
               total:  this.contributions[playerId] || 0,
-              source: (this.gateLevel >= GATE_MAX_HP_BY_LEVEL.length) ? 'gift_t6_max_level_bonus' : 'gift_t6_upgrade_bonus',
+              source: wasGateMaxBeforeT6 ? 'gift_t6_max_level_bonus' : 'gift_t6_upgrade_bonus',
             },
           });
         }
@@ -2479,6 +2495,25 @@ class SurvivalGameEngine {
     return true;
   }
 
+  _broadcastFirstBarrage(playerId, playerName, cmd) {
+    if (!playerId || cmd < 1 || cmd > 6 || this._firstBarrageReceived.has(playerId)) return;
+    this._firstBarrageReceived.add(playerId);
+    const wIdx = (typeof this._getWorkerIndex === 'function')
+      ? this._getWorkerIndex(playerId)
+      : -1;
+    this.broadcast({
+      type: 'first_barrage',
+      timestamp: Date.now(),
+      data: {
+        playerId,
+        playerName: playerName || playerId,
+        cmd,
+        workerId: wIdx >= 0 ? wIdx : -1,
+      },
+    });
+    console.log(`[SurvivalEngine] first_barrage: ${playerName || playerId} cmd=${cmd} workerId=${wIdx}`);
+  }
+
   /**
    * 处理助威者弹幕（§33.3 约定的 20-30% 效果 + 2s 全局冷却防刷）
    * @param {string} playerId
@@ -2518,8 +2553,8 @@ class SurvivalGameEngine {
       default: return; // 其他 cmd 不生效，也不计贡献
     }
 
-    // 助威者贡献值 +1（与正式守护者一致），计入 live_ranking
-    this._trackContribution(playerId, 1);
+    // 助威者贡献值 +1，计入 supporter totalContrib，但不占用正式守护者矿工槽位
+    this._trackSupporterContribution(playerId, 1, 'barrage');
 
     // 🔴 audit-r45 GAP-D45-02：助威者弹幕也产生攻击能量（§35.8 行 6047 兼容性条款），与守护者 cmd 1-4/6 路径一致
     this._tribeWarAddEnergy(1);
@@ -2564,7 +2599,7 @@ class SurvivalGameEngine {
 
     // 贡献与积分池（不走 handleGift 的默认累加路径，避免重复计入）
     // §37 market 抬升 ×1.1
-    this._trackContribution(playerId, 1);
+    this._trackSupporterContribution(playerId, 1, 'gift');
     this.scorePool += 1 * (this._buildings.has('market') ? 1.1 : 1.0);
 
     // 🔴 audit-r45 GAP-D45-02：助威者 T1 仙女棒也产生攻击能量（§35.8 兼容性条款），与守护者 T1 路径一致
@@ -2643,7 +2678,7 @@ class SurvivalGameEngine {
     effects.addGateHp = 200;
 
     // 贡献 + 积分池（§37 market 抬升 ×1.1）
-    this._trackContribution(playerId, gift.score);
+    this._trackSupporterContribution(playerId, gift.score, 'gift');
     this.scorePool += gift.score * (this._buildings.has('market') ? 1.1 : 1.0);
 
     // 🔴 audit-r45 GAP-D45-02：助威者 T5 爱的爆炸也产生攻击能量（§35.8 兼容性条款 + §35.3 T5=50）
@@ -2724,7 +2759,7 @@ class SurvivalGameEngine {
     needsResourceSync = true;
 
     // 贡献 + 积分池（§37 market 抬升 ×1.1）
-    this._trackContribution(playerId, gift.score);
+    this._trackSupporterContribution(playerId, gift.score, 'gift');
     this.scorePool += gift.score * (this._buildings.has('market') ? 1.1 : 1.0);
 
     // 🔴 audit-r45 GAP-D45-02：助威者 T4 能量电池也产生攻击能量（§35.8 兼容性条款 + §35.3 T4=20）
@@ -2919,8 +2954,8 @@ class SurvivalGameEngine {
     // 城门每日升级标志：新一天重置（broadcaster/expedition_trader 路径可再次升级）
     this._gateUpgradedToday = false;
 
-    // §37 建造系统：每日重置投票限额（每日 1 次跨日重置）
-    this._buildVoteUsedToday = false;
+    // §37 建造系统：按当前 seasonId:seasonDay 同步"每日 1 次"持久化限额。
+    this._syncBuildVoteUsedFlagForCurrentDay();
 
     // §24.4 首次进入 Running（day=1）→ 轮盘立即就绪（策划案 §24.4.2）
     if (!this._rouletteRunningInited) {
@@ -2990,6 +3025,7 @@ class SurvivalGameEngine {
   }
 
   _enterNight(day) {
+    day = this._getCombatDay(day);
     // audit-r6 P1-E6 §30.7：昼夜切换到来 → 扫描限时皮肤过期（旧 phase 已结束，expireAt 到期）
     this._scanGiftSkinExpiry();
     this.state         = 'night';
@@ -3205,7 +3241,7 @@ class SurvivalGameEngine {
    *   - 固定 payoutRate = 0.3（无胜利分支）
    *   - manual：跳过 _demoteBuildings / _onRoomFail（fortressDay 不变，也不广播 room_failed）
    *   - 结算数据新增 fortressDayBefore / fortressDayAfter / newbieProtected（§16.6）
-   *   - ~30s 后自动进入恢复期（_enterRecovery），不再 reset + startGame（Fix A：原 8s → 30s 与前端 §34 B2 3 屏对齐）
+   *   - ~33s 后自动进入恢复期（_enterRecovery），不再 reset + startGame（§23.3 3s冻结 + 30s三屏）
    */
   _enterSettlement(reason) {
     if (this.state === 'settlement' || this.state === 'recovery') return;
@@ -3368,16 +3404,15 @@ class SurvivalGameEngine {
       try { this.roomPersistence.save(this.room); } catch (e) { /* ignore */ }
     }
 
-    // Fix A (组 B Reviewer P0)：结算 UI 定时器 8000ms → 30000ms。
-    //   原因：前端 SurvivalSettlementUI 协程 10+10+10=30s，服务端 8s 后发 phase_changed{variant:recovery}，
-    //         SurvivalGameManager.cs:308-314 在 Settlement 态收到 recovery 时 SetActive(false)，帧 B/C 永看不到。
-    //   修复：后端倒计时延长到 30000ms 与前端对齐；handleStreamerSkipSettlement 在 30s 窗口内仍可提前跳过。
+    // §23.3：客户端先 3s 失败冻结，再显示 SurvivalSettlementUI 10+10+10=30s。
+    //   服务端必须等完整 33s 后再发 recovery；否则 C 屏会被 phase_changed{variant:recovery} 提前关闭。
+    //   handleStreamerSkipSettlement 在该窗口内仍可提前跳过。
     // §34.3 B2：同时赋值 _settleTimerHandle，供 streamer_skip_settlement 跳过
     this._settleTimerHandle = setTimeout(() => {
       this._recoveryTimer = null;
       this._settleTimerHandle = null;
       this._enterRecovery();
-    }, 30000);
+    }, SETTLEMENT_RECOVERY_DELAY_MS);
     // 保留原 _recoveryTimer 句柄以兼容 _clearAllTimers 的清理路径（同一句柄）
     this._recoveryTimer = this._settleTimerHandle;
   }
@@ -3466,7 +3501,7 @@ class SurvivalGameEngine {
     // ===== 120s 后进入下一个夜晚（currentDay + 1）=====
     this._recoveryTimer = setTimeout(() => {
       this._recoveryTimer = null;
-      this._enterNight((this.currentDay || 0) + 1);
+      this._enterNight(this._getCombatDay());
     }, 120_000);
   }
 
@@ -3612,9 +3647,9 @@ class SurvivalGameEngine {
       // 阶段结束切换（§36 GlobalClock 接管后，内部 _tick 不再自发切换 phase）
       if (this.remainingTime <= 0 && !this._clockDriven) {
         if (this.state === 'day') {
-          this._enterNight(this.currentDay);
+          this._enterNight(this._getCombatDay(this.currentDay));
         } else {
-          this._endNight();
+          this._completeNightSuccess('timer');
         }
       }
     }
@@ -3631,7 +3666,7 @@ class SurvivalGameEngine {
     if (this.state !== 'day') return;  // 本房间未处于 day → 不做 phase 切换
     // 应用主题规则（blood_moon：怪物 HP ×1.2 暂存到倍率字段；由 _initActiveMonsters 消费）
     this._applyThemeRulesForNight();
-    this._enterNight(this.currentDay);
+    this._enterNight(this._getCombatDay(this.currentDay));
   }
 
   /**
@@ -3643,16 +3678,7 @@ class SurvivalGameEngine {
   _enterDayFromClock() {
     if (this.state !== 'night') return;  // 本房间未处于 night → 不做 phase 切换
 
-    // 走原 _endNight 逻辑（§16 v1.26 后只会转入 _enterDay，不再有 _enterSettlement('win') 分支）
-    const oldState = this.state;
-    this._endNight();
-
-    // 挺过一夜 → 堡垒日 +1
-    //   _endNight 永远转入 _enterDay（§16 永续模式），state === 'day' 即代表成功挺夜
-    //   保留 'settlement' 分支仅为防御性兼容（理论上不会发生，第三方补丁插入结算时不误判失败）
-    if (oldState === 'night' && (this.state === 'day' || this.state === 'settlement')) {
-      this._onRoomSuccess();
-    }
+    this._completeNightSuccess('clock');
   }
 
   /**
@@ -4002,6 +4028,22 @@ class SurvivalGameEngine {
     //   `totalDays` 字段仍保留于 config/数值平衡参考，但不再触发"胜利结算"。
     const nextDay = this.currentDay + 1;
     this._enterDay(nextDay);
+  }
+
+  /**
+   * 成功清夜的唯一入口：夜晚倒计时结束、Boss 提前击杀、GlobalClock night→day 都必须走这里。
+   * _endNight() 只负责切回 day 和发夜报；堡垒日晋级/daily cap 必须紧跟一次，且靠 state 变化天然防重复。
+   */
+  _completeNightSuccess(reason = 'timer') {
+    if (this.state !== 'night') return false;
+    const oldState = this.state;
+    this._endNight();
+    if (oldState === 'night' && (this.state === 'day' || this.state === 'settlement')) {
+      this._onRoomSuccess();
+      console.log(`[SurvivalEngine] Night success completed via ${reason}`);
+      return true;
+    }
+    return false;
   }
 
   // ==================== 矿工HP系统 ====================
@@ -4480,7 +4522,7 @@ class SurvivalGameEngine {
           type: 'night_cleared',
           data: { reason: 'boss_killed' }
         });
-        this._endNight();
+        this._completeNightSuccess('boss_killed');
       }
     }
   }
@@ -4577,7 +4619,9 @@ class SurvivalGameEngine {
           const unlockCfg = FEATURE_UNLOCK_DAY.gate_upgrade_high;
           const requiredDay = unlockCfg ? unlockCfg.minDay : 4;
           const seasonDay = this.seasonMgr ? this.seasonMgr.seasonDay : 1;
-          const isVeteran = (this.isVeteran === true) || (this.creator && this.creator.isVeteran === true);
+          const isVeteran = (this.isVeteran === true)
+            || (this.creator && this.creator.isVeteran === true)
+            || (this.room && this.room.creator && this.room.creator.isVeteran === true);
           if (!isVeteran && seasonDay < requiredDay) {
             this._failGateUpgrade('feature_locked', {
               blockedLevel: nextLevel,
@@ -4959,9 +5003,10 @@ class SurvivalGameEngine {
 
     const baseRushCount = day >= 15 ? 3 : day >= 7 ? 2 : 1;
     const rushCount     = baseRushCount + rushBonus;
+    const rushStart     = day >= assassinDay ? 1 : 0;
 
     if (day >= assassinDay && index === 0) return 'assassin';
-    if (day >= rushDay && index < rushCount) return 'rush';
+    if (day >= rushDay && index >= rushStart && index < rushStart + rushCount) return 'rush';
     if (day >= iceDay && index === 1) return 'ice';
     if (day >= summonerDay && index === 2) return 'summoner';
     return 'normal';
@@ -5934,8 +5979,7 @@ class SurvivalGameEngine {
    * §34.3 B2：主播跳过结算倒计时（C→S streamer_skip_settlement）
    *   校验：state==='settlement' && _settleTimerHandle 存在
    *   执行：clearTimeout + 立即执行倒计时到期逻辑（_enterRecovery）
-   *   Fix A (组 B Reviewer P0)：结算倒计时已延长至 30000ms，
-   *     跳过窗口自然扩大到 30s（只要 _settleTimerHandle 非 null 即视为 valid）。
+   *   跳过窗口为完整结算窗口（3s冻结 + 30s三屏，只要 _settleTimerHandle 非 null 即视为 valid）。
    */
   handleStreamerSkipSettlement(playerId) {
     if (this.state !== 'settlement') {
@@ -5949,7 +5993,7 @@ class SurvivalGameEngine {
     clearTimeout(this._settleTimerHandle);
     this._settleTimerHandle = null;
     console.log(`[Settlement] streamer skip: playerId=${playerId}, advance to recovery immediately`);
-    // 立即执行 30s 倒计时到期等价逻辑（Fix A：原 8s → 30s）
+    // 立即执行结算倒计时到期等价逻辑
     this._recoveryTimer = null;
     this._enterRecovery();
     return true;
@@ -6097,6 +6141,74 @@ class SurvivalGameEngine {
   }
 
   /**
+   * §37.3 每日建造投票限额持久化 key。
+   * 用 seasonId:seasonDay 避免只按 seasonDay 持久化时，上一赛季 D3 的限额误挡下一赛季 D3。
+   */
+  _getDailyBuildVoteKey() {
+    const seasonId = this.seasonMgr ? (this.seasonMgr.seasonId || 1) : 1;
+    const seasonDay = this.seasonMgr ? (this.seasonMgr.seasonDay || 1) : (this.currentDay || 1);
+    return `${seasonId}:${seasonDay}`;
+  }
+
+  _getLegacyDailyBuildVoteKey() {
+    const seasonDay = this.seasonMgr ? (this.seasonMgr.seasonDay || 1) : (this.currentDay || 1);
+    return String(seasonDay);
+  }
+
+  _hasScopedDailyBuildVoteKeys() {
+    if (!this._dailyBuildVoteUsed || typeof this._dailyBuildVoteUsed !== 'object') return false;
+    return Object.keys(this._dailyBuildVoteUsed).some(k => typeof k === 'string' && k.includes(':'));
+  }
+
+  _normalizeDailyBuildVoteUsedKeys(source, snap = null) {
+    const used = (source && typeof source === 'object') ? { ...source } : {};
+    const hasScoped = Object.keys(used).some(k => typeof k === 'string' && k.includes(':'));
+    if (hasScoped) return used;
+
+    const snapSeasonId = snap && snap.seasonSnapshot && typeof snap.seasonSnapshot.seasonId === 'number'
+      ? snap.seasonSnapshot.seasonId
+      : (snap && typeof snap.currentSeasonId === 'number' ? snap.currentSeasonId : null);
+    const seasonId = snapSeasonId || (this.seasonMgr ? (this.seasonMgr.seasonId || 1) : 1);
+
+    for (const key of Object.keys(used)) {
+      if (used[key] && /^\d+$/.test(key)) {
+        used[`${seasonId}:${key}`] = true;
+      }
+    }
+    return used;
+  }
+
+  _syncBuildVoteUsedFlagForCurrentDay() {
+    const key = this._getDailyBuildVoteKey();
+    const legacyKey = this._getLegacyDailyBuildVoteKey();
+    const hasScoped = this._hasScopedDailyBuildVoteKeys();
+    this._buildVoteUsedToday = !!(this._dailyBuildVoteUsed && (
+      this._dailyBuildVoteUsed[key] || (!hasScoped && this._dailyBuildVoteUsed[legacyKey])
+    ));
+  }
+
+  _hasBuildVoteUsedForCurrentDay() {
+    const key = this._getDailyBuildVoteKey();
+    const legacyKey = this._getLegacyDailyBuildVoteKey();
+    const hasScoped = this._hasScopedDailyBuildVoteKeys();
+    return !!(this._buildVoteUsedToday || (this._dailyBuildVoteUsed && (
+      this._dailyBuildVoteUsed[key] || (!hasScoped && this._dailyBuildVoteUsed[legacyKey])
+    )));
+  }
+
+  _markBuildVoteUsedForCurrentDay() {
+    const key = this._getDailyBuildVoteKey();
+    this._buildVoteUsedToday = true;
+    if (!this._dailyBuildVoteUsed || typeof this._dailyBuildVoteUsed !== 'object') {
+      this._dailyBuildVoteUsed = {};
+    }
+    this._dailyBuildVoteUsed[key] = true;
+    if (this.roomPersistence && this.room) {
+      try { this.roomPersistence.save(this.room); } catch (e) { /* ignore */ }
+    }
+  }
+
+  /**
    * 发起建造投票（C→S build_propose）
    * 前置：state==='day' + 无活跃投票 + 非助威者 + 未当日用完 + buildId 合法且未建成 + 资源充足
    * 候选生成：buildId 必入 options[0]；剩余 2 张从"未建造 + 资源够"随机抽；不足补"已建造可重建"；退化 [buildId]
@@ -6130,7 +6242,7 @@ class SurvivalGameEngine {
       return failPropose('already_voting');
     }
     // 3) 每日限 1 次
-    if (this._buildVoteUsedToday) {
+    if (this._hasBuildVoteUsedForCurrentDay()) {
       return failPropose('daily_limit');
     }
     // 4) 助威者不能发起（可投票但不能提案）
@@ -6274,7 +6386,7 @@ class SurvivalGameEngine {
     });
 
     // 每日限额已用（即便流产也计入，避免反复刷流产——策划案 §37.3 明确）
-    this._buildVoteUsedToday = true;
+    this._markBuildVoteUsedForCurrentDay();
     this._buildVote = null;
 
     if (winnerId !== null) {
@@ -6282,7 +6394,7 @@ class SurvivalGameEngine {
       if (!this._hasBuildResources(winnerId)) {
         this._broadcast({
           type: 'build_cancelled',
-          data: { buildId: winnerId, reason: 'insufficient_resources' },
+          data: { buildId: winnerId, reason: 'insufficient_resources_at_finalize' },
         });
         console.log(`[Building] vote_ended winner=${winnerId} but insufficient_resources → cancelled`);
       } else {
@@ -6508,11 +6620,28 @@ class SurvivalGameEngine {
     if (this._roulette) {
       const effect = this._roulette._effectActive;
       const pending = this._roulette._pending;
-      if (effect || pending || this._roulette._readyAt > 0) {
+      const readyAt = Number(this._roulette._readyAt || 0);
+      if (effect || pending || readyAt >= 0) {
+        let phase = 'ready';
+        if (effect) phase = 'effect';
+        else if (pending) phase = 'pending';
+        else if (readyAt > nowMs) phase = 'charging';
         roulette = {
+          phase,
+          pending: pending ? {
+            cardId: pending.cardId || '',
+            displayedCards: Array.isArray(pending.displayedCards) ? pending.displayedCards : [],
+            spunAt: pending.spunAt || 0,
+            autoApplyAt: pending.autoApplyAt || 0,
+          } : null,
+          effect: effect ? {
+            cardId: effect.cardId || '',
+            endsAt: effect.endsAt || 0,
+          } : null,
+          // legacy minimal fields retained for older Unity data classes.
           cardId:       effect ? effect.cardId : (pending ? pending.cardId : ''),
           effectEndsAt: effect ? effect.endsAt : 0,
-          readyAt:      this._roulette._readyAt > 0 ? this._roulette._readyAt : -1,
+          readyAt:      readyAt > 0 ? readyAt : -1,
         };
       }
     }
@@ -6520,12 +6649,29 @@ class SurvivalGameEngine {
     // build（当前仅支持一个投票 + 多个 in-progress 建造；MVP 仅回投票或最早 in-progress）
     let build = null;
     if (this._buildVote) {
-      // 投票阶段：progress=0，completedAt=votingEndsAt 方便客户端按阶段区分
+      const tally = {};
+      for (const [, bid] of this._buildVote.votes || new Map()) {
+        tally[bid] = (tally[bid] || 0) + 1;
+      }
+      const voteBuildIds = Object.keys(tally);
+      const voteCounts = voteBuildIds.map(bid => tally[bid]);
+      // 投票阶段：保留旧字段，同时补策划案 voting 子结构。
       build = {
         buildingId:  this._buildVote.options && this._buildVote.options[0] || '',
         name:        this._buildVote.proposerName || '',
         progress:    0,
         completedAt: this._buildVote.votingEndsAt || 0,
+        voting: {
+          proposalId: this._buildVote.proposalId || '',
+          proposerName: this._buildVote.proposerName || '',
+          options: Array.isArray(this._buildVote.options) ? this._buildVote.options : [],
+          votingEndsAt: this._buildVote.votingEndsAt || 0,
+          votes: tally,
+          voteBuildIds,
+          voteCounts,
+          totalVoters: (this._buildVote.votes && this._buildVote.votes.size) || 0,
+        },
+        building: null,
       };
     } else if (this._buildingInProgress && this._buildingInProgress.size > 0) {
       // 建造阶段：取最早一条
@@ -6539,6 +6685,13 @@ class SurvivalGameEngine {
           name:        buildId,
           progress:    Math.round(progress * 1000) / 1000,
           completedAt: info.completesAt || 0,
+          voting: null,
+          building: {
+            buildId,
+            startedAt: info.startedAt || 0,
+            completesAt: info.completesAt || 0,
+            position: cfg.position ? { x: cfg.position.x, y: cfg.position.y, z: cfg.position.z } : null,
+          },
         };
         break;
       }
@@ -6564,6 +6717,15 @@ class SurvivalGameEngine {
           workerId:     exp.playerId || '',
           phase,
           endsAt:       exp.returnsAt || 0,
+          playerId:     exp.playerId || '',
+          workerIdx:    Number.isFinite(exp.workerIdx) ? exp.workerIdx : 0,
+          startedAt:    exp.startAt || 0,
+          returnsAt:    exp.returnsAt || 0,
+          eventPhase:   exp.eventId ? {
+            eventId: exp.eventId,
+            eventEndsAt: exp.eventEndsAt || 0,
+            options: Array.isArray(exp.options) ? exp.options : [],
+          } : null,
         });
       }
     }
@@ -6578,13 +6740,34 @@ class SurvivalGameEngine {
       if (sid) {
         const session = this.tribeWarMgr._sessions && this.tribeWarMgr._sessions.get(sid);
         if (session && !session._ended) {
+          const role = asAtkSid ? 'attacker' : 'defender';
+          const defEngine = session.defender && session.defender.survivalEngine;
+          let remoteMonstersAlive = 0;
+          if (defEngine && defEngine._activeMonsters && typeof defEngine._activeMonsters.values === 'function') {
+            for (const m of defEngine._activeMonsters.values()) {
+              if (m && m.tribeWarSessionId === sid) remoteMonstersAlive++;
+            }
+          }
           tribeWar = {
             sessionId:    sid,
             state:        asAtkSid ? 'attacking' : 'defending',
+            role,
             targetRoomId: asAtkSid
               ? (session.defender && session.defender.roomId || '')
               : (session.attacker && session.attacker.roomId || ''),
             endsAt:       0,   // MVP 无硬结束时间（无能量 180s 自动断，非绝对时间戳）
+            energyAccumulated: session.energy || 0,
+            remoteMonstersAlive,
+            stolenResources: {
+              food: session.stolenFood || 0,
+              coal: session.stolenCoal || 0,
+              ore:  session.stolenOre  || 0,
+            },
+            stats: {
+              expeditionsSent: session.expeditionsSent || 0,
+              startedAt: session.startedAt || session.startAt || 0,
+              damageMultiplier: session.damageMultiplier || 1.0,
+            },
           };
         }
       }
@@ -8162,6 +8345,67 @@ class SurvivalGameEngine {
     this._scheduleLiveRankingBroadcast();
   }
 
+  _trackSupporterContribution(playerId, amount, source) {
+    if (!playerId) return;
+    const entry = this._supporters && this._supporters.get(playerId);
+    if (!entry) {
+      this._trackContribution(playerId, amount, source);
+      return;
+    }
+
+    if (amount > 0) {
+      if (!this._playerLastActiveTs) this._playerLastActiveTs = {};
+      this._playerLastActiveTs[playerId] = Date.now();
+    }
+
+    let finalAmount = amount;
+    if (source === 'barrage' && this._getWorkerTier(playerId) >= 2) {
+      finalAmount = amount * 1.5;
+    }
+    if (finalAmount > 0 && this._contribMult > 1.0) {
+      finalAmount = finalAmount * this._contribMult;
+    }
+
+    entry.totalContrib = (entry.totalContrib || 0) + finalAmount;
+    if (!entry.name) entry.name = this.playerNames[playerId] || playerId;
+
+    const currentLc   = this._lifetimeContrib[playerId] || 0;
+    const catchUpMult = (currentLc < 100 && finalAmount > 0) ? 3 : 1;
+    this._lifetimeContrib[playerId] = currentLc + finalAmount * catchUpMult;
+
+    if (playerId && this.room && playerId === this.room.roomCreatorOpenId
+        && currentLc < 50000 && this._lifetimeContrib[playerId] >= 50000) {
+      this._evaluateVeteranForCreator('lifetime_contrib');
+    }
+
+    this._contribBalance[playerId] = (this._contribBalance[playerId] || 0) + finalAmount * catchUpMult;
+    if (this._playerLevel[playerId] == null) this._playerLevel[playerId] = 1;
+    this._checkLevelUp(playerId);
+
+    if (finalAmount > 0) {
+      this._totalContribution += finalAmount;
+      this._checkCoopMilestones();
+    }
+    if (finalAmount > 0 && this.state === 'day' && this._dayStats && source !== 'barrage') {
+      this._dayStats.contributions[playerId] = (this._dayStats.contributions[playerId] || 0) + finalAmount;
+      this._dayStats.totalDay += finalAmount;
+    }
+
+    this._scheduleLiveRankingBroadcast();
+  }
+
+  _getMergedContributionTotals() {
+    const merged = { ...this.contributions };
+    if (this._supporters && typeof this._supporters.forEach === 'function') {
+      for (const [pid, d] of this._supporters) {
+        if (d && d.totalContrib > 0) {
+          merged[pid] = (merged[pid] || 0) + d.totalContrib;
+        }
+      }
+    }
+    return merged;
+  }
+
   /** 防抖推送实时贡献榜（1.5s 内多次变化只推一次） */
   _scheduleLiveRankingBroadcast() {
     if (this._liveRankingTimer) return; // 已有待推送定时器，无需重复
@@ -8174,7 +8418,7 @@ class SurvivalGameEngine {
   /** 广播当前局 Top5 实时贡献榜（§19.2: state ∈ { 'day', 'night', 'recovery' }，其他状态跳过） */
   _broadcastLiveRanking() {
     if (this.state !== 'day' && this.state !== 'night' && this.state !== 'recovery') return;
-    const top5 = Object.entries(this.contributions)
+    const top5 = Object.entries(this._getMergedContributionTotals())
       .sort(([, a], [, b]) => b - a)
       .slice(0, 5)
       .map(([id, score], i) => ({
@@ -8197,19 +8441,7 @@ class SurvivalGameEngine {
   }
 
   _buildRankings() {
-    // 🔴 audit-r45 GAP-D45-07：合并 _supporters.totalContrib（被替换降级的旧守护者历史贡献）
-    //   原仅排序 contributions，但 _promoteSupporter 会把旧守护者 contributions[oldId] 转入 _supporters[oldId].totalContrib 并 delete 原条目
-    //   旧守护者后续 supporter 身份贡献从 0 起步 → weekly + 本局排行榜丢失前 N 历史贡献（违反 §33.9 行 5191「contributions + _supporters.totalContrib 合并统计」）
-    //   合并优先级：以 _supporters.totalContrib 为基线，叠加新守护者继任后的 contributions（同 playerId 累加）
-    const merged = { ...this.contributions };
-    if (this._supporters && typeof this._supporters.forEach === 'function') {
-      for (const [pid, d] of this._supporters) {
-        if (d && d.totalContrib > 0) {
-          merged[pid] = (merged[pid] || 0) + d.totalContrib;
-        }
-      }
-    }
-    return Object.entries(merged)
+    return Object.entries(this._getMergedContributionTotals())
       .sort(([, a], [, b]) => b - a)
       .slice(0, 10)
       .map(([id, score], i) => ({
@@ -8670,7 +8902,7 @@ class SurvivalGameEngine {
    * 召回入口：按目标 playerId 执行召回。
    * 调用方负责主播鉴权（弹幕入口和 WS 入口均在外层限制）。
    */
-  _handleExpeditionRecall(playerId, playerName) {
+  _handleExpeditionRecall(playerId, playerName, notifyPlayerId) {
     // 🔴 audit-r39 GAP-PM39-01：recall phase 校验（与 _startExpedition 对称）
     //   策划案 §38 line 6999 明确 "expedition_command 仅 state === 'day' 受理（不含 recovery）—
     //   恢复期/夜晚服务端拒绝并返回 expedition_failed { reason: 'wrong_phase' }"。
@@ -8678,12 +8910,13 @@ class SurvivalGameEngine {
     //   主播在夜晚/恢复期点 recall 时服务端"静默执行"（_expeditions 已 sweep 删除则 0 处理 + 0 反馈），
     //   玩家不知道为什么没生效 → 与 send 路径 wrong_phase 反馈不对称。
     if (this.state !== 'day') {
-      this._sendToPlayer(playerId, {
+      const receiverId = notifyPlayerId || playerId;
+      this._sendToPlayer(receiverId, {
         type: 'expedition_failed',
         timestamp: Date.now(),
         data: { playerId, reason: 'wrong_phase', unlockDay: 0 },
       });
-      console.log(`[SurvivalEngine] expedition recall rejected: state=${this.state} pid=${playerId}`);
+      console.log(`[SurvivalEngine] expedition recall rejected: state=${this.state} target=${playerId} receiver=${receiverId}`);
       return;
     }
     this._recallExpedition(playerId);
@@ -9082,12 +9315,12 @@ class SurvivalGameEngine {
   /**
    * C→S 入口：expedition_command { action: 'send' | 'recall' }
    */
-  handleExpeditionCommand(playerId, action) {
+  handleExpeditionCommand(playerId, action, actorPlayerId) {
     if (!playerId) return;
     if (action === 'send') {
       this._handleExpeditionSend(playerId, this._getPlayerName(playerId));
     } else if (action === 'recall') {
-      this._handleExpeditionRecall(playerId, this._getPlayerName(playerId));
+      this._handleExpeditionRecall(playerId, this._getPlayerName(playerId), actorPlayerId || playerId);
     }
   }
 
@@ -9929,7 +10162,7 @@ class SurvivalGameEngine {
   _clearAllTimers() {
     this._clearTick();
     this._clearNightWaves();
-    // §16 恢复期定时器（_enterSettlement 的 30s UI 定时器 / _enterRecovery 的 120s 定时器共用同一句柄；Fix A：8s→30s）
+    // §16 恢复期定时器（_enterSettlement 的 33s 结算定时器 / _enterRecovery 的 120s 定时器共用同一句柄）
     if (this._recoveryTimer) { clearTimeout(this._recoveryTimer); this._recoveryTimer = null; }
     // 清除 per-player 临时 boost 定时器（能量电池）
     for (const t of Object.values(this._playerTempBoostTimers || {})) clearTimeout(t);
@@ -9974,7 +10207,7 @@ class SurvivalGameEngine {
     if (this._streamerPromptTimer) { clearInterval(this._streamerPromptTimer); this._streamerPromptTimer = null; }
     if (this._engagementInterval)  { clearInterval(this._engagementInterval);  this._engagementInterval  = null; }
 
-    // §34.3 B2：结算 30s 倒计时句柄（streamer_skip_settlement 亦会清；Fix A：原 8s → 30s）
+    // §34.3 B2：结算 33s 倒计时句柄（streamer_skip_settlement 亦会清）
     if (this._settleTimerHandle) { clearTimeout(this._settleTimerHandle); this._settleTimerHandle = null; }
   }
 }

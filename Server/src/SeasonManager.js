@@ -37,19 +37,19 @@ class SeasonManager {
    * §36.4 v1.27 / §36.6 首 2 赛季固定主题：计算下一赛季主题（幂等，由 GlobalClock D7 夜晚启动 BossRush 时调用）
    *
    * §36.6 决策 2 + 决策 3：
-   *   - next seasonId === 1 → 强制 'classic_frozen'
-   *   - next seasonId === 2 → 强制 'blood_moon'
-   *   - next seasonId >= 3  → 从 SEASON_THEMES 中**排除当前 themeId（lastThemeId）** 后随机
-   *                           （防止连续两赛季同主题）
+   *   - 前 6 个赛季按 SEASON_THEMES 固定顺序轮换
+   *   - seasonId >= 7 → 从 SEASON_THEMES 中**排除当前 themeId（lastThemeId）** 后随机
+   *                     （防止连续两赛季同主题）
    *
    * @returns {string} 下一赛季的 themeId
    */
   computeNextThemeId() {
     // 推进后的 seasonId 就是下一赛季；由 seasonId+1 决定主题
     const nextSeasonId = this.seasonId + 1;
-    if (nextSeasonId === 1) return 'classic_frozen';
-    if (nextSeasonId === 2) return 'blood_moon';
-    // seasonId >= 3 → 排除 lastThemeId（即当前 this.themeId）后随机
+    if (nextSeasonId >= 1 && nextSeasonId <= SEASON_THEMES.length) {
+      return SEASON_THEMES[nextSeasonId - 1];
+    }
+    // seasonId >= 7 → 排除 lastThemeId（即当前 this.themeId）后随机
     const lastThemeId = this.themeId;
     const pool = SEASON_THEMES.filter(t => t !== lastThemeId);
     const pickFrom = pool.length > 0 ? pool : SEASON_THEMES; // 极端兜底（不可能为空）
@@ -59,13 +59,11 @@ class SeasonManager {
 
   /**
    * §36.6 新赛季主题 resolver：
-   *   seasonId === 1 → 'classic_frozen'
-   *   seasonId === 2 → 'blood_moon'
-   *   seasonId >= 3  → 排除 lastThemeId 后随机
+   *   seasonId 1..6 → 固定主题顺序
+   *   seasonId >= 7 → 排除 lastThemeId 后随机
    */
   _resolveThemeForSeason(seasonId, lastThemeId) {
-    if (seasonId === 1) return 'classic_frozen';
-    if (seasonId === 2) return 'blood_moon';
+    if (seasonId >= 1 && seasonId <= SEASON_THEMES.length) return SEASON_THEMES[seasonId - 1];
     const pool = SEASON_THEMES.filter(t => t !== lastThemeId);
     const pickFrom = pool.length > 0 ? pool : SEASON_THEMES;
     return pickFrom[Math.floor(Math.random() * pickFrom.length)];
@@ -141,8 +139,8 @@ class SeasonManager {
       // 新赛季
       this.seasonId += 1;
       this.seasonDay = 1;
-      // §36.6 首 2 赛季固定主题；S>=3 排除 lastThemeId 随机
-      this.themeId = this._resolveThemeForSeason(this.seasonId, oldThemeId);
+      // 必须与 season_settlement.nextThemeId 使用同一次计算结果；S7+ 随机分支不能再抽一次。
+      this.themeId = settlementNextTheme;
 
       // 清理预告（新赛季开始）
       this._nextThemeId = null;
@@ -171,6 +169,8 @@ class SeasonManager {
               timestamp: Date.now(),
               data: {
                 seasonId:         oldSeasonId,
+                themeId:          oldThemeId,
+                nextSeasonId:     this.seasonId,
                 nextThemeId:      settlementNextTheme,
                 survivingRooms:   extras.survivingRooms,
                 topContributors:  extras.topContributors,
@@ -182,6 +182,7 @@ class SeasonManager {
               timestamp: Date.now(),
               data: {
                 seasonId: this.seasonId,
+                seasonDay: 1,
                 themeId: this.themeId,
               },
             });

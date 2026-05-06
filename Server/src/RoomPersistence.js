@@ -158,7 +158,7 @@ class RoomPersistence {
 
     try {
       const file = path.join(this.dataDir, `${room.roomId}.json`);
-      fs.writeFileSync(file, JSON.stringify(snapshot), 'utf8');
+      this._writeJsonAtomic(file, snapshot);
     } catch (e) {
       console.warn(`[RoomPersistence] save fail ${room.roomId}: ${e.message}`);
     }
@@ -173,12 +173,39 @@ class RoomPersistence {
     try {
       const file = path.join(this.dataDir, `${roomId}.json`);
       if (!fs.existsSync(file)) return null;
-      const buf = fs.readFileSync(file, 'utf8');
-      const obj = JSON.parse(buf);
+      const obj = this._readJsonWithBackup(file);
       return this._migrate(obj);
     } catch (e) {
       console.warn(`[RoomPersistence] load fail ${roomId}: ${e.message}`);
       return null;
+    }
+  }
+
+  _writeJsonAtomic(file, obj) {
+    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+    const bak = `${file}.bak`;
+    fs.writeFileSync(tmp, JSON.stringify(obj), 'utf8');
+    if (fs.existsSync(file)) {
+      try { fs.copyFileSync(file, bak); } catch (e) { /* backup best-effort */ }
+    }
+    fs.renameSync(tmp, file);
+  }
+
+  _readJsonWithBackup(file) {
+    try {
+      return JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch (primaryErr) {
+      const bak = `${file}.bak`;
+      if (fs.existsSync(bak)) {
+        try {
+          const obj = JSON.parse(fs.readFileSync(bak, 'utf8'));
+          console.warn(`[RoomPersistence] primary snapshot corrupt, loaded backup: ${path.basename(file)} (${primaryErr.message})`);
+          return obj;
+        } catch (backupErr) {
+          console.warn(`[RoomPersistence] backup snapshot also failed: ${path.basename(file)} (${backupErr.message})`);
+        }
+      }
+      throw primaryErr;
     }
   }
 
@@ -227,6 +254,11 @@ class RoomPersistence {
         obj._dailyBuildVoteUsed = {};
       }
     }
+
+    // §36.5.1 daily cap fields may be absent in early v3 snapshots created before the cap patch.
+    if (typeof obj._dailyFortressDayGained !== 'number') obj._dailyFortressDayGained = 0;
+    if (typeof obj._dailyResetKey !== 'number') obj._dailyResetKey = 0;
+    if (typeof obj._dailyCapBlocked !== 'boolean') obj._dailyCapBlocked = false;
 
     // v3 → v4（audit-r7 §30.4）：补齐衰减元数据
     if (fromVersion < 4) {

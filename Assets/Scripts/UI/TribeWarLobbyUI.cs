@@ -54,6 +54,7 @@ namespace DrscfZ.UI
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
+            EnsureFallbackUI();
             if (_panel != null) _panel.SetActive(false);
         }
 
@@ -71,6 +72,77 @@ namespace DrscfZ.UI
         }
 
         // ==================== 对外接口 ====================
+
+        private void EnsureFallbackUI()
+        {
+            if (_panel != null && _contentRoot != null && _rowPrefab != null) return;
+            if (transform.parent == null)
+                transform.SetParent(RuntimeUIFactory.GetCanvasTransform(), false);
+
+            _panel = RuntimeUIFactory.CreatePanel(transform, "TribeWarLobbyPanel",
+                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                new Vector2(0f, 20f), new Vector2(640f, 560f), new Color(0.05f, 0.07f, 0.10f, 0.94f));
+            RuntimeUIFactory.AddVerticalLayout(_panel, 10f, new RectOffset(22, 22, 20, 20));
+
+            var title = RuntimeUIFactory.CreateText(_panel.transform, "Title", "跨直播间攻防战", 30f,
+                new Color(1f, 0.86f, 0.25f), TextAlignmentOptions.Center, new Vector2(590f, 42f));
+            RuntimeUIFactory.AddLayoutElement(title.gameObject, 42f);
+
+            _statusText = RuntimeUIFactory.CreateText(_panel.transform, "Status", "未加载", 22f,
+                Color.white, TextAlignmentOptions.Center, new Vector2(590f, 34f));
+            RuntimeUIFactory.AddLayoutElement(_statusText.gameObject, 34f);
+
+            var contentGo = new GameObject("Content", typeof(RectTransform), typeof(Image));
+            contentGo.transform.SetParent(_panel.transform, false);
+            _contentRoot = contentGo.GetComponent<RectTransform>();
+            contentGo.GetComponent<Image>().color = new Color(1f, 1f, 1f, 0.05f);
+            RuntimeUIFactory.AddVerticalLayout(contentGo, 6f, new RectOffset(8, 8, 8, 8), TextAnchor.UpperCenter);
+            RuntimeUIFactory.AddLayoutElement(contentGo, 340f);
+
+            var buttons = new GameObject("Buttons", typeof(RectTransform));
+            buttons.transform.SetParent(_panel.transform, false);
+            var hlg = buttons.AddComponent<HorizontalLayoutGroup>();
+            hlg.spacing = 12f;
+            hlg.childAlignment = TextAnchor.MiddleCenter;
+            hlg.childControlWidth = false;
+            hlg.childControlHeight = false;
+            RuntimeUIFactory.AddLayoutElement(buttons, 56f);
+
+            _btnRefresh = RuntimeUIFactory.CreateButton(buttons.transform, "Refresh", "刷新", out _,
+                new Color(0.15f, 0.34f, 0.52f, 1f), new Vector2(150f, 48f));
+            _btnClose = RuntimeUIFactory.CreateButton(buttons.transform, "Close", "关闭", out _,
+                new Color(0.32f, 0.32f, 0.32f, 1f), new Vector2(150f, 48f));
+
+            _rowPrefab = CreateFallbackRowPrefab();
+        }
+
+        private GameObject CreateFallbackRowPrefab()
+        {
+            var row = new GameObject("TribeWarRoomRowPrefab", typeof(RectTransform), typeof(Image));
+            row.transform.SetParent(transform, false);
+            row.SetActive(false);
+            row.GetComponent<Image>().color = new Color(1f, 1f, 1f, 0.08f);
+            var hlg = row.AddComponent<HorizontalLayoutGroup>();
+            hlg.spacing = 8f;
+            hlg.padding = new RectOffset(10, 10, 6, 6);
+            hlg.childAlignment = TextAnchor.MiddleLeft;
+            hlg.childControlHeight = true;
+            hlg.childForceExpandHeight = true;
+            RuntimeUIFactory.AddLayoutElement(row, 60f);
+
+            var name = RuntimeUIFactory.CreateText(row.transform, "Name", "主播", 22f, Color.white,
+                TextAlignmentOptions.MidlineLeft, new Vector2(220f, 48f));
+            RuntimeUIFactory.AddLayoutElement(name.gameObject, 48f, 220f);
+
+            var info = RuntimeUIFactory.CreateText(row.transform, "Info", "状态", 20f, new Color(0.76f, 0.84f, 1f),
+                TextAlignmentOptions.MidlineLeft, new Vector2(190f, 48f));
+            RuntimeUIFactory.AddLayoutElement(info.gameObject, 48f, 190f);
+
+            var btn = RuntimeUIFactory.CreateButton(row.transform, "Attack", "搞破坏", out _,
+                new Color(0.55f, 0.16f, 0.16f, 1f), new Vector2(110f, 42f));
+            RuntimeUIFactory.AddLayoutElement(btn.gameObject, 42f, 110f);
+            return row;
+        }
 
         /// <summary>打开面板并请求最新房间列表。
         /// §17.16 audit-r11：申请 A 类 modal（priority=70），与 SurvivalSettlementUI(85) / GateUpgradeConfirmUI(75) 互斥。</summary>

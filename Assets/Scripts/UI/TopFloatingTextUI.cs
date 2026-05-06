@@ -53,6 +53,7 @@ namespace DrscfZ.UI
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
+            EnsureFallbackRows();
 
             // 绑定字体，确保中文显示（AI准则：字体统一用 ChineseFont SDF）
             var font = Resources.Load<TMPro.TMP_FontAsset>("Fonts/AlibabaPuHuiTi-3-85-Bold SDF") ?? Resources.Load<TMPro.TMP_FontAsset>("Fonts/ChineseFont SDF");
@@ -65,6 +66,45 @@ namespace DrscfZ.UI
                     row.text.alignment = TextAlignmentOptions.Left;
                     row.text.gameObject.SetActive(false); // 初始隐藏（AI准则#2：UI预创建+SetActive控制）
                 }
+            }
+        }
+
+        private void EnsureFallbackRows()
+        {
+            bool missing = _rows == null || _rows.Length < 3;
+            if (!missing)
+            {
+                for (int i = 0; i < _rows.Length; i++)
+                {
+                    if (_rows[i] == null || _rows[i].text == null || _rows[i].rect == null)
+                    {
+                        missing = true;
+                        break;
+                    }
+                }
+            }
+            if (!missing) return;
+
+            if (transform.parent == null)
+                transform.SetParent(RuntimeUIFactory.GetCanvasTransform(), false);
+
+            var root = RuntimeUIFactory.EnsureRectTransform(transform);
+            root.anchorMin = new Vector2(0f, 1f);
+            root.anchorMax = new Vector2(1f, 1f);
+            root.pivot = new Vector2(0.5f, 1f);
+            root.anchoredPosition = new Vector2(0f, -80f);
+            root.sizeDelta = new Vector2(0f, 180f);
+
+            _rows = new TextRow[3];
+            for (int i = 0; i < _rows.Length; i++)
+            {
+                var tmp = RuntimeUIFactory.CreateText(transform, $"Row{i + 1}", "", 36f, Color.white, TextAlignmentOptions.Left, new Vector2(1200f, 48f));
+                var rect = tmp.GetComponent<RectTransform>();
+                rect.anchorMin = new Vector2(0.5f, 1f);
+                rect.anchorMax = new Vector2(0.5f, 1f);
+                rect.pivot = new Vector2(0f, 0.5f);
+                tmp.gameObject.SetActive(false);
+                _rows[i] = new TextRow { text = tmp, rect = rect };
             }
         }
 

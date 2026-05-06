@@ -37,8 +37,8 @@ namespace DrscfZ.UI
         [Header("A/B 按钮 + 文字描述")]
         [SerializeField] private Button   btnA;
         [SerializeField] private Button   btnB;
-        [SerializeField] private TMP_Text _cardAText;
-        [SerializeField] private TMP_Text _cardBText;
+        [SerializeField] private TextMeshProUGUI _cardAText;
+        [SerializeField] private TextMeshProUGUI _cardBText;
 
         [Header("倒计时文字")]
         [SerializeField] private TMP_Text _countdownText;
@@ -55,6 +55,7 @@ namespace DrscfZ.UI
         {
             if (Instance != null && Instance != this) { Destroy(this); return; }
             Instance = this;
+            EnsureFallbackUI();
             if (_panel != null) _panel.SetActive(false);
         }
 
@@ -113,6 +114,34 @@ namespace DrscfZ.UI
         }
 
         // ==================== 事件回调 ====================
+
+        private void EnsureFallbackUI()
+        {
+            if (_panel != null) return;
+            if (transform.parent == null)
+                transform.SetParent(RuntimeUIFactory.GetCanvasTransform(), false);
+
+            _panel = RuntimeUIFactory.CreatePanel(transform, "TraderOfferPanel",
+                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                Vector2.zero, new Vector2(560f, 300f), new Color(0.06f, 0.08f, 0.10f, 0.94f));
+            RuntimeUIFactory.AddVerticalLayout(_panel, 12f, new RectOffset(24, 24, 20, 20));
+
+            var title = RuntimeUIFactory.CreateText(_panel.transform, "Title", "神秘商人", 30f,
+                new Color(1f, 0.86f, 0.25f), TextAlignmentOptions.Center, new Vector2(520f, 40f));
+            RuntimeUIFactory.AddLayoutElement(title.gameObject, 42f);
+
+            _countdownText = RuntimeUIFactory.CreateText(_panel.transform, "Countdown", "30s", 22f,
+                Color.white, TextAlignmentOptions.Center, new Vector2(520f, 32f));
+            RuntimeUIFactory.AddLayoutElement(_countdownText.gameObject, 34f);
+
+            btnA = RuntimeUIFactory.CreateButton(_panel.transform, "ChoiceA", "A", out _cardAText,
+                new Color(0.15f, 0.34f, 0.52f, 1f), new Vector2(500f, 64f));
+            RuntimeUIFactory.AddLayoutElement(btnA.gameObject, 64f);
+
+            btnB = RuntimeUIFactory.CreateButton(_panel.transform, "ChoiceB", "B", out _cardBText,
+                new Color(0.22f, 0.40f, 0.24f, 1f), new Vector2(500f, 64f));
+            RuntimeUIFactory.AddLayoutElement(btnB.gameObject, 64f);
+        }
 
         private void OnTraderOffer(TraderOfferData data)
         {

@@ -57,6 +57,7 @@ namespace DrscfZ.UI
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
+            EnsureFallbackUI();
             if (_panel != null) _panel.SetActive(false);
         }
 
@@ -71,6 +72,38 @@ namespace DrscfZ.UI
         }
 
         // ==================== 对外接口 ====================
+
+        private void EnsureFallbackUI()
+        {
+            if (_panel != null) return;
+            if (transform.parent == null)
+                transform.SetParent(RuntimeUIFactory.GetCanvasTransform(), false);
+
+            _panel = RuntimeUIFactory.CreatePanel(transform, "TribeWarDefensePanel",
+                new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
+                new Vector2(-250f, -130f), new Vector2(460f, 300f), new Color(0.08f, 0.06f, 0.08f, 0.92f));
+            RuntimeUIFactory.AddVerticalLayout(_panel, 8f, new RectOffset(18, 18, 16, 16), TextAnchor.UpperLeft);
+
+            _titleText = RuntimeUIFactory.CreateText(_panel.transform, "Title", "攻击者：—", 26f,
+                new Color(1f, 0.45f, 0.35f), TextAlignmentOptions.Left, new Vector2(420f, 36f));
+            RuntimeUIFactory.AddLayoutElement(_titleText.gameObject, 36f);
+
+            _expeditionCountText = RuntimeUIFactory.CreateText(_panel.transform, "Expeditions", "已承受：0", 20f,
+                Color.white, TextAlignmentOptions.Left, new Vector2(420f, 28f));
+            RuntimeUIFactory.AddLayoutElement(_expeditionCountText.gameObject, 28f);
+
+            _stolenText = RuntimeUIFactory.CreateText(_panel.transform, "Stolen", "被偷取：食物-0 煤炭-0 矿石-0", 20f,
+                Color.white, TextAlignmentOptions.Left, new Vector2(420f, 30f));
+            RuntimeUIFactory.AddLayoutElement(_stolenText.gameObject, 30f);
+
+            _reportText = RuntimeUIFactory.CreateText(_panel.transform, "Report", "", 18f,
+                new Color(0.92f, 0.82f, 0.86f), TextAlignmentOptions.TopLeft, new Vector2(420f, 90f));
+            RuntimeUIFactory.AddLayoutElement(_reportText.gameObject, 90f);
+
+            _btnRetaliate = RuntimeUIFactory.CreateButton(_panel.transform, "Retaliate", "反击", out _,
+                new Color(0.55f, 0.16f, 0.16f, 1f), new Vector2(150f, 44f));
+            RuntimeUIFactory.AddLayoutElement(_btnRetaliate.gameObject, 44f, 150f);
+        }
 
         /// <summary>tribe_war_under_attack 时调用。</summary>
         public void Show(TribeWarUnderAttackData data)

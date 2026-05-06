@@ -9,6 +9,7 @@
 const SurvivalGameEngine    = require('./SurvivalGameEngine');
 const WeeklyRankingStore    = require('./WeeklyRankingStore');
 const StreamerRankingStore  = require('./StreamerRankingStore');
+const { findGiftById, findGiftByPrice } = require('./GiftConfig');
 const {
   FEATURE_UNLOCK_DAY,
   isFeatureUnlocked,
@@ -630,6 +631,17 @@ class SurvivalRoom {
         }
         this._stopSimulation();
         this.survivalEngine.reset();
+        // reset() 本身只改内存状态；立刻广播 idle 快照，避免客户端一直停在 Loading 等待 15s 超时。
+        this.broadcast({
+          type: 'survival_game_state',
+          timestamp: Date.now(),
+          data: this.survivalEngine.getFullState(),
+        });
+        try {
+          if (typeof this.survivalEngine._broadcastRoomState === 'function') {
+            this.survivalEngine._broadcastRoomState('reset_game');
+          }
+        } catch (_) { /* ignore */ }
         this._gmAudit(ws, 'reset_game', {});
         break;
       case 'sync_state':
@@ -817,7 +829,7 @@ class SurvivalRoom {
           }
           const targetPid = (data && data.playerId) || '';
           if (!targetPid) break;
-          this.survivalEngine.handleExpeditionCommand(targetPid, 'recall');
+          this.survivalEngine.handleExpeditionCommand(targetPid, 'recall', ws._playerId || targetPid);
           this._gmAudit(ws, 'expedition_recall', { targetPlayerId: targetPid });
           break;
         }
@@ -1190,18 +1202,28 @@ class SurvivalRoom {
   handleDouyinGift(secOpenId, nickname, avatarUrl, secGiftId, giftNum, giftValue) {
     this.lastActiveAt = Date.now();
 
-    // 礼物总价值 = 单价 × 数量
-    const totalValue = (giftValue || 1) * (giftNum || 1);
+    const count = Math.max(1, Number(giftNum || 1) | 0);
+    let unitValue = Number(giftValue || 1) || 1;
+    // 抖音推送字段在不同接入层可能是"单价"或"总价"；价格兜底时优先保持可直接匹配的单价，
+    // 若 direct 不命中但 total/count 命中，则归一化为单价并逐件结算。
+    if (!findGiftById(secGiftId) && count > 1 && !findGiftByPrice(unitValue)) {
+      const divided = unitValue / count;
+      if (Number.isFinite(divided) && Number.isInteger(divided) && findGiftByPrice(divided)) {
+        unitValue = divided;
+      }
+    }
 
-    // 礼物ID映射（可按需扩展，目前直接传 secGiftId）
-    this.survivalEngine.handleGift(
-      secOpenId,
-      nickname,
-      avatarUrl || '',
-      secGiftId,
-      totalValue,
-      '' // giftName 由引擎内档位配置决定
-    );
+    // 多数量礼物按单件循环结算，避免 totalValue 误匹配高档位或漏匹配。
+    for (let i = 0; i < count; i++) {
+      this.survivalEngine.handleGift(
+        secOpenId,
+        nickname,
+        avatarUrl || '',
+        secGiftId,
+        unitValue,
+        '' // giftName 由引擎内档位配置决定
+      );
+    }
 
     // 送礼 = 玩家加入（如果还没加入）
     this.survivalEngine.handlePlayerJoined(secOpenId, nickname, avatarUrl);

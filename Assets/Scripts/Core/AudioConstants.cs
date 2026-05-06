@@ -141,6 +141,9 @@ namespace DrscfZ.Core
         /// <summary>矿工阶 10 传奇晋升（与 SFX_TIER_PROMOTE 共用 clip，可未来独立化）</summary>
         public const string SFX_LEGEND_PROMOTE = "sfx_tier_promote";
 
+        /// <summary>Lv6 城门寒冰冲击波（资源未交付时 AudioManager 回退到现有电能/夜晚提示音）</summary>
+        public const string SFX_FROST_PULSE = "sfx_frost_pulse";
+
         // ============================================================
         // SFX — 主播
         // ============================================================

@@ -98,6 +98,7 @@ namespace DrscfZ.UI
 
         // 当前序列 Coroutine 句柄（用于主播跳过时打断）
         private Coroutine _sequenceCoroutine;
+        private Coroutine _recoveryWatchdogCoroutine;
 
         // 🆕 §34 B2 主播身份判定（通过 NetworkManager 的 join_room_confirm 消息确定）
         private bool _isRoomCreator = false;
@@ -135,6 +136,7 @@ namespace DrscfZ.UI
         {
             UnsubscribeNet();
             if (_sequenceCoroutine != null) StopCoroutine(_sequenceCoroutine);
+            if (_recoveryWatchdogCoroutine != null) StopCoroutine(_recoveryWatchdogCoroutine);
         }
 
         private void TrySubscribeNet()
@@ -208,6 +210,12 @@ namespace DrscfZ.UI
 
         private void OnDisable()
         {
+            if (_recoveryWatchdogCoroutine != null)
+            {
+                StopCoroutine(_recoveryWatchdogCoroutine);
+                _recoveryWatchdogCoroutine = null;
+            }
+
             if (_modalRegistered)
             {
                 DrscfZ.UI.ModalRegistry.Release(MODAL_A_ID_SETTLEMENT);
@@ -263,7 +271,26 @@ namespace DrscfZ.UI
             if (_restartButton != null) _restartButton.gameObject.SetActive(true);
             if (_skipButton != null) _skipButton.gameObject.SetActive(false);
             Debug.Log("[SurvivalSettlementUI] §34 B2 结算 30s 播完，等待服务端 recovery 推送或主播手动关闭");
+            StartRecoveryWatchdog();
             _sequenceCoroutine = null;
+        }
+
+        private void StartRecoveryWatchdog()
+        {
+            if (_recoveryWatchdogCoroutine != null)
+                StopCoroutine(_recoveryWatchdogCoroutine);
+            _recoveryWatchdogCoroutine = StartCoroutine(RecoverySyncWatchdog());
+        }
+
+        private IEnumerator RecoverySyncWatchdog()
+        {
+            yield return new WaitForSecondsRealtime(5f);
+            _recoveryWatchdogCoroutine = null;
+            if (!isActiveAndEnabled)
+                yield break;
+
+            NetworkManager.Instance?.SendMessage("sync_state");
+            Debug.LogWarning("[SurvivalSettlementUI] recovery watchdog fired: sent sync_state to avoid stale settlement UI");
         }
 
         // ─── §34 B2 页码圆点高亮 ───────────────────────────────────────────────
@@ -646,6 +673,7 @@ namespace DrscfZ.UI
                 _sequenceCoroutine = null;
             }
             SurvivalGameManager.Instance?.SendStreamerSkipSettlement();
+            StartRecoveryWatchdog();
             // 面板暂不隐藏，等待服务端 recovery/phase_changed 触发 SGM 隐藏逻辑
             Debug.Log("[SurvivalSettlementUI] 主播点击『立即重开』→ 发送 streamer_skip_settlement");
         }

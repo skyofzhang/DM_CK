@@ -462,10 +462,16 @@ namespace DrscfZ.Monster
         public void SpawnTribeWarExpedition(int count, string attackerName)
         {
             if (count <= 0) return;
-            StartCoroutine(SpawnTribeWarExpeditionCoroutine(count, attackerName));
+            StartCoroutine(SpawnTribeWarExpeditionCoroutine(count, attackerName, null));
         }
 
-        private IEnumerator SpawnTribeWarExpeditionCoroutine(int count, string attackerName)
+        public void SpawnTribeWarExpedition(int count, string attackerName, string[] monsterIds)
+        {
+            if (count <= 0) return;
+            StartCoroutine(SpawnTribeWarExpeditionCoroutine(count, attackerName, monsterIds));
+        }
+
+        private IEnumerator SpawnTribeWarExpeditionCoroutine(int count, string attackerName, string[] monsterIds)
         {
             for (int i = 0; i < count; i++)
             {
@@ -481,12 +487,13 @@ namespace DrscfZ.Monster
                     Debug.LogWarning($"[WaveSpawner] 远征怪超上限 {_maxAliveMonsters}，跳过 {count - i} 只（attacker={attackerName}）");
                     yield break;
                 }
-                SpawnOneTribeWarMonster(attackerName);
+                string serverMonsterId = (monsterIds != null && i < monsterIds.Length) ? monsterIds[i] : null;
+                SpawnOneTribeWarMonster(attackerName, serverMonsterId);
                 yield return new WaitForSeconds(0.1f + UnityEngine.Random.Range(0f, 0.1f));
             }
         }
 
-        private void SpawnOneTribeWarMonster(string attackerName)
+        private void SpawnOneTribeWarMonster(string attackerName, string serverMonsterId = null)
         {
             // 刷怪点固定为 top（策划案 §35.4）
             Vector3 spawnPos = GetSpawnPos("top");
@@ -508,7 +515,9 @@ namespace DrscfZ.Monster
                 Debug.LogWarning("[WaveSpawner] Monster prefab missing! Tribe War expedition uses invisible placeholder.");
             }
 
-            string monsterId = $"tw_exp_{_activeMonsters.Count}_{UnityEngine.Random.Range(1000,9999)}";
+            string monsterId = !string.IsNullOrEmpty(serverMonsterId)
+                ? serverMonsterId
+                : $"tw_exp_{_activeMonsters.Count}_{UnityEngine.Random.Range(1000,9999)}";
             go.name = $"TWExp_{monsterId}_{attackerName}";
 
             var ctrl = go.GetComponent<MonsterController>() ?? go.AddComponent<MonsterController>();

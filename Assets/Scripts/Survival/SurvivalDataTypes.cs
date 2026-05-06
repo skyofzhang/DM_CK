@@ -1001,7 +1001,7 @@ namespace DrscfZ.Survival
     public class BuildCancelledData
     {
         public string buildId;
-        public string reason;           // 当前仅 'insufficient_resources'
+    public string reason;           // 'insufficient_resources_at_finalize'
     }
 
     /// <summary>失败降级批量拆除（type=building_demolished_batch）</summary>
@@ -1275,6 +1275,17 @@ namespace DrscfZ.Survival
         public string sessionId;
         public int    count;
         public string attackerStreamerName;
+        public float  damageMultiplier;
+        public string[] monsterIds;
+        public TribeWarExpeditionMonsterData[] monsters;
+    }
+
+    [Serializable]
+    public class TribeWarExpeditionMonsterData
+    {
+        public string monsterId;
+        public int    hp;
+        public int    atk;
     }
 
     /// <summary>战报条目（type=tribe_war_combat_report / tribe_war_combat_report_defense，双方视角各自广播）。
@@ -1385,6 +1396,7 @@ namespace DrscfZ.Survival
     public class SeasonStartedData
     {
         public int    seasonId;
+        public int    seasonDay;
         public string themeId;
     }
 
@@ -1404,6 +1416,8 @@ namespace DrscfZ.Survival
     public class SeasonSettlementData
     {
         public int    seasonId;
+        public string themeId;
+        public int    nextSeasonId;
         public string nextThemeId;
         public int    survivingRooms;                         // 当前赛季末 fortressDay>0 的房间数
         public SeasonTopContributorEntry[] topContributors;   // 跨房间 Top10 贡献榜
@@ -1616,8 +1630,27 @@ namespace DrscfZ.Survival
 
     /// <summary>轮盘进行中状态（§24.4，断线重连快照）</summary>
     [Serializable]
+    public class RoulettePendingData
+    {
+        public string cardId;
+        public string[] displayedCards;
+        public long spunAt;
+        public long autoApplyAt;
+    }
+
+    [Serializable]
+    public class RouletteEffectData
+    {
+        public string cardId;
+        public long endsAt;
+    }
+
+    [Serializable]
     public class RouletteInProgressData
     {
+        public string phase;         // "charging" / "ready" / "pending" / "effect"
+        public RoulettePendingData pending;
+        public RouletteEffectData effect;
         public string cardId;        // 当前生效卡片 id（若有）
         public long   effectEndsAt;  // 效果结束时间（Unix ms）
         public long   readyAt;       // 下次充能完成时间（Unix ms）
@@ -1625,8 +1658,31 @@ namespace DrscfZ.Survival
 
     /// <summary>建造进行中状态（§37，断线重连快照）</summary>
     [Serializable]
+    public class BuildVotingInProgressData
+    {
+        public string proposalId;
+        public string proposerName;
+        public string[] options;
+        public long votingEndsAt;
+        public string[] voteBuildIds;
+        public int[] voteCounts;
+        public int totalVoters;
+    }
+
+    [Serializable]
+    public class BuildBuildingInProgressData
+    {
+        public string buildId;
+        public long startedAt;
+        public long completesAt;
+        public Vector3Data position;
+    }
+
+    [Serializable]
     public class BuildInProgressData
     {
+        public BuildVotingInProgressData voting;
+        public BuildBuildingInProgressData building;
         public string buildingId;
         public string name;
         public float  progress;      // 0-1
@@ -1635,22 +1691,56 @@ namespace DrscfZ.Survival
 
     /// <summary>探险进行中状态（§38，断线重连快照，entry 元素）</summary>
     [Serializable]
+    public class ExpeditionEventPhaseData
+    {
+        public string eventId;
+        public long eventEndsAt;
+        public string[] options;
+    }
+
+    [Serializable]
     public class ExpeditionInProgressData
     {
         public string expeditionId;
         public string workerId;
         public string phase;         // "outbound" / "event" / "return"
         public long   endsAt;        // Unix ms
+        public string playerId;
+        public int    workerIdx;
+        public long   startedAt;
+        public long   returnsAt;
+        public ExpeditionEventPhaseData eventPhase;
     }
 
     /// <summary>攻防战进行中状态（§35，断线重连快照）</summary>
+    [Serializable]
+    public class TribeWarStolenResourcesData
+    {
+        public int food;
+        public int coal;
+        public int ore;
+    }
+
+    [Serializable]
+    public class TribeWarStatsData
+    {
+        public int expeditionsSent;
+        public long startedAt;
+        public float damageMultiplier;
+    }
+
     [Serializable]
     public class TribeWarInProgressData
     {
         public string sessionId;
         public string state;         // "attacking" / "defending" / "idle"
+        public string role;          // "attacker" / "defender"
         public string targetRoomId;
         public long   endsAt;        // Unix ms
+        public int    energyAccumulated;
+        public int    remoteMonstersAlive;
+        public TribeWarStolenResourcesData stolenResources;
+        public TribeWarStatsData stats;
     }
 
     /// <summary>断线重连房间全量状态快照（type=room_state，S→C）。

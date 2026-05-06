@@ -306,21 +306,22 @@ namespace DrscfZ.Survival
             resourceSystem?.Initialize();
             cityGateSystem?.Initialize();
             dayNightManager?.Reset();
+            EnsureOptionalRuntimeUI();
 
             // 订阅失败条件
             if (resourceSystem != null)
             {
-                resourceSystem.OnFoodDepleted += () => HandleDefeat("food_depleted");
-                resourceSystem.OnTempFreeze   += () => HandleDefeat("temp_freeze");
+                resourceSystem.OnFoodDepleted += HandleLocalFoodDepleted;
+                resourceSystem.OnTempFreeze   += HandleLocalTempFreeze;
             }
             if (cityGateSystem != null)
-                cityGateSystem.OnGateBreached += () => HandleDefeat("gate_breached");
+                cityGateSystem.OnGateBreached += HandleLocalGateBreached;
 
             // 订阅昼夜切换事件 → 顶部飘字
             if (dayNightManager != null)
             {
-                dayNightManager.OnNightStarted += day => UI.TopFloatingTextUI.Instance?.ShowDanger("【夜袭】怪物入侵！全员防守！");
-                dayNightManager.OnDayStarted   += day => UI.TopFloatingTextUI.Instance?.ShowGold("【黎明】守住了！太阳升起！");
+                dayNightManager.OnNightStarted += HandleLocalNightStarted;
+                dayNightManager.OnDayStarted   += HandleLocalDayStarted;
             }
 
             Debug.Log("[SurvivalGM] 极地生存游戏管理器已启动");
@@ -331,6 +332,43 @@ namespace DrscfZ.Survival
             var net = NetworkManager.Instance;
             if (net != null)
                 net.OnMessageReceived -= HandleMessage;
+
+            if (resourceSystem != null)
+            {
+                resourceSystem.OnFoodDepleted -= HandleLocalFoodDepleted;
+                resourceSystem.OnTempFreeze   -= HandleLocalTempFreeze;
+            }
+            if (cityGateSystem != null)
+                cityGateSystem.OnGateBreached -= HandleLocalGateBreached;
+            if (dayNightManager != null)
+            {
+                dayNightManager.OnNightStarted -= HandleLocalNightStarted;
+                dayNightManager.OnDayStarted   -= HandleLocalDayStarted;
+            }
+        }
+
+        private void HandleLocalFoodDepleted() => HandleDefeat("food_depleted");
+        private void HandleLocalTempFreeze() => HandleDefeat("temp_freeze");
+        private void HandleLocalGateBreached() => HandleDefeat("gate_breached");
+        private void HandleLocalNightStarted(int day) => UI.TopFloatingTextUI.Instance?.ShowDanger("【夜袭】怪物入侵！全员防守！");
+        private void HandleLocalDayStarted(int day) => UI.TopFloatingTextUI.Instance?.ShowGold("【黎明】守住了！太阳升起！");
+
+        private static void EnsureOptionalRuntimeUI()
+        {
+            EnsureRuntimeUI<UI.TopFloatingTextUI>("TopFloatingTextUI");
+            EnsureRuntimeUI<UI.TraderOfferUI>("TraderOfferUI");
+            EnsureRuntimeUI<UI.TribeWarLobbyUI>("TribeWarLobbyUI");
+            EnsureRuntimeUI<UI.TribeWarAttackStatusPanel>("TribeWarAttackStatusPanel");
+            EnsureRuntimeUI<UI.TribeWarDefenseStatusPanel>("TribeWarDefenseStatusPanel");
+        }
+
+        private static void EnsureRuntimeUI<T>(string objectName) where T : Component
+        {
+            if (UnityEngine.Object.FindObjectOfType<T>(true) != null) return;
+            var go = new GameObject(objectName, typeof(RectTransform));
+            go.transform.SetParent(UI.RuntimeUIFactory.GetCanvasTransform(), false);
+            go.AddComponent<T>();
+            Debug.Log($"[SurvivalGM] Runtime fallback UI created: {objectName}");
         }
 
         // ==================== 网络消息分发 ====================
@@ -354,11 +392,7 @@ namespace DrscfZ.Survival
             //   及断线重连到 recovery 期（state=day + variant=recovery）的兜底触发
             if (_state == SurvivalState.Settlement || _state == SurvivalState.Idle)
             {
-                if (type != "join_room_confirm"
-                    && type != "weekly_ranking"
-                    && type != "streamer_ranking"
-                    && type != "phase_changed"        // 🆕 §16 永续模式恢复期需要
-                    && type != "survival_game_state") // 🆕 §16 断线重连 state=day+variant=recovery 需要
+                if (!IsInactiveStateAllowedMessage(type, _state))
                     return;
             }
 
@@ -1068,6 +1102,12 @@ namespace DrscfZ.Survival
                         Debug.Log($"[SGM] feature_unlocked: {fu.featureId} @ seasonDay={fu.unlockedAt} (r37: 服务端尚未 emit 此单事件，预留路由)");
                         string msg = string.IsNullOrEmpty(fu.message) ? $"新功能解锁：{fu.featureId}" : fu.message;
                         OnPlayerActivityMessage?.Invoke(msg);
+                        if (!string.IsNullOrEmpty(fu.featureId))
+                        {
+                            var unlocked = new[] { fu.featureId };
+                            MergeNewlyUnlockedFeatures(unlocked);
+                            OnNewlyUnlockedFeatures?.Invoke(unlocked);
+                        }
                         OnFeatureUnlocked?.Invoke(fu);
                     }
                     break;
@@ -1297,6 +1337,56 @@ namespace DrscfZ.Survival
             }
         }
 
+        private static bool IsSettlementShopMessage(string type)
+        {
+            switch (type)
+            {
+                case SurvivalMessageProtocol.ShopListData:
+                case SurvivalMessageProtocol.ShopPurchaseConfirmPrompt:
+                case SurvivalMessageProtocol.ShopPurchaseConfirm:
+                case SurvivalMessageProtocol.ShopPurchaseFailed:
+                case SurvivalMessageProtocol.ShopEquipChanged:
+                case SurvivalMessageProtocol.ShopEquipFailed:
+                case SurvivalMessageProtocol.ShopInventoryData:
+                case SurvivalMessageProtocol.ShopEffectTriggered:
+                case SurvivalMessageProtocol.EntranceSparkTriggered:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool IsInactiveStateAllowedMessage(string type, SurvivalState state)
+        {
+            switch (type)
+            {
+                case "join_room_confirm":
+                case "game_started":
+                case "weekly_ranking":
+                case "streamer_ranking":
+                case SurvivalMessageProtocol.PhaseChanged:
+                case SurvivalMessageProtocol.SurvivalGameState:
+                case SurvivalMessageProtocol.RoomState:
+                case SurvivalMessageProtocol.WorldClockTick:
+                case SurvivalMessageProtocol.SeasonState:
+                case SurvivalMessageProtocol.FortressDayChanged:
+                case SurvivalMessageProtocol.RoomFailed:
+                case SurvivalMessageProtocol.SeasonStarted:
+                case SurvivalMessageProtocol.SeasonSettlement:
+                case SurvivalMessageProtocol.SeasonBossRushStart:
+                case SurvivalMessageProtocol.SeasonBossRushKilled:
+                case SurvivalMessageProtocol.FeatureUnlocked:
+                case SurvivalMessageProtocol.VeteranUnlocked:
+                case SurvivalMessageProtocol.WaitingPhaseStarted:
+                case SurvivalMessageProtocol.WaitingPhaseEnded:
+                case SurvivalMessageProtocol.DailyTierDecay:
+                case SurvivalMessageProtocol.RoomDestroyed:
+                    return true;
+                default:
+                    return state == SurvivalState.Settlement && IsSettlementShopMessage(type);
+            }
+        }
+
         // ==================== 逻辑处理 ====================
 
         private void HandleJoinRoomConfirm(JoinRoomConfirmData data)
@@ -1331,24 +1421,32 @@ namespace DrscfZ.Survival
         private void HandleGameState(SurvivalGameStateData data)
         {
             // 同步资源
-            if (resourceSystem != null)
+            var resourceUpdate = new ResourceUpdateData
             {
-                resourceSystem.ApplyServerUpdate(new ResourceUpdateData
-                {
-                    food = data.food, coal = data.coal, ore = data.ore,
-                    furnaceTemp = data.furnaceTemp,
-                    gateHp = data.gateHp, gateMaxHp = data.gateMaxHp,
-                    remainingTime = data.remainingTime
-                });
-            }
+                food = data.food,
+                coal = data.coal,
+                ore = data.ore,
+                furnaceTemp = data.furnaceTemp,
+                gateHp = data.gateHp,
+                gateMaxHp = data.gateMaxHp,
+                gateLevel = data.gateLevel,
+                remainingTime = data.remainingTime,
+                scorePool = data.scorePool,
+                gateTierName = data.gateTierName,
+                gateFeatures = data.gateFeatures,
+                gateDailyUpgraded = data.gateDailyUpgraded
+            };
+            resourceSystem?.ApplyServerUpdate(resourceUpdate);
             // 🆕 v1.22 §10 同步城门层级元数据（断线重连时确保状态一致）
             if (cityGateSystem != null)
             {
+                cityGateSystem.SyncFromServer(data.gateHp, data.gateMaxHp);
                 cityGateSystem.ApplyDailyUpgraded(data.gateDailyUpgraded);
                 cityGateSystem.ApplyTierMeta(data.gateTierName, data.gateFeatures);
             }
             // 同步积分池（连接/断线重连时立即刷新显示）
             if (data.scorePool > 0) OnScorePoolUpdated?.Invoke(data.scorePool);
+            OnResourceUpdate?.Invoke(resourceUpdate);
 
             // 🆕 v1.27 §36.12 分时段解锁：survival_game_state 每次推送都携带已解锁功能全集
             //   断线重连兜底路径，确保客户端按钮锁态与服务端完全一致
@@ -1428,11 +1526,12 @@ namespace DrscfZ.Survival
                 case "settlement":
                     // 断线重连时服务器处于结算状态 → 直接切换到 Settlement UI（原因未知，用 unknown）
                     // 不调用 HandleDefeatOrVictory（那会创建假的"胜利"结算数据）
-                    // 10s 后服务器会自动重启，客户端会收到新的 survival_game_state(day)
-                    if (_state == SurvivalState.Running || _state == SurvivalState.Loading)
+                    // 服务端结算窗口结束后会推 recovery，客户端收到 phase_changed/survival_game_state 后回 Running
+                    if (_state == SurvivalState.Running || _state == SurvivalState.Loading || _state == SurvivalState.Waiting)
                     {
-                        Debug.Log("[SGM] survival_game_state=settlement，服务器正在结算，等待自动重开");
+                        Debug.Log("[SGM] survival_game_state=settlement，服务器正在结算，显示最小结算上下文并等待 recovery");
                         ChangeState(SurvivalState.Settlement);
+                        ShowSettlementSnapshot(data);
                     }
                     break;
 
@@ -1512,6 +1611,10 @@ namespace DrscfZ.Survival
                     newFortressDay = data.fortressDay,  // 同步快照（非变更事件）
                     reason         = "reconnect_sync",
                     seasonDay      = data.seasonDay,
+                    dailyFortressDayGained = data.dailyFortressDayGained,
+                    dailyCapMax = data.dailyCapMax,
+                    dailyResetAt = data.dailyResetAt,
+                    dailyCapBlocked = data.dailyCapBlocked,
                 });
             }
         }
@@ -1968,6 +2071,26 @@ namespace DrscfZ.Survival
             _settlementUI?.ShowSettlement(data);
             // 结算界面停留，直到玩家点击"重新开始"按钮手动关闭
             // _restartButton → OnRestartClicked → RequestReturnFromSettlement()
+        }
+
+        private void ShowSettlementSnapshot(SurvivalGameStateData data)
+        {
+            if (_settlementUI == null || data == null) return;
+
+            int fortressDay = data.fortressDay > 0 ? data.fortressDay : data.day;
+            var settlement = new global::DrscfZ.UI.SettlementData
+            {
+                IsVictory = false,
+                SurvivalDays = Mathf.Max(0, data.day),
+                FailReason = "unknown",
+                FortressDayBefore = Mathf.Max(0, fortressDay),
+                FortressDayAfter = Mathf.Max(0, fortressDay),
+                NewbieProtected = false,
+                IsManual = false,
+            };
+
+            _settlementUI.gameObject.SetActive(true);
+            _settlementUI.ShowSettlement(settlement);
         }
 
         private IEnumerator DelayedSettlement(float delay)
@@ -2554,6 +2677,7 @@ namespace DrscfZ.Survival
                 {
                     // Lv6 寒冰冲击波：屏幕震动 + 对命中怪物播放冻结闪烁
                     SurvivalCameraController.Shake(0.2f, 0.3f);
+                    Systems.AudioManager.Instance?.PlaySFX(Core.AudioConstants.SFX_FROST_PULSE);
                     if (effectiveTargets != null && monsterWaveSpawner != null)
                     {
                         // 🆕 P0-B7：写 FrozenUntil 让怪物停住；同时播放闪烁视觉
@@ -2571,7 +2695,7 @@ namespace DrscfZ.Survival
                             }
                         }
                     }
-                    // TODO §10.7：FX_FrostPulse 环形冲击波 VFX + sfx_frost_pulse（美术资源待落地）
+                    // TODO §10.7：FX_FrostPulse 环形冲击波 VFX（美术资源待落地）
                     Debug.Log($"[GateFX] Frost pulse ({(effectiveTargets?.Length ?? 0)} monsters hit, freezeMs={d.freezeMs} durationMs={d.durationMs})");
                     break;
                 }
@@ -3083,6 +3207,7 @@ namespace DrscfZ.Survival
             switch (reason)
             {
                 case "insufficient_resources": return "资源不足";
+                case "insufficient_resources_at_finalize": return "扣费时资源不足";
                 case "daily_limit":            return "今日已投过票";
                 case "wrong_phase":            return "仅白天可投票";
                 case "already_built":          return "该建筑已建造";
@@ -3322,6 +3447,7 @@ namespace DrscfZ.Survival
         private void HandleTribeWarAttackStarted(TribeWarAttackStartedData data)
         {
             OnTribeWarAttackStarted?.Invoke(data);
+            UI.TribeWarDefenseStatusPanel.Instance?.Hide();
             UI.TribeWarAttackStatusPanel.Instance?.Show(data);
             OnPlayerActivityMessage?.Invoke($"【攻防战】{data.attackerStreamerName} → {data.defenderStreamerName}");
             UI.HorizontalMarqueeUI.Instance?.AddMessage(
@@ -3333,6 +3459,7 @@ namespace DrscfZ.Survival
         private void HandleTribeWarUnderAttack(TribeWarUnderAttackData data)
         {
             OnTribeWarUnderAttack?.Invoke(data);
+            UI.TribeWarAttackStatusPanel.Instance?.Hide();
             UI.TribeWarDefenseStatusPanel.Instance?.Show(data);
             UI.TopFloatingTextUI.Instance?.ShowDanger($"【被攻击】{data.attackerStreamerName} 发起攻势！");
             OnPlayerActivityMessage?.Invoke($"【被攻击】{data.attackerStreamerName} 发起攻势");
@@ -3354,11 +3481,11 @@ namespace DrscfZ.Survival
             OnTribeWarExpeditionIncoming?.Invoke(data);
             if (monsterWaveSpawner != null)
             {
-                monsterWaveSpawner.SpawnTribeWarExpedition(data.count, data.attackerStreamerName);
+                monsterWaveSpawner.SpawnTribeWarExpedition(data.count, data.attackerStreamerName, data.monsterIds);
             }
             else if (MonsterWaveSpawner.Instance != null)
             {
-                MonsterWaveSpawner.Instance.SpawnTribeWarExpedition(data.count, data.attackerStreamerName);
+                MonsterWaveSpawner.Instance.SpawnTribeWarExpedition(data.count, data.attackerStreamerName, data.monsterIds);
             }
             else
             {
@@ -3573,6 +3700,7 @@ namespace DrscfZ.Survival
             // 更新缓存（若 world_clock_tick 尚未到达 season_started 的 tick 节拍）
             if (CurrentSeasonState == null) CurrentSeasonState = new SeasonRuntimeState();
             CurrentSeasonState.seasonId = data.seasonId;
+            if (data.seasonDay > 0) CurrentSeasonState.seasonDay = data.seasonDay;
             if (!string.IsNullOrEmpty(data.themeId))
                 CurrentSeasonState.themeId = data.themeId;
 
@@ -3680,7 +3808,6 @@ namespace DrscfZ.Survival
         private void HandleVeteranUnlocked(VeteranUnlockedData data)
         {
             OnVeteranUnlocked?.Invoke(data);
-            UI.FeatureUnlockBanner.Instance?.ShowVeteranUnlocked(data);
             Debug.Log($"[SGM] veteran_unlocked: openId={data.openId} reason={data.reason}");
         }
 

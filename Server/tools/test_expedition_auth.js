@@ -166,6 +166,28 @@ test('T6: expedition_event_vote is broadcaster-only', () => {
   assert.strictEqual(voteCalls, 1, 'creator vote should pass');
 });
 
+test('T7: ws broadcaster recall wrong_phase feedback returns to broadcaster', () => {
+  const { room, wsCreator } = makeRoomWithWss();
+  const wsMiner = makeWs('miner_1');
+  room.clients.add(wsMiner);
+  room.survivalEngine.state = 'night';
+  room.survivalEngine._expeditions.set('exp_1', {
+    expeditionId: 'exp_1',
+    playerId: 'miner_1',
+    outboundTimer: null,
+    eventTimer: null,
+    returnTimer: null,
+  });
+
+  room.handleClientMessage(wsCreator, 'expedition_command', { action: 'recall', playerId: 'miner_1' });
+
+  const creatorFail = wsCreator._sent.find(m => m.type === 'expedition_failed');
+  assert.ok(creatorFail, 'expected expedition_failed on broadcaster ws');
+  assert.strictEqual(creatorFail.data.playerId, 'miner_1');
+  assert.strictEqual(creatorFail.data.reason, 'wrong_phase');
+  assert.ok(!wsMiner._sent.find(m => m.type === 'expedition_failed'), 'target miner should not receive broadcaster recall failure');
+});
+
 console.log('\n=== Expedition auth/gating test summary ===');
 console.log(`Passed: ${passed}`);
 console.log(`Failed: ${failed}`);

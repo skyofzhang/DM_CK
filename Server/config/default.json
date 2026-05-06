@@ -5,7 +5,7 @@
     "heartbeatInterval": 30000
   },
   "game": {
-    "survivalDayDuration":   240,
+    "survivalDayDuration":   120,
     "survivalNightDuration": 120,
     "survivalTotalDays":     70,
     "initFood":              500,

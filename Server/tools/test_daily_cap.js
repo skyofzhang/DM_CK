@@ -25,6 +25,8 @@ const ROOT = path.join(__dirname, '..');
 const FeatureFlags = require(path.join(ROOT, 'src', 'FeatureFlags'));
 const SurvivalGameEngine = require(path.join(ROOT, 'src', 'SurvivalGameEngine'));
 const RoomPersistence = require(path.join(ROOT, 'src', 'RoomPersistence'));
+const GlobalClock = require(path.join(ROOT, 'src', 'GlobalClock'));
+const defaultConfig = require(path.join(ROOT, 'config', 'default.json'));
 
 let passed = 0;
 let failed = 0;
@@ -321,6 +323,92 @@ test('T11: getFullState 携带 dailyFortressDayGained/dailyCapMax/dailyResetAt/d
   assert.strictEqual(typeof s.dailyResetAt, 'number');
   assert.ok(s.dailyResetAt > Date.now());
   assert.strictEqual(s.dailyCapBlocked, false);
+});
+
+test('T12: default global clock day/night durations stay 120 seconds', () => {
+  assert.strictEqual(defaultConfig.game.survivalDayDuration, 120);
+  assert.strictEqual(defaultConfig.game.survivalNightDuration, 120);
+
+  const clock = new GlobalClock({ seasonDay: 1, seasonId: 1, themeId: 'classic_frozen' }, {
+    dayDurationMs: defaultConfig.game.survivalDayDuration * 1000,
+    nightDurationMs: defaultConfig.game.survivalNightDuration * 1000,
+    tickMs: 999999,
+  });
+  try {
+    assert.strictEqual(clock._baseDayDurationMs, 120000);
+    assert.strictEqual(clock._baseNightDurationMs, 120000);
+  } finally {
+    clock.stop();
+  }
+});
+
+test('T13: world_clock_tick after phase transition uses new phase duration', () => {
+  const seasonMgr = {
+    seasonDay: 1,
+    seasonId: 1,
+    themeId: 'classic_frozen',
+    advanceDay() {},
+  };
+  const clock = new GlobalClock(seasonMgr, {
+    dayDurationMs: 120000,
+    nightDurationMs: 120000,
+    tickMs: 999999,
+  });
+  const room = {
+    roomId: 'clock_transition_room',
+    broadcasts: [],
+    broadcast(msg) { this.broadcasts.push(msg); },
+    survivalEngine: {
+      state: 'day',
+      remainingTime: 0,
+      _enterNightFromClock() { this.state = 'night'; },
+      _enterDayFromClock() { this.state = 'day'; },
+    },
+  };
+  try {
+    clock._rooms.add(room);
+    clock._phase = 'day';
+    clock._phaseStartedAt = Date.now() - 121000;
+    clock._tick();
+
+    const tick = room.broadcasts.filter(m => m.type === 'world_clock_tick').pop();
+    assert.ok(tick, 'world_clock_tick should broadcast');
+    assert.strictEqual(tick.data.phase, 'night');
+    assert.ok(tick.data.phaseRemainingSec <= 120, `remaining should be <= 120, got ${tick.data.phaseRemainingSec}`);
+    assert.ok(tick.data.phaseRemainingSec >= 115, `remaining should be close to full night, got ${tick.data.phaseRemainingSec}`);
+    assert.strictEqual(room.survivalEngine.state, 'night');
+    assert.ok(room.survivalEngine.remainingTime <= 120, 'engine remainingTime should not retain old day duration');
+  } finally {
+    clock.stop();
+  }
+});
+
+test('T14: early boss kill completes night success and increments fortressDay once', () => {
+  const eng = makeEngine();
+  try {
+    eng.state = 'night';
+    eng.currentDay = 1;
+    eng.fortressDay = 10;
+    eng.maxFortressDay = 10;
+    eng._dailyResetKey = eng._computeDayKey();
+    eng._dailyFortressDayGained = 0;
+    eng._dailyCapBlocked = false;
+
+    const ok = eng._completeNightSuccess('boss_killed_test');
+    assert.strictEqual(ok, true);
+    assert.strictEqual(eng.state, 'day');
+    assert.strictEqual(eng.currentDay, 2);
+    assert.strictEqual(eng.fortressDay, 11);
+    assert.strictEqual(eng.maxFortressDay, 11);
+    assert.strictEqual(eng._dailyFortressDayGained, 1);
+
+    const duplicate = eng._completeNightSuccess('duplicate');
+    assert.strictEqual(duplicate, false);
+    assert.strictEqual(eng.fortressDay, 11, 'second call should not increment again');
+    assert.strictEqual(eng._dailyFortressDayGained, 1);
+  } finally {
+    if (typeof eng._clearAllTimers === 'function') eng._clearAllTimers();
+  }
 });
 
 // ============================================================

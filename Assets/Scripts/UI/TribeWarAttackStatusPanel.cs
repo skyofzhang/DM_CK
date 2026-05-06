@@ -62,6 +62,7 @@ namespace DrscfZ.UI
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
+            EnsureFallbackUI();
             if (_panel != null) _panel.SetActive(false);
         }
 
@@ -76,6 +77,49 @@ namespace DrscfZ.UI
         }
 
         // ==================== 对外接口 ====================
+
+        private void EnsureFallbackUI()
+        {
+            if (_panel != null) return;
+            if (transform.parent == null)
+                transform.SetParent(RuntimeUIFactory.GetCanvasTransform(), false);
+
+            _panel = RuntimeUIFactory.CreatePanel(transform, "TribeWarAttackPanel",
+                new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
+                new Vector2(-250f, 60f), new Vector2(460f, 330f), new Color(0.06f, 0.07f, 0.10f, 0.92f));
+            RuntimeUIFactory.AddVerticalLayout(_panel, 8f, new RectOffset(18, 18, 16, 16), TextAnchor.UpperLeft);
+
+            _titleText = RuntimeUIFactory.CreateText(_panel.transform, "Title", "攻击目标：—", 26f,
+                new Color(1f, 0.86f, 0.25f), TextAlignmentOptions.Left, new Vector2(420f, 36f));
+            RuntimeUIFactory.AddLayoutElement(_titleText.gameObject, 36f);
+
+            _energyText = RuntimeUIFactory.CreateText(_panel.transform, "Energy", "能量：0", 20f,
+                Color.white, TextAlignmentOptions.Left, new Vector2(420f, 28f));
+            RuntimeUIFactory.AddLayoutElement(_energyText.gameObject, 28f);
+
+            var sliderGo = new GameObject("EnergyBar", typeof(RectTransform), typeof(Slider));
+            sliderGo.transform.SetParent(_panel.transform, false);
+            _energyBar = sliderGo.GetComponent<Slider>();
+            _energyBar.minValue = 0f;
+            _energyBar.maxValue = 1f;
+            RuntimeUIFactory.AddLayoutElement(sliderGo, 22f);
+
+            _expeditionCountText = RuntimeUIFactory.CreateText(_panel.transform, "Expeditions", "已派出：0", 20f,
+                Color.white, TextAlignmentOptions.Left, new Vector2(420f, 28f));
+            RuntimeUIFactory.AddLayoutElement(_expeditionCountText.gameObject, 28f);
+
+            _stolenText = RuntimeUIFactory.CreateText(_panel.transform, "Stolen", "偷取：食物+0 煤炭+0 矿石+0", 20f,
+                Color.white, TextAlignmentOptions.Left, new Vector2(420f, 30f));
+            RuntimeUIFactory.AddLayoutElement(_stolenText.gameObject, 30f);
+
+            _reportText = RuntimeUIFactory.CreateText(_panel.transform, "Report", "", 18f,
+                new Color(0.82f, 0.88f, 1f), TextAlignmentOptions.TopLeft, new Vector2(420f, 90f));
+            RuntimeUIFactory.AddLayoutElement(_reportText.gameObject, 90f);
+
+            _btnStop = RuntimeUIFactory.CreateButton(_panel.transform, "Stop", "停止攻击", out _,
+                new Color(0.45f, 0.16f, 0.16f, 1f), new Vector2(180f, 44f));
+            RuntimeUIFactory.AddLayoutElement(_btnStop.gameObject, 44f, 180f);
+        }
 
         /// <summary>tribe_war_attack_started 时调用（双方房间均广播；MVP 两边都 Show）。</summary>
         public void Show(TribeWarAttackStartedData data)

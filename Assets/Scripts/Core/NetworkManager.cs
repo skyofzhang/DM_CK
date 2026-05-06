@@ -121,6 +121,7 @@ namespace DrscfZ.Core
         private readonly ConcurrentQueue<Action> _actionQueue = new();
         private int _reconnectCount;
         private bool _intentionalClose;
+        private bool _isConnecting;
         private float _lastHeartbeatResponse;
         private bool _heartbeatTimeoutFired;
 
@@ -236,49 +237,57 @@ namespace DrscfZ.Core
 
         public async void Connect()
         {
-            if (IsConnected) return;
-            _intentionalClose = false;
-            _reconnectCount = 0;
-            ConnectError = null;
-
-            // IsGMMode 已改为派生属性，这里不再赋值；_explicitGMMode / douyinToken 决定模式。
-            if (IsGMMode)
+            if (!BeginConnectAttempt()) return;
+            try
             {
-                // GM 模式（显式 -gm 或兜底无 token）：跳过抖音 init，直接连接服务器
-                if (string.IsNullOrEmpty(roomId)) roomId = "default";
-                string gmReason = _explicitGMMode ? "显式 -gm" : "无抖音token（兜底）";
-                Debug.Log($"[Net] GM模式：{gmReason}，直接连接服务器 roomId={roomId}");
-                await ConnectAsync();
-                return;
-            }
+                _intentionalClose = false;
+                _reconnectCount = 0;
+                ConnectError = null;
 
-            // 真实抖音模式：用token调init接口获取roomId
-            if (!IsDouyinInitialized)
-            {
-                Debug.Log($"[Net] Douyin token detected, calling init API...");
-                bool initOk = await DouyinInitAsync(douyinToken);
-                if (!initOk)
+                // IsGMMode 已改为派生属性，这里不再赋值；_explicitGMMode / douyinToken 决定模式。
+                if (IsGMMode)
                 {
-                    ConnectError = "直播间初始化失败，请重新从直播伴侣启动！";
-                    Debug.LogError($"[Net] {ConnectError}");
-                    // 三条通道同时触发：保留原 OnConnectFailed 向下兼容；
-                    // OnConnectError 给通用错误 UI；OnReconnectRequired 让 UI 弹重连对话框
-                    _actionQueue.Enqueue(() =>
-                    {
-                        OnConnectFailed?.Invoke(ConnectError);
-                        OnConnectError?.Invoke(ConnectError);
-                        OnReconnectRequired?.Invoke(ConnectError);
-                    });
+                    // GM 模式（显式 -gm 或兜底无 token）：跳过抖音 init，直接连接服务器
+                    if (string.IsNullOrEmpty(roomId)) roomId = "default";
+                    string gmReason = _explicitGMMode ? "显式 -gm" : "无抖音token（兜底）";
+                    Debug.Log($"[Net] GM模式：{gmReason}，直接连接服务器 roomId={roomId}");
+                    await ConnectAsyncInternal();
                     return;
                 }
-            }
 
-            await ConnectAsync();
+                // 真实抖音模式：用token调init接口获取roomId
+                if (!IsDouyinInitialized)
+                {
+                    Debug.Log($"[Net] Douyin token detected, calling init API...");
+                    bool initOk = await DouyinInitAsync(douyinToken);
+                    if (!initOk)
+                    {
+                        ConnectError = "直播间初始化失败，请重新从直播伴侣启动！";
+                        Debug.LogError($"[Net] {ConnectError}");
+                        // 三条通道同时触发：保留原 OnConnectFailed 向下兼容；
+                        // OnConnectError 给通用错误 UI；OnReconnectRequired 让 UI 弹重连对话框
+                        _actionQueue.Enqueue(() =>
+                        {
+                            OnConnectFailed?.Invoke(ConnectError);
+                            OnConnectError?.Invoke(ConnectError);
+                            OnReconnectRequired?.Invoke(ConnectError);
+                        });
+                        return;
+                    }
+                }
+
+                await ConnectAsyncInternal();
+            }
+            finally
+            {
+                _isConnecting = false;
+            }
         }
 
         public void Disconnect()
         {
             _intentionalClose = true;
+            _isConnecting = false;
             _cts?.Cancel();
             if (_ws != null && _ws.State == WebSocketState.Open)
             {
@@ -314,7 +323,27 @@ namespace DrscfZ.Core
             }
         }
 
+        private bool BeginConnectAttempt()
+        {
+            if (IsConnected || _isConnecting) return false;
+            _isConnecting = true;
+            return true;
+        }
+
         private async Task ConnectAsync()
+        {
+            if (!BeginConnectAttempt()) return;
+            try
+            {
+                await ConnectAsyncInternal();
+            }
+            finally
+            {
+                _isConnecting = false;
+            }
+        }
+
+        private async Task ConnectAsyncInternal()
         {
             _cts?.Cancel();
             _cts = new CancellationTokenSource();
@@ -421,62 +450,191 @@ namespace DrscfZ.Core
         /// <summary>🔴 audit-r45 GAP-B45-03：提取 envelope 顶层 number 字段（priority/tick）</summary>
         private string ExtractNumberField(string json, string field)
         {
-            string key = $"\"{field}\":";
-            int idx = json.IndexOf(key);
-            if (idx < 0) return null;
-            int start = idx + key.Length;
-            // 跳过空白
-            while (start < json.Length && (json[start] == ' ' || json[start] == '\t')) start++;
-            // 数字字段（无引号），读到 ',' 或 '}' 结束
-            int end = start;
-            while (end < json.Length && json[end] != ',' && json[end] != '}' && json[end] != ' ') end++;
+            int start = FindTopLevelFieldValueStart(json, field);
+            if (start < 0) return null;
+
+            int end = FindScalarEnd(json, start);
             if (end <= start) return null;
             return json.Substring(start, end - start);
         }
 
         private string ExtractField(string json, string field)
         {
-            string key = $"\"{field}\":\"";
-            int idx = json.IndexOf(key);
-            if (idx < 0) return null;
-            int start = idx + key.Length;
-            int end = json.IndexOf('"', start);
-            if (end < 0) return null;
-            return json.Substring(start, end - start);
+            int start = FindTopLevelFieldValueStart(json, field);
+            if (start < 0) return null;
+
+            if (json[start] == '"')
+                return TryReadJsonString(json, start, out var value, out _) ? value : null;
+
+            int end = FindScalarEnd(json, start);
+            return end > start ? json.Substring(start, end - start) : null;
         }
 
         private string ExtractDataJson(string json)
         {
-            int idx = json.IndexOf("\"data\":");
-            if (idx < 0) return "{}";
-
-            int start = idx + 7;
-            // 跳过空白
-            while (start < json.Length && json[start] == ' ') start++;
-
+            int start = FindTopLevelFieldValueStart(json, "data");
+            if (start < 0) return "{}";
             if (start >= json.Length) return "{}";
 
             char first = json[start];
-            if (first == '{')
+            if (first == '{' || first == '[')
             {
-                int depth = 0;
-                for (int i = start; i < json.Length; i++)
-                {
-                    if (json[i] == '{') depth++;
-                    else if (json[i] == '}') { depth--; if (depth == 0) return json.Substring(start, i - start + 1); }
-                }
-            }
-            else if (first == '[')
-            {
-                int depth = 0;
-                for (int i = start; i < json.Length; i++)
-                {
-                    if (json[i] == '[') depth++;
-                    else if (json[i] == ']') { depth--; if (depth == 0) return json.Substring(start, i - start + 1); }
-                }
+                int end = FindJsonValueEnd(json, start);
+                return end > start ? json.Substring(start, end - start) : "{}";
             }
 
             return "{}";
+        }
+
+        private static int FindTopLevelFieldValueStart(string json, string field)
+        {
+            int objectDepth = 0;
+            int arrayDepth = 0;
+
+            for (int i = 0; i < json.Length; i++)
+            {
+                char c = json[i];
+                if (c == '"')
+                {
+                    int quoteIndex = i;
+                    if (!TryReadJsonString(json, quoteIndex, out var key, out var afterString))
+                        return -1;
+
+                    i = afterString - 1;
+                    if (objectDepth == 1 && arrayDepth == 0 && key == field)
+                    {
+                        int colon = SkipWhitespace(json, afterString);
+                        if (colon < json.Length && json[colon] == ':')
+                            return SkipWhitespace(json, colon + 1);
+                    }
+                    continue;
+                }
+
+                if (c == '{') objectDepth++;
+                else if (c == '}') objectDepth = Math.Max(0, objectDepth - 1);
+                else if (c == '[') arrayDepth++;
+                else if (c == ']') arrayDepth = Math.Max(0, arrayDepth - 1);
+            }
+
+            return -1;
+        }
+
+        private static int FindJsonValueEnd(string json, int start)
+        {
+            char first = json[start];
+            if (first == '"')
+                return TryReadJsonString(json, start, out _, out var afterString) ? afterString : -1;
+
+            if (first != '{' && first != '[')
+                return FindScalarEnd(json, start);
+
+            int depth = 0;
+            bool inString = false;
+            bool escaped = false;
+
+            for (int i = start; i < json.Length; i++)
+            {
+                char c = json[i];
+                if (inString)
+                {
+                    if (escaped) escaped = false;
+                    else if (c == '\\') escaped = true;
+                    else if (c == '"') inString = false;
+                    continue;
+                }
+
+                if (c == '"')
+                {
+                    inString = true;
+                    continue;
+                }
+                if (c == '{' || c == '[') depth++;
+                else if (c == '}' || c == ']')
+                {
+                    depth--;
+                    if (depth == 0) return i + 1;
+                }
+            }
+
+            return -1;
+        }
+
+        private static int FindScalarEnd(string json, int start)
+        {
+            int end = start;
+            while (end < json.Length)
+            {
+                char c = json[end];
+                if (c == ',' || c == '}' || c == ']' || char.IsWhiteSpace(c)) break;
+                end++;
+            }
+            return end;
+        }
+
+        private static int SkipWhitespace(string json, int index)
+        {
+            while (index < json.Length && char.IsWhiteSpace(json[index])) index++;
+            return index;
+        }
+
+        private static bool TryReadJsonString(string json, int quoteIndex, out string value, out int nextIndex)
+        {
+            value = null;
+            nextIndex = quoteIndex;
+            if (quoteIndex < 0 || quoteIndex >= json.Length || json[quoteIndex] != '"') return false;
+
+            StringBuilder sb = null;
+            int segmentStart = quoteIndex + 1;
+
+            for (int i = quoteIndex + 1; i < json.Length; i++)
+            {
+                char c = json[i];
+                if (c == '"')
+                {
+                    if (sb == null)
+                        value = json.Substring(segmentStart, i - segmentStart);
+                    else
+                    {
+                        sb.Append(json, segmentStart, i - segmentStart);
+                        value = sb.ToString();
+                    }
+                    nextIndex = i + 1;
+                    return true;
+                }
+
+                if (c != '\\') continue;
+
+                sb ??= new StringBuilder();
+                sb.Append(json, segmentStart, i - segmentStart);
+                if (i + 1 >= json.Length) return false;
+
+                char esc = json[++i];
+                switch (esc)
+                {
+                    case '"': sb.Append('"'); break;
+                    case '\\': sb.Append('\\'); break;
+                    case '/': sb.Append('/'); break;
+                    case 'b': sb.Append('\b'); break;
+                    case 'f': sb.Append('\f'); break;
+                    case 'n': sb.Append('\n'); break;
+                    case 'r': sb.Append('\r'); break;
+                    case 't': sb.Append('\t'); break;
+                    case 'u':
+                        if (i + 4 >= json.Length) return false;
+                        string hex = json.Substring(i + 1, 4);
+                        if (!ushort.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out var code))
+                            return false;
+                        sb.Append((char)code);
+                        i += 4;
+                        break;
+                    default:
+                        sb.Append(esc);
+                        break;
+                }
+                segmentStart = i + 1;
+            }
+
+            return false;
         }
 
         private async Task HeartbeatLoop()
@@ -590,12 +748,31 @@ namespace DrscfZ.Core
             return token.Substring(0, Math.Min(8, token.Length));
         }
 
-        /// <summary>最小化 JSON 字符串转义（只处理最常见的 \ 和 "），roomId/playerName 够用。
-        /// 服务端 JSON.parse 严格遵循 RFC 8259，控制字符罕见于我们的字段，故不做完整表。</summary>
+        /// <summary>JSON 字符串转义，用于手工拼接少量协议包。</summary>
         private static string EscapeJsonString(string s)
         {
             if (string.IsNullOrEmpty(s)) return "";
-            return s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+            var sb = new StringBuilder(s.Length + 8);
+            foreach (char c in s)
+            {
+                switch (c)
+                {
+                    case '"': sb.Append("\\\""); break;
+                    case '\\': sb.Append("\\\\"); break;
+                    case '\b': sb.Append("\\b"); break;
+                    case '\f': sb.Append("\\f"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    default:
+                        if (c < ' ')
+                            sb.Append("\\u").Append(((int)c).ToString("x4"));
+                        else
+                            sb.Append(c);
+                        break;
+                }
+            }
+            return sb.ToString();
         }
 
         /// <summary>
@@ -619,7 +796,7 @@ namespace DrscfZ.Core
             try
             {
                 string url = $"{httpUrl}/api/douyin/init";
-                string jsonBody = $"{{\"token\":\"{token}\"}}";
+                string jsonBody = $"{{\"token\":\"{EscapeJsonString(token)}\"}}";
 
                 Debug.Log($"[Net] POST {url}");
 

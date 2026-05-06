@@ -121,6 +121,8 @@ namespace DrscfZ.UI
 
         private float _boostCd = 0f;
         private float _eventCd = 0f;
+        private bool _boostPending = false;
+        private bool _eventPending = false;
 
         // ==================== 状态 ====================
 
@@ -268,6 +270,10 @@ namespace DrscfZ.UI
                     // 服务器广播效果回来（服务器端处理后广播给所有客户端，包括主播自己）
                     HandleBroadcasterEffect(dataJson);
                     break;
+
+                case "broadcaster_action_failed":
+                    HandleBroadcasterActionFailed(dataJson);
+                    break;
             }
         }
 
@@ -290,7 +296,8 @@ namespace DrscfZ.UI
 
         private void OnBoostClicked()
         {
-            if (_boostCd > 0f) return;
+            if (_boostCd > 0f || _boostPending) return;
+            if (IsKnownLocked(SurvivalMessageProtocol.FeatureBroadcasterBoost, "紧急加速")) return;
 
             // 发送消息到服务器
             // NetworkManager只有 SendMessage(string type) 和 SendJson(string json)
@@ -302,15 +309,15 @@ namespace DrscfZ.UI
             string json = $"{{\"type\":\"broadcaster_action\",\"data\":{{\"action\":\"efficiency_boost\",\"duration\":30000}},\"timestamp\":{System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}";
             net.SendJson(json);
 
-            // 开始CD（客户端本地管理 BOOST_CD，与策划案 §15.3 当前一致）
-            _boostCd = BOOST_CD;
-            SetBoostCdState(true);
+            _boostPending = true;
+            SetBoostPendingState();
             Debug.Log("[BroadcasterPanel] ⚡ efficiency_boost 已发送");
         }
 
         private void OnEventClicked()
         {
-            if (_eventCd > 0f) return;
+            if (_eventCd > 0f || _eventPending) return;
+            if (IsKnownLocked(SurvivalMessageProtocol.FeatureBroadcasterBoost, "主播事件")) return;
 
             var net = NetworkManager.Instance;
             if (net == null || !net.IsConnected) return;
@@ -319,9 +326,8 @@ namespace DrscfZ.UI
             string json = $"{{\"type\":\"broadcaster_action\",\"data\":{{\"action\":\"trigger_event\"}},\"timestamp\":{System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}";
             net.SendJson(json);
 
-            // 开始CD（客户端本地管理 EVENT_CD）
-            _eventCd = EVENT_CD;
-            SetEventCdState(true);
+            _eventPending = true;
+            SetEventPendingState();
             Debug.Log("[BroadcasterPanel] 🌊 trigger_event 已发送");
         }
 
@@ -334,6 +340,7 @@ namespace DrscfZ.UI
         /// </summary>
         private void OnRouletteClicked()
         {
+            if (IsKnownLocked(SurvivalMessageProtocol.FeatureRoulette, "事件轮盘")) return;
             RouletteUI.Instance?.OpenPanel();
         }
 
@@ -345,6 +352,7 @@ namespace DrscfZ.UI
         /// </summary>
         private void OnShopClicked()
         {
+            if (IsKnownLocked(SurvivalMessageProtocol.FeatureShop, "商店系统")) return;
             if (ShopUI.Instance != null)
             {
                 ShopUI.Instance.OpenPanel("A");
@@ -363,6 +371,7 @@ namespace DrscfZ.UI
         /// </summary>
         private void OnTribeWarClicked()
         {
+            if (IsKnownLocked(SurvivalMessageProtocol.FeatureTribeWar, "跨房攻防战")) return;
             if (TribeWarLobbyUI.Instance != null)
             {
                 TribeWarLobbyUI.Instance.OpenPanel();
@@ -383,6 +392,7 @@ namespace DrscfZ.UI
         /// </summary>
         private void OnBuildingClicked()
         {
+            if (IsKnownLocked(SurvivalMessageProtocol.FeatureBuilding, "建造系统")) return;
             // 服务端 feature 锁定由 FeatureLockOverlay 展示；点击仍可发起（服务端拒后回 build_propose_failed）
             var hud = BroadcasterDecisionHUD.Instance;
             if (hud != null)
@@ -393,9 +403,12 @@ namespace DrscfZ.UI
                     var method = hud.GetType().GetMethod("OpenBuildPropose")
                                ?? hud.GetType().GetMethod("ShowBuildMenu")
                                ?? hud.GetType().GetMethod("OpenBuildMenu");
-                    method?.Invoke(hud, null);
-                    Debug.Log("[BroadcasterPanel] 🏗️ OnBuildingClicked → BroadcasterDecisionHUD");
-                    return;
+                    if (method != null)
+                    {
+                        method.Invoke(hud, null);
+                        Debug.Log("[BroadcasterPanel] 🏗️ OnBuildingClicked → BroadcasterDecisionHUD");
+                        return;
+                    }
                 }
                 catch { /* fall through to placeholder */ }
             }
@@ -408,6 +421,7 @@ namespace DrscfZ.UI
         /// </summary>
         private void OnExpeditionClicked()
         {
+            if (IsKnownLocked(SurvivalMessageProtocol.FeatureExpedition, "探险系统")) return;
             var hud = BroadcasterDecisionHUD.Instance;
             if (hud != null)
             {
@@ -415,14 +429,16 @@ namespace DrscfZ.UI
                 {
                     var method = hud.GetType().GetMethod("OpenExpeditionPanel")
                                ?? hud.GetType().GetMethod("ShowExpeditionControls");
-                    method?.Invoke(hud, null);
-                    Debug.Log("[BroadcasterPanel] 🧭 OnExpeditionClicked → BroadcasterDecisionHUD");
-                    return;
+                    if (method != null)
+                    {
+                        method.Invoke(hud, null);
+                        Debug.Log("[BroadcasterPanel] 🧭 OnExpeditionClicked → BroadcasterDecisionHUD");
+                        return;
+                    }
                 }
                 catch { /* fall through */ }
             }
-            Debug.LogWarning("[BroadcasterPanel] OnExpeditionClicked：探险面板未就绪，D5 解锁后请 Setup 脚本补齐");
-            AnnouncementUI.Instance?.ShowAnnouncement("探险系统", "请稍候，探险面板加载中...", new Color(0.9f, 0.75f, 0.4f), 2f);
+            SendExpeditionCommand("send");
         }
 
         /// <summary>
@@ -430,6 +446,7 @@ namespace DrscfZ.UI
         /// </summary>
         private void OnSupporterModeClicked()
         {
+            if (IsKnownLocked(SurvivalMessageProtocol.FeatureSupporterMode, "助威模式")) return;
             var settings = FindObjectOfType<SettingsPanelUI>(true);
             if (settings != null)
             {
@@ -454,6 +471,7 @@ namespace DrscfZ.UI
 
         private void OnUpgradeGateClick()
         {
+            if (IsKnownLocked(SurvivalMessageProtocol.FeatureGateUpgradeBasic, "城门升级")) return;
             var gate = CityGateSystem.Instance;
             if (gate == null)
             {
@@ -517,6 +535,29 @@ namespace DrscfZ.UI
             Debug.Log("[BroadcasterPanel] 🛡 upgrade_gate 已发送");
         }
 
+        public void OpenUpgradeGatePanel() => OnUpgradeGateClick();
+        public void OpenRoulettePanel() => OnRouletteClicked();
+        public void OpenShopPanel() => OnShopClicked();
+        public void OpenTribeWarPanel() => OnTribeWarClicked();
+        public void OpenBuildingPanel() => OnBuildingClicked();
+        public void OpenExpeditionPanel() => OnExpeditionClicked();
+
+        public void SendExpeditionCommand(string action = "send")
+        {
+            var net = NetworkManager.Instance;
+            if (net == null || !net.IsConnected)
+            {
+                Debug.LogWarning("[BroadcasterPanel] 网络未连接，无法发送 expedition_command");
+                return;
+            }
+
+            string safeAction = action == "recall" ? "recall" : "send";
+            long ts = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            string json = $"{{\"type\":\"expedition_command\",\"data\":{{\"action\":\"{safeAction}\"}},\"timestamp\":{ts}}}";
+            net.SendJson(json);
+            Debug.Log($"[BroadcasterPanel] 🧭 expedition_command 已发送 action={safeAction}");
+        }
+
         /// <summary>获取当前等级升级至下一级的矿石消耗</summary>
         private static int GetUpgradeCost(int currentLevel)
         {
@@ -547,6 +588,9 @@ namespace DrscfZ.UI
 
             if (action == "efficiency_boost")
             {
+                _boostPending = false;
+                _boostCd = BOOST_CD;
+                SetBoostCdState(true);
                 // 屏幕顶部大字公告
                 AnnouncementUI.Instance?.ShowAnnouncement(
                     "【加速】主播激活紧急加速！",
@@ -558,6 +602,9 @@ namespace DrscfZ.UI
             }
             else if (action == "trigger_event")
             {
+                _eventPending = false;
+                _eventCd = EVENT_CD;
+                SetEventCdState(true);
                 // 随机事件公告由服务器的 bobao 广播处理，这里显示通用提示
                 AnnouncementUI.Instance?.ShowAnnouncement(
                     "【事件】主播触发了随机事件！",
@@ -567,6 +614,28 @@ namespace DrscfZ.UI
                 );
                 Debug.Log("[BroadcasterPanel] broadcaster_effect: trigger_event 显示公告");
             }
+        }
+
+        private void HandleBroadcasterActionFailed(string dataJson)
+        {
+            string action = ParseStringField(dataJson, "action");
+            string reason = ParseStringField(dataJson, "reason");
+            if (action == "efficiency_boost")
+            {
+                _boostPending = false;
+                ResetBoostBtn();
+            }
+            else if (action == "trigger_event")
+            {
+                _eventPending = false;
+                ResetEventBtn();
+            }
+
+            AnnouncementUI.Instance?.ShowAnnouncement(
+                "主播操作失败",
+                FormatBroadcasterActionFailReason(reason),
+                new Color(1f, 0.65f, 0.35f),
+                2f);
         }
 
         // ==================== 按钮状态管理 ====================
@@ -581,6 +650,19 @@ namespace DrscfZ.UI
                 _boostCdText.gameObject.SetActive(inCooldown);
         }
 
+        private void SetBoostPendingState()
+        {
+            if (_boostBtn != null)
+                _boostBtn.interactable = false;
+            if (_boostBtnBg != null)
+                _boostBtnBg.color = BoostBgCooldown;
+            if (_boostCdText != null)
+            {
+                _boostCdText.gameObject.SetActive(true);
+                _boostCdText.text = "Sending";
+            }
+        }
+
         private void SetEventCdState(bool inCooldown)
         {
             if (_eventBtn != null)
@@ -591,14 +673,60 @@ namespace DrscfZ.UI
                 _eventCdText.gameObject.SetActive(inCooldown);
         }
 
+        private void SetEventPendingState()
+        {
+            if (_eventBtn != null)
+                _eventBtn.interactable = false;
+            if (_eventBtnBg != null)
+                _eventBtnBg.color = EventBgCooldown;
+            if (_eventCdText != null)
+            {
+                _eventCdText.gameObject.SetActive(true);
+                _eventCdText.text = "Sending";
+            }
+        }
+
         private void ResetBoostBtn()
         {
+            _boostPending = false;
             SetBoostCdState(false);
         }
 
         private void ResetEventBtn()
         {
+            _eventPending = false;
             SetEventCdState(false);
+        }
+
+        private static bool IsKnownLocked(string featureId, string displayName)
+        {
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm == null || sgm.CurrentUnlockedFeatures == null)
+                return false;
+
+            if (sgm.IsFeatureUnlocked(featureId))
+                return false;
+
+            AnnouncementUI.Instance?.ShowAnnouncement(
+                "功能未解锁",
+                $"{displayName} 尚未解锁",
+                new Color(0.7f, 0.85f, 1f),
+                2f);
+            Debug.LogWarning($"[BroadcasterPanel] Feature locked: {featureId}");
+            return true;
+        }
+
+        private static string FormatBroadcasterActionFailReason(string reason)
+        {
+            switch (reason)
+            {
+                case "feature_locked": return "功能尚未解锁";
+                case "cooldown":
+                case "in_cooldown": return "技能冷却中";
+                case "wrong_phase": return "当前阶段不能使用";
+                case "not_broadcaster": return "仅主播可操作";
+                default: return string.IsNullOrEmpty(reason) ? "服务器拒绝了本次操作" : $"服务器拒绝：{reason}";
+            }
         }
 
         // ==================== JSON 字段解析（轻量，不引入第三方库）====================

@@ -240,7 +240,7 @@ class GlobalClock {
 
   _tick() {
     const now = Date.now();
-    const duration = this._getCurrentPhaseDurationMs();
+    let duration = this._getCurrentPhaseDurationMs();
 
     // ── Phase 到期 → 切换 ────────────────────────────────────────────
     if (now - this._phaseStartedAt >= duration) {
@@ -294,6 +294,8 @@ class GlobalClock {
           }
         }
       }
+
+      duration = this._getCurrentPhaseDurationMs();
     }
 
     // ── 每秒广播 world_clock_tick ────────────────────────────────────

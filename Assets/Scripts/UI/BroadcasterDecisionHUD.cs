@@ -425,12 +425,30 @@ namespace DrscfZ.UI
         /// <summary>§38 探险面板入口（反射兼容；对外触发 UnityEvent _onExpeditionClicked）。</summary>
         public void OpenExpeditionPanel()
         {
-            _onExpeditionClicked?.Invoke();
-            Debug.Log("[BroadcasterDecisionHUD] OpenExpeditionPanel: _onExpeditionClicked.Invoke()");
+            int listenerCount = InvokeJumpEvent(_onExpeditionClicked, "OpenExpeditionPanel");
+            if (listenerCount == 0)
+            {
+                BroadcasterPanel.Instance?.SendExpeditionCommand("send");
+                Debug.Log("[BroadcasterDecisionHUD] OpenExpeditionPanel: fallback BroadcasterPanel.SendExpeditionCommand(send)");
+            }
         }
 
         /// <summary>§38 探险面板入口别名（兼容 BroadcasterPanel 反射的备用名）。</summary>
         public void ShowExpeditionControls() => OpenExpeditionPanel();
+
+        public void OpenUpgradeGatePanel()
+        {
+            int listenerCount = InvokeJumpEvent(_onUpgradeGateClicked, "OpenUpgradeGatePanel");
+            if (listenerCount == 0)
+                BroadcasterPanel.Instance?.OpenUpgradeGatePanel();
+        }
+
+        public void OpenRoulettePanel()
+        {
+            int listenerCount = InvokeJumpEvent(_onRouletteClicked, "OpenRoulettePanel");
+            if (listenerCount == 0)
+                BroadcasterPanel.Instance?.OpenRoulettePanel();
+        }
 
         /// <summary>§37 建造投票面板入口（反射兼容；对外触发 UnityEvent _onBuildClicked）。
         /// 🔴 audit-r38 GAP-PM38-01 真闭环：当 _onBuildClicked Inspector 0 listener 时，
@@ -457,6 +475,21 @@ namespace DrscfZ.UI
 
         /// <summary>§37 建造投票面板入口别名 2。</summary>
         public void OpenBuildMenu() => OpenBuildPropose();
+
+        public void OpenTribeWarPanel()
+        {
+            int listenerCount = InvokeJumpEvent(_onTribeWarClicked, "OpenTribeWarPanel");
+            if (listenerCount == 0)
+                BroadcasterPanel.Instance?.OpenTribeWarPanel();
+        }
+
+        private int InvokeJumpEvent(UnityEvent unityEvent, string label)
+        {
+            int listenerCount = unityEvent != null ? unityEvent.GetPersistentEventCount() : 0;
+            unityEvent?.Invoke();
+            Debug.Log($"[BroadcasterDecisionHUD] {label}: UnityEvent listeners={listenerCount}");
+            return listenerCount;
+        }
 
         private void RenderCard(CardView view, CardData data)
         {
@@ -486,11 +519,11 @@ namespace DrscfZ.UI
                 view.jumpButton.onClick.RemoveAllListeners();
                 switch (data.action)
                 {
-                    case CardAction.UpgradeGate: view.jumpButton.onClick.AddListener(() => _onUpgradeGateClicked?.Invoke()); break;
-                    case CardAction.Roulette:    view.jumpButton.onClick.AddListener(() => _onRouletteClicked?.Invoke()); break;
-                    case CardAction.Build:       view.jumpButton.onClick.AddListener(() => _onBuildClicked?.Invoke()); break;
-                    case CardAction.Expedition:  view.jumpButton.onClick.AddListener(() => _onExpeditionClicked?.Invoke()); break;
-                    case CardAction.TribeWar:    view.jumpButton.onClick.AddListener(() => _onTribeWarClicked?.Invoke()); break;
+                    case CardAction.UpgradeGate: view.jumpButton.onClick.AddListener(OpenUpgradeGatePanel); break;
+                    case CardAction.Roulette:    view.jumpButton.onClick.AddListener(OpenRoulettePanel); break;
+                    case CardAction.Build:       view.jumpButton.onClick.AddListener(OpenBuildPropose); break;
+                    case CardAction.Expedition:  view.jumpButton.onClick.AddListener(OpenExpeditionPanel); break;
+                    case CardAction.TribeWar:    view.jumpButton.onClick.AddListener(OpenTribeWarPanel); break;
                     case CardAction.None:
                         // R2 矿工快死光仅提示横幅，点击也不跳转；按钮可隐藏或留
                         break;
