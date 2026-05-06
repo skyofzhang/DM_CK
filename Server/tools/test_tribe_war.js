@@ -26,8 +26,12 @@ function makeEngine() {
     gateHp: 100,
     monsterGateDamage: 5,
     _workerDamageMult: 1,
-    _monsterHpMult: 1,
+    // §14 v1.27 废止 _monsterHpMult；TribeWarSession 现走 _getEarlyDayMult(fortressDay) 路径
+    fortressDay: 10,  // 用 D5+ 让 _earlyDayMult=1.0（避免基线压力测试值漂移）
+    _getEarlyDayMult(_d) { return 1.0; },
     _dynamicHpMult: 1,
+    _themeHpMult: 1,
+    _themeMonsterHpMult: 1,
     _themeMonsterAtkMult: 1,
     _monsterIdCounter: 0,
     _activeMonsters: new Map(),

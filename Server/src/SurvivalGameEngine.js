@@ -328,14 +328,14 @@ const SHOP_GATE_QUICKPATCH_HP = 100;
 const SHOP_EMERGENCY_ALERT_LEAD_SEC              = 10;
 const SHOP_EMERGENCY_ALERT_LEAD_SEC_WATCHTOWER   = 30;
 
-// ==================== §34.4 Layer 3 组 D（E2 五幕 / E5a 提词 / E5b 夜报 / E6 修饰符 / E8 唤回 / E9 难度）====================
+// ==================== §34.4 Layer 3 组 D（E2 五幕 / E5a 提词 / E5b 夜报 / E6 修饰符 / E8 唤回）====================
 // 策划案 §34.4 第 5205–5482 行，与组 C（E1/E3/E4）并存：
 //   - E2  seasonDay(1..7) → actTag('prologue'/'act1'/'act2'/'act3'/'finale') 映射，幕末事件（mini BossRush 等）
 //   - E5a 每 10s 生成主播专用提示（TODO：_roomCreatorId 未注入 → 现版本广播；客户端按 isRoomCreator 过滤）
 //   - E5b 夜→昼时基于 _nightStats 推送战报
 //   - E6  _enterNight 加权随机 NIGHT_MODIFIERS 选一个（含 §31 交互规则：blood_moon 覆盖、polar_night × 1.5 频率）
 //   - E8  每 300s 对 contributions > 0 玩家推送排名 + gapToTop3（TODO：单播能力未接入 → 广播，客户端自筛）
-//   - E9  change_difficulty C→S（applyAt='next_night' 或 'next_season'），生效时机由 _enterNight / SeasonManager 轮询消费
+//   - E9  ❌ §14 v1.27 废止：change_difficulty C→S 协议已删除；压力曲线由基线 + _earlyDayMult(fortressDay) + _dynamicHpMult 驱动
 
 // E2 赛季幕定义
 //   seasonDay ∈ [1..7] → actTag + name + endNote；D7 终章复用 §36 BossRush（不重复实现）
@@ -653,10 +653,8 @@ class SurvivalGameEngine {
     this.efficiency666Bonus   = 1.0;
     this.efficiency666Timer   = 0;
 
-    // 难度倍率（由 _applyDifficulty 设置）
-    this._difficulty       = 'normal';
-    this._monsterHpMult    = 1.0;
-    this._monsterCntMult   = 1.0;
+    // §14 v1.27：废止 difficulty 三档系统，改为统一基线 + fortressDay 渐进压力曲线（_getEarlyDayMult）
+    //   原 _difficulty / _monsterHpMult / _monsterCntMult 字段已删除，怪物 hp/cnt 计算只乘 _dynamicHpMult / _themeHpMult / _earlyDayMult
 
     // ── §33 助威模式（Supporter Mode） ────────────────────────────────
     this._supporters             = new Map();
@@ -764,7 +762,7 @@ class SurvivalGameEngine {
     // 点赞统计
     this.totalLikes = 0;
 
-    // 每天防守成功进入积分池的基础分（由难度决定，_applyDifficulty 覆盖）
+    // 每天防守成功进入积分池的基础分（§14 v1.27 废止难度后固化为 Normal preset 值 500）
     this._poolNightBase = 500;
 
     // 积分池（策划案 §D：防守/礼物/点赞/击杀 → 积分入池；结算后按比例分配给 Top10）
@@ -876,10 +874,7 @@ class SurvivalGameEngine {
     this._blizzardLastTickAt   = 0;
     // E8 参与感唤回：300s setInterval 句柄
     this._engagementInterval  = null;
-    // E9 难度切换 pending：{ difficulty, applyAt: 'next_night' | 'next_season' }；_enterNight / onSeasonStart 时消费
-    this._pendingDifficulty   = null;
-    // E9 next_season 触发判定：记录 _enterDay 最近一次看到的 seasonId，变化时触发一次 onSeasonStart
-    this._lastSeasonIdForDiffCheck = null;
+    // §14 v1.27：废止 §34.4 E9 difficulty 切换；_pendingDifficulty / _lastSeasonIdForDiffCheck 字段已删除
 
     // ── §34.3 Layer 2 组 B 字段 ─────────────────────────────────────────
     // B2 结算高光 + 跳过
@@ -1091,6 +1086,13 @@ class SurvivalGameEngine {
   _applyPersistedSnapshot(snap) {
     if (!snap || typeof snap !== 'object') return;
 
+    // §14 v1.27：兼容旧快照——若 snap.difficulty 仍存在（v1.26 及更早写入），读后丢弃不消费。
+    //   类似 audit-r45 snap._seasonFailure 兼容模式：仅读不消费，避免运行时 schema 错位报错。
+    //   新版本 startGame 不再接受 difficulty 参数，压力曲线由 _initBaselinePreset + fortressDay 驱动。
+    if (typeof snap.difficulty !== 'undefined') {
+      // intentional: read but discard (legacy field, no longer used)
+    }
+
     // §31 冻结状态不持久化 —— 每次恢复强制清零（防御式初始化，抵御构造函数路径变动）
     // _frozenWorkers 使用 Map<playerId, unfreezeAt(ms)>；冰封状态跨局无意义
     if (!(this._frozenWorkers instanceof Map)) {
@@ -1219,10 +1221,10 @@ class SurvivalGameEngine {
 
   // ==================== 对外接口 ====================
 
-  /** 客户端请求开始（含难度参数）*/
-  startGame(difficulty = 'normal') {
+  /** 客户端请求开始（§14 v1.27 起无难度参数）*/
+  startGame() {
     if (this.state !== 'idle') return;
-    this._applyDifficulty(difficulty);
+    this._initBaselinePreset();
     // §36 GlobalClock 接管后，新房间必须贴合当前全服昼夜相位。
     // 否则全服已是 night 时，新房间内部仍从 day 跑，客户端会看到 phase/state 错位。
     const combatDay = this._getCombatDay(1);
@@ -1241,60 +1243,51 @@ class SurvivalGameEngine {
   }
 
   /**
-   * 根据难度调整怪物强度、资源消耗和总天数。
-   * easy   → 适合 1-50  人观众：怪物弱, 资源多, 30天胜利（≈3小时）
-   * normal → 适合 50-200人观众：标准值,           50天胜利（≈5小时）
-   * hard   → 适合 200+ 人观众：怪物强, 资源紧, 70天胜利（≈7小时）
-   * 资源衰减已×0.14（相对原7天难度），保证相同难度体验
+   * §14 v1.27 统一基线 preset（替代旧 _applyDifficulty 三档系统）
+   *   - 数值固化为旧 Normal preset：食物 200 / 煤炭 120 / 矿石 50 / 城门 1000HP / coalBurnTicks=7
+   *     / 食物 1.0/s / poolNightBase 500 / dayDuration 120 / nightDuration 120
+   *   - 压力曲线：fortressDay 渐进（§14.5 _getEarlyDayMult D1=0.6 / D2=0.75 / D3=0.85 / D4=0.95 / D5+=1.0）
+   *     在 _initActiveMonsters / _spawnWave / _decayResources 最外层乘入；§30.6 动态难度补偿仍保留（D1-5 期间封顶 1.0）
+   *   - 旧 _difficulty / _monsterHpMult / _monsterCntMult 字段已彻底删除；不再读 SUPPORTED_DIFFS / change_difficulty 协议
    */
-  _applyDifficulty(difficulty) {
-    this._difficulty = difficulty;
+  _initBaselinePreset() {
+    // §34 F5 audit-r4 / F7 audit-r8：所有原难度档统一 200/120/50（normal 数值），
+    // 现 v1.27 固化为单基线，删除 easy / normal / hard 三档对象。
+    this._poolNightBase = 500;
+    this.totalDays      = 50;
+    this.dayDuration    = 120;
+    this.nightDuration  = 120;
 
-    // decayMult 基于"7天难度 = 现在总天数的1/10"进行等比缩放：
-    // decayMult: 资源衰减倍率（食物+炉温），越高越紧迫
-    // coalBurnTicks: 自动烧煤间隔（tick数，1tick=200ms），越小烧得越快
-    //   easy:   食物降~7/天, 煤3秒烧1个(宽裕), 初始资源1.5倍
-    //   normal: 食物降~10/天, 煤2秒烧1个(标准), 压力适中
-    //   hard:   食物降~14/天, 煤1.4秒烧1个(紧迫), 极限生存
-    const presets = {
-      // F5: 困难初始资源统一 200/120/50 (策划案 §34 F5) —— 困难通过消耗速率和怪物强度区分，不通过资源起始量
-      // F3: 困难 70 → 40 天 (策划案 §34 F3) —— 抖音直播 4h40min 不现实；Day 40 WAVE_CONFIGS 已有配置
-      // audit-r8 §34 F5：Easy 初始资源也统一 200/120/50（对齐策划案"所有难度统一"口径）；难度差异通过 decayMult/hpMult/cntMult 表达，非资源起始量
-      easy:   { hpMult: 0.6, cntMult: 0.6, decayMult: 0.7, coalBurnTicks: 10, initFood: 200, initCoal: 120, initOre: 50,  initGateHp: 800,  totalDays: 30, poolNightBase: 300, dayDuration: 120, nightDuration: 120 },
-      normal: { hpMult: 1.0, cntMult: 1.0, decayMult: 1.0, coalBurnTicks: 7,  initFood: 200, initCoal: 120, initOre: 50,  initGateHp: 1000, totalDays: 50, poolNightBase: 500, dayDuration: 120, nightDuration: 120 },
-      // §34 F5 audit-r4：困难初始资源统一 200/120/50（与 normal 持平）；城门 HP 仍 1500，怪物 hp/cnt/decay 倍率维持，通过消耗速率和强度区分而非资源起始量
-      hard:   { hpMult: 1.5, cntMult: 1.5, decayMult: 1.5, coalBurnTicks: 5,  initFood: 200, initCoal: 120, initOre: 50,  initGateHp: 1500, totalDays: 40, poolNightBase: 800, dayDuration: 120, nightDuration: 120 },
-    };
-    const p = presets[difficulty] || presets.normal;
+    // ⚠️ 默认值必须与构造函数保持一致（foodDecayDay=1.0, foodDecayNight=1.0；F7 夜=白）
+    this.foodDecayDay   = (this.config.foodDecayDay   ?? 1.0);
+    this.foodDecayNight = (this.config.foodDecayNight ?? 1.0);
+    this.tempDecayDay   = (this.config.tempDecayDay   ?? 0.15);
+    this.tempDecayNight = (this.config.tempDecayNight ?? 0.40);
+    this.coalBurnTicks  = 7;  // 自动烧煤间隔（tick=200ms；7tick=1.4s/煤）
 
-    // 存储怪物倍率（_enterNight 使用）
-    this._monsterHpMult    = p.hpMult;
-    this._monsterCntMult   = p.cntMult;
-    // 积分池夜晚基础奖励
-    this._poolNightBase    = p.poolNightBase;
+    this.food      = 200;
+    this.coal      = 120;
+    this.ore       = 50;
+    this.gateHp    = 1000;
+    this.gateMaxHp = 1000;
 
-    // 总关卡天数 + 阶段时长（各难度独立配置）
-    this.totalDays     = p.totalDays;
-    this.dayDuration   = p.dayDuration;
-    this.nightDuration = p.nightDuration;
+    console.log(`[Engine] §14 baseline | 食${this.food}/煤${this.coal}/矿${this.ore}/门${this.gateHp} 煤烧速${this.coalBurnTicks}tick 总天数:${this.totalDays} (压力随 fortressDay 渐进 §14.5)`);
+  }
 
-    // 按倍率调整资源衰减（在构造函数默认值基础上乘以倍率）
-    // ⚠️ 默认值必须与构造函数保持一致：foodDecayDay=1.0, foodDecayNight=1.0 (F7)
-    // F7: 夜晚食物消耗 = 白天 (策划案 §34 F7)
-    this.foodDecayDay   = (this.config.foodDecayDay   ?? 1.0) * p.decayMult;
-    this.foodDecayNight = (this.config.foodDecayNight ?? 1.0) * p.decayMult;
-    this.tempDecayDay   = (this.config.tempDecayDay   ?? 0.15) * p.decayMult;
-    this.tempDecayNight = (this.config.tempDecayNight ?? 0.40) * p.decayMult;
-    this.coalBurnTicks  = p.coalBurnTicks || 10;  // 自动烧煤间隔
-
-    // 各难度独立配置初始资源
-    this.food      = p.initFood;
-    this.coal      = p.initCoal;
-    this.ore       = p.initOre;
-    this.gateHp    = p.initGateHp;
-    this.gateMaxHp = p.initGateHp;
-
-    console.log(`[Engine] 难度: ${difficulty} | 怪物HP×${p.hpMult} 数量×${p.cntMult} 衰减×${p.decayMult} 煤烧速${p.coalBurnTicks}tick 食${p.initFood}/煤${p.initCoal}/矿${p.initOre}/门${p.initGateHp} 总天数:${p.totalDays}`);
+  /**
+   * §14.5 fortressDay 渐进压力曲线倍率（替代废止的 difficulty 三档）
+   *   D1=0.6 / D2=0.75 / D3=0.85 / D4=0.95 / D5+=1.0
+   *   作用范围：怪物 hp / 怪物 count / 食物·炉温衰减；coalBurnTicks 用倒数延长间隔
+   * @param {number} day fortressDay
+   * @returns {number}
+   */
+  _getEarlyDayMult(day) {
+    const d = Number(day) || 1;
+    if (d <= 1) return 0.6;
+    if (d === 2) return 0.75;
+    if (d === 3) return 0.85;
+    if (d === 4) return 0.95;
+    return 1.0;
   }
 
   /** 客户端请求重置 */
@@ -1322,10 +1315,7 @@ class SurvivalGameEngine {
     this.scorePool      = this._carryoverPool || 0;
     this._carryoverPool = 0;
 
-    // 重置难度（等待下次 startGame 时重新设置）
-    this._difficulty     = 'normal';
-    this._monsterHpMult  = 1.0;
-    this._monsterCntMult = 1.0;
+    // §14 v1.27 废止 difficulty：reset 后等待下次 startGame 调 _initBaselinePreset 即可
     this._activeMonsters.clear();
     this._monsterIdCounter = 0;
 
@@ -1460,14 +1450,12 @@ class SurvivalGameEngine {
     for (const t of (this._giftImpactTimers || [])) clearTimeout(t);
     this._giftImpactTimers        = [];
 
-    // §34.4 Layer 3 组 D 清理：E2/E5a/E5b/E6/E8/E9 全部每局重置
+    // §34.4 Layer 3 组 D 清理：E2/E5a/E5b/E6/E8 全部每局重置（§14 v1.27 废止 E9 后无 _pendingDifficulty）
     this._currentActTag        = 'prologue';
     this._lastActTagBroadcast  = null;
     this._currentNightModifier = null;
     this._nightStats           = null;
     this._blizzardLastTickAt   = 0;
-    this._pendingDifficulty    = null;
-    this._lastSeasonIdForDiffCheck = null;
     // Fix 2: 清 frenzy 修饰符残留（若上局夜晚中途失败 → _clearNightModifier 未调 → 跨局残留）
     this._modifierFrenzyIntervalMult    = 1.0;
     this._modifierSavedDynamicCountMult = null;
@@ -2968,15 +2956,8 @@ class SurvivalGameEngine {
 
     console.log(`[SurvivalEngine] ===== Day ${day} Start =====`);
 
-    // §34.4 E9 next_season：若 pending.applyAt='next_season' 且 seasonDay 刚归 1 → 调用 onSeasonStart
-    //   GlobalClock 驱动下 advanceDay 在 night→day 前触发；此时 seasonDay 若为 1 且 _lastSeasonDayForDiffCheck 不是 1 → 新赛季 D1
-    const currSeasonDay = this.seasonMgr ? this.seasonMgr.seasonDay : 1;
-    const currSeasonId  = this.seasonMgr ? this.seasonMgr.seasonId  : 1;
-    if (this._pendingDifficulty && this._pendingDifficulty.applyAt === 'next_season'
-        && currSeasonDay === 1 && this._lastSeasonIdForDiffCheck !== currSeasonId) {
-      this.onSeasonStart(currSeasonId);
-    }
-    this._lastSeasonIdForDiffCheck = currSeasonId;
+    // §14 v1.27：§34.4 E9 难度切换协议已废止；原 next_season pending 消费逻辑同步删除
+    //   onSeasonStart 仍保留为空 noop（兼容外部插件调用），不再触发 _softApplyDifficulty。
 
     // §34.4 E2：检测当前 seasonDay 对应的幕（可能跨幕） → 必要时广播 chapter_changed
     this._checkActTagChange();
@@ -3034,9 +3015,8 @@ class SurvivalGameEngine {
     // §34.3 B10a：清零白天贡献统计（夜晚不再推 efficiency_race）
     this._dayStats = null;
 
-    // §34.4 E9：消费 pending 难度（applyAt='next_night'）→ _applyDifficulty 可能覆写 nightDuration
-    //   在 remainingTime 赋值前调用，以便 _applyDifficulty 覆写 nightDuration 时下一行读到新值
-    this._consumePendingDifficultyOnNight();
+    // §14 v1.27：§34.4 E9 难度切换协议已废止；_consumePendingDifficultyOnNight 调用同步删除。
+    //   nightDuration 由 _initBaselinePreset 固化为 120s，不再随难度切换覆写。
 
     this.remainingTime = this.nightDuration;
 
@@ -3179,12 +3159,10 @@ class SurvivalGameEngine {
       // §31 Boss 刷新侧随机选（供首领卫兵同侧刷新参考；'all' 亦允许）
       const sides = ['left', 'right', 'top', 'all'];
       this._lastBossSpawnSide = sides[Math.floor(Math.random() * sides.length)];
-      // r14 GAP-A14-A2 / r15 GAP-A15-A1：boss_appeared 与实际 spawn (L4148) 用相同乘数链
-      //   L4109 hpMult = _monsterHpMult × _dynamicHpMult × _themeHpMult
-      //   L4148 Boss = cfg.boss.hp × hpMult × _themeBossHpMult
-      //   完整乘数 = _monsterHpMult × _dynamicHpMult × _themeHpMult × _themeBossHpMult
-      //   r14 修复时漏 _themeHpMult（blood_moon 主题 ×1.2），r15 补齐
-      const _bossSpawnHp = Math.max(1, Math.round(cfg.boss.hp * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0) * (this._themeBossHpMult || 1.0)));
+      // §14 v1.27：废止 _monsterHpMult 后 boss 乘数链 = _dynamicHpMult × _themeHpMult × _themeBossHpMult × _earlyDayMult(fortressDay)
+      //   r14/r15 留下的 4 乘数链中第 1 项（_monsterHpMult）已删除；新增 _earlyDayMult 渐进保护
+      const _earlyMultBoss = this._getEarlyDayMult(this.fortressDay);
+      const _bossSpawnHp = Math.max(1, Math.round(cfg.boss.hp * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0) * (this._themeBossHpMult || 1.0) * _earlyMultBoss));
       this.broadcast({
         type: 'boss_appeared',
         timestamp: Date.now(),
@@ -3194,10 +3172,8 @@ class SurvivalGameEngine {
           bossAtk: cfg.boss.atk,
         }
       });
-      // §31.4 首领卫兵：Day 3+（Easy +2 / Hard -1），每晚 Boss 出现同时固定生成 2 只
-      const diff = this._difficulty || 'normal';
-      const guardDayOffset = diff === 'easy' ? 2 : diff === 'hard' ? -1 : 0;
-      if (day >= MONSTER_VARIANT_GUARD_DAY + guardDayOffset) {
+      // §31.4 首领卫兵：Day 3+（§14 v1.27 废止 difficulty 后无 ±day 偏移；保留变体机制本身）
+      if (day >= MONSTER_VARIANT_GUARD_DAY) {
         this._spawnBossGuards(day);
       }
     }
@@ -4014,7 +3990,7 @@ class SurvivalGameEngine {
     //   easy 300/天 | normal 500/天 | hard 800/天
     const nightBonus = (this._poolNightBase || 500) * this.currentDay;
     this.scorePool += nightBonus;
-    console.log(`[SurvivalEngine] Night ${this.currentDay} cleared [${this._difficulty}], scorePool +${nightBonus} = ${Math.round(this.scorePool)}`);
+    console.log(`[SurvivalEngine] Night ${this.currentDay} cleared [fd=${this.fortressDay}], scorePool +${nightBonus} = ${Math.round(this.scorePool)}`);
 
     // §34.4 E5b：夜→昼广播战报（_nightStats 已在 _enterNight 初始化）
     //   必须在 _enterDay 之前，因为 _enterDay 会重置 _gateUpgradedToday 等字段并启动新阶段
@@ -4140,19 +4116,26 @@ class SurvivalGameEngine {
   _decayResources() {
     const isNight = this.state === 'night';
 
-    // 食物：每秒消耗
-    this.food = Math.max(0, this.food - (isNight ? this.foodDecayNight : this.foodDecayDay));
+    // §14.5 v1.27：fortressDay 渐进保护（D1=0.6 / D2=0.75 / D3=0.85 / D4=0.95 / D5+=1.0）
+    //   食物/炉温衰减：直接乘 _earlyDayMult 减速；
+    //   coalBurnTicks（间隔）：取倒数延长间隔（D1 时间隔 ×1/0.6=1.67×，烧得更慢）
+    const earlyMult = this._getEarlyDayMult(this.fortressDay);
+
+    // 食物：每秒消耗（早期日 × earlyMult 减速）
+    this.food = Math.max(0, this.food - (isNight ? this.foodDecayNight : this.foodDecayDay) * earlyMult);
 
     // 炉温：有煤时自动烧煤维持温度，无煤时才开始失温
     const baseTempDecay = isNight ? this.tempDecayNight : this.tempDecayDay;
-    const tempDecay = baseTempDecay * (this.tempDecayMultiplier || 1.0);
+    const tempDecay = baseTempDecay * (this.tempDecayMultiplier || 1.0) * earlyMult;
     if (this.coal > 0) {
-      // 有煤：按难度自动消耗煤炭维持炉温（easy=2秒/个, normal=1.4秒/个, hard=1秒/个）
-      if (this._tickCounter % this.coalBurnTicks === 0) {
+      // §14 v1.27：自动消耗煤炭间隔 = coalBurnTicks / earlyMult（早期日间隔被拉长，烧煤更慢）
+      //   normal coalBurnTicks=7 → D1 等效 11.67tick / D2 9.33tick / D3 8.24tick / D4 7.37tick / D5+ 7tick
+      const effCoalBurnTicks = Math.max(1, Math.round(this.coalBurnTicks / Math.max(0.01, earlyMult)));
+      if (this._tickCounter % effCoalBurnTicks === 0) {
         this.coal = Math.max(0, this.coal - 1);
       }
     } else {
-      // 无煤：炉温持续下降（夜晚更快，暴风雪加速）
+      // 无煤：炉温持续下降（夜晚更快，暴风雪加速；早期日 × earlyMult 减速）
       this.furnaceTemp = Math.max(this.minTemp, this.furnaceTemp - tempDecay);
     }
 
@@ -4323,14 +4306,15 @@ class SurvivalGameEngine {
     this._activeMonsters.clear();
     const cfg = getWaveConfig(day);
 
-    // 难度倍率（未设置时默认 1.0）
-    // §30.6 动态难度叠加：HP 基础难度 × 动态难度（Hard 封顶+25%，Normal/Easy 封顶+50%）
-    // §36 主题倍率叠加：blood_moon 主题 → HP ×1.2（_themeHpMult 由 _applyThemeRulesForNight 设置）
-    // TODO §30.6：若未来加入随机 Hard Night 事件，HP 加成取 max(_dynamicHpMult, hardNightMult)
+    // §14 v1.27：废止 _monsterHpMult/_monsterCntMult 后基线 = _dynamicHpMult × _themeHpMult × _earlyDayMult
+    //   §30.6 动态难度叠加：D1-D5 期间 _dynamicHpMult/CountMult 封顶 1.0（_updateDynamicDifficulty 内部约束）
+    //   §36 主题倍率叠加：blood_moon 主题 → HP ×1.2（_themeHpMult 由 _applyThemeRulesForNight 设置）
+    //   §14.5 fortressDay 渐进保护：D1=0.6 / D2=0.75 / D3=0.85 / D4=0.95 / D5+=1.0
     const themeHpMult  = this._themeHpMult  || 1.0;
     const themeCntMult = this._themeCntMult || 1.0;
-    const hpMult  = (this._monsterHpMult  || 1.0) * (this._dynamicHpMult   || 1.0) * themeHpMult;
-    const cntMult = (this._monsterCntMult || 1.0) * (this._dynamicCountMult || 1.0) * themeCntMult;
+    const earlyMult    = this._getEarlyDayMult(this.fortressDay);
+    const hpMult  = (this._dynamicHpMult   || 1.0) * themeHpMult  * earlyMult;
+    const cntMult = (this._dynamicCountMult || 1.0) * themeCntMult * earlyMult;
 
     // 普通怪
     if (cfg.normal) {
@@ -4366,7 +4350,7 @@ class SurvivalGameEngine {
       }
     }
 
-    // Boss（每晚一只，HP受难度影响）
+    // Boss（每晚一只，HP 受 _earlyDayMult / _dynamicHpMult / 主题倍率影响）
     if (cfg.boss) {
       const hp = Math.max(1, Math.round(cfg.boss.hp * hpMult * (this._themeBossHpMult || 1.0)));
       const id = `b_${day}_${++this._monsterIdCounter}`;
@@ -4380,7 +4364,7 @@ class SurvivalGameEngine {
       });
     }
 
-    console.log(`[SurvivalEngine] Night ${day} monsters initialized: ${this._activeMonsters.size} total (diff:${this._difficulty||'normal'} hpMult:${hpMult} cntMult:${cntMult})`);
+    console.log(`[SurvivalEngine] Night ${day} monsters initialized: ${this._activeMonsters.size} total (fd=${this.fortressDay} earlyMult=${earlyMult} hpMult=${hpMult.toFixed(3)} cntMult=${cntMult.toFixed(3)})`);
   }
 
   // ==================== 内部：攻击处理（commandId=6）====================
@@ -4992,18 +4976,15 @@ class SurvivalGameEngine {
     const themeId = (this.seasonMgr && this.seasonMgr.themeId) || 'classic_frozen';
     if (themeId === 'blood_moon') return 'normal';
 
-    const diff = this._difficulty || 'normal';
-    const dayOffset  = diff === 'easy' ? 2 : diff === 'hard' ? -1 : 0;
-    const rushBonus  = diff === 'hard' ? 1 : 0;
+    // §14 v1.27：废止 difficulty Easy +2 / Hard -1 首次出现日偏移；变体阈值固化为基线（无 ±day 偏移），
+    //   保留 §31 变体机制本身（assassin/rush/ice/summoner）。rushBonus 同步移除（无 Hard +1 加成）。
+    const assassinDay = MONSTER_VARIANT_ASSASSIN_DAY;
+    const rushDay     = MONSTER_VARIANT_RUSH_DAY;
+    const iceDay      = MONSTER_VARIANT_ICE_DAY;
+    const summonerDay = MONSTER_VARIANT_SUMMONER_DAY;
 
-    const assassinDay = MONSTER_VARIANT_ASSASSIN_DAY + dayOffset;
-    const rushDay     = MONSTER_VARIANT_RUSH_DAY     + dayOffset;
-    const iceDay      = MONSTER_VARIANT_ICE_DAY      + dayOffset;
-    const summonerDay = MONSTER_VARIANT_SUMMONER_DAY + dayOffset;
-
-    const baseRushCount = day >= 15 ? 3 : day >= 7 ? 2 : 1;
-    const rushCount     = baseRushCount + rushBonus;
-    const rushStart     = day >= assassinDay ? 1 : 0;
+    const rushCount = day >= 15 ? 3 : day >= 7 ? 2 : 1;
+    const rushStart = day >= assassinDay ? 1 : 0;
 
     if (day >= assassinDay && index === 0) return 'assassin';
     if (day >= rushDay && index >= rushStart && index < rushStart + rushCount) return 'rush';
@@ -5155,9 +5136,10 @@ class SurvivalGameEngine {
       return;
     }
 
-    // 生成数量随天数递增，应用基础难度倍率 + §30.6 动态难度数量加成
-    const baseCnt = cfg.baseCount + Math.floor((day - 1) * 0.5);
-    const count   = Math.max(1, Math.round(baseCnt * (this._monsterCntMult || 1.0) * (this._dynamicCountMult || 1.0)));
+    // §14 v1.27：废止 _monsterCntMult 后基线 = _dynamicCountMult × _earlyDayMult；§30.6 D1-5 期间 cap 1.0
+    const baseCnt    = cfg.baseCount + Math.floor((day - 1) * 0.5);
+    const earlyMult  = this._getEarlyDayMult(this.fortressDay);
+    const count      = Math.max(1, Math.round(baseCnt * (this._dynamicCountMult || 1.0) * earlyMult));
 
     const sides = ['left', 'right', 'top', 'all'];
     const spawnSide = sides[Math.floor(Math.random() * sides.length)];
@@ -5168,9 +5150,8 @@ class SurvivalGameEngine {
 
     // §31.2/31.4 summoner post-process：若 day>=summonerDay 但 index=2 被 rush 占用，
     //   从后往前找第一个 'normal' 槽位迁移为 'summoner'（仍保证每波最多 1 只召唤怪）
-    const diff = this._difficulty || 'normal';
-    const summonerDayEff = MONSTER_VARIANT_SUMMONER_DAY + (diff === 'easy' ? 2 : diff === 'hard' ? -1 : 0);
-    if (day >= summonerDayEff && !variants.includes('summoner')) {
+    // §14 v1.27：废止 difficulty 后无 ±day 偏移，固化为基线 day 阈值
+    if (day >= MONSTER_VARIANT_SUMMONER_DAY && !variants.includes('summoner')) {
       for (let i = variants.length - 1; i >= 2; i--) {
         if (variants[i] === 'normal') { variants[i] = 'summoner'; break; }
       }
@@ -5180,8 +5161,7 @@ class SurvivalGameEngine {
     //   _selectVariant 串行 if-else 中 rush 检查在 ice 之前，rushCount=2 (day≥7) 或 3 (day≥15) 时
     //   抢走 ice 的 index=1 槽位 → §31.6 表"冰封怪 Day 5 起每波 1 只" 在 day≥7 后实际 0 出现率
     //   修复：扫描 variants[] 没有 ice 但满足 iceDay 时，从后往前找 'normal' 替换为 'ice'
-    const iceDayEff = MONSTER_VARIANT_ICE_DAY + (diff === 'easy' ? 2 : diff === 'hard' ? -1 : 0);
-    if (day >= iceDayEff && !variants.includes('ice')) {
+    if (day >= MONSTER_VARIANT_ICE_DAY && !variants.includes('ice')) {
       for (let i = variants.length - 1; i >= 1; i--) {
         if (variants[i] === 'normal') { variants[i] = 'ice'; break; }
       }
@@ -5200,10 +5180,9 @@ class SurvivalGameEngine {
       themeHpMult  = MODIFIER_POLAR_VARIANT_STAT_MULT;
       themeAtkMult = MODIFIER_POLAR_VARIANT_STAT_MULT;
     }
-    // r16 GAP-R16-PM-02：补 _themeHpMult（赛季主题层）
-    //   原仅含 themeHpMult（夜间修饰符 polar_night 层），漏 _themeHpMult（赛季主题 blood_moon=1.2 层）
-    //   完整链与 _initActiveMonsters L4115 对齐：_monsterHpMult × _dynamicHpMult × _themeHpMult × _themeMonsterHpMult
-    const baseHp       = Math.max(1, Math.round(cfg.normal ? cfg.normal.hp * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0) * themeHpMult : 50));
+    // §14 v1.27：废止 _monsterHpMult 后乘数链 = _dynamicHpMult × _themeHpMult × themeHpMult(modifier 层) × _earlyDayMult
+    //   完整链与 _initActiveMonsters 对齐（已删除 _monsterHpMult 第一层）
+    const baseHp       = Math.max(1, Math.round(cfg.normal ? cfg.normal.hp * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0) * themeHpMult * earlyMult : 50));
     const baseAtk      = Math.max(1, Math.round((cfg.normal ? cfg.normal.atk : 3) * themeAtkMult));
     const baseSpd      = cfg.normal ? cfg.normal.spd : 2.0;
     const waveMonsters = [];
@@ -5419,9 +5398,10 @@ class SurvivalGameEngine {
   _spawnBossGuards(day) {
     const cfg = getWaveConfig(day);
     if (!cfg || !cfg.boss) return;
-    // r16 GAP-R16-PM-03：补 _themeHpMult / _themeBossHpMult（与 boss_appeared L2990 4 乘数链对齐）
-    //   guard 派生自 Boss HP（×30%），应跟随相同主题倍率链；blood_moon 主题（_themeHpMult=1.2）下 guard HP 不再错位 ×1.2
-    const guardHpRaw = Math.floor(cfg.boss.hp * GUARD_HP_RATIO * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0) * (this._themeBossHpMult || 1.0));
+    // §14 v1.27：废止 _monsterHpMult 后 guard 乘数链 = _dynamicHpMult × _themeHpMult × _themeBossHpMult × _earlyDayMult
+    //   guard 派生自 Boss HP（×30%），跟随 Boss 同链；blood_moon 主题 _themeHpMult=1.2 仍生效
+    const _earlyMultGuard = this._getEarlyDayMult(this.fortressDay);
+    const guardHpRaw = Math.floor(cfg.boss.hp * GUARD_HP_RATIO * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0) * (this._themeBossHpMult || 1.0) * _earlyMultGuard);
     const guardHp    = Math.max(1, guardHpRaw);
     const guardAtk   = (cfg.normal ? cfg.normal.atk : 3) * GUARD_ATK_MULT;
     const guardSpd   = +((cfg.normal ? cfg.normal.spd : 2.0) * (VARIANT_SPEED_MULT.guard || 1.0)).toFixed(2);
@@ -6098,8 +6078,10 @@ class SurvivalGameEngine {
     }
 
     // 预计算 monsterCount / bossHp（不考虑主题倍率，预告用粗估即可）
-    const hpMult  = (this._monsterHpMult  || 1.0) * (this._dynamicHpMult    || 1.0);
-    const cntMult = (this._monsterCntMult || 1.0) * (this._dynamicCountMult || 1.0);
+    // §14 v1.27：废止 _monsterHpMult/_monsterCntMult 后 = _dynamicHpMult/CountMult × _earlyDayMult
+    const _earlyPreview = this._getEarlyDayMult(this.fortressDay);
+    const hpMult  = (this._dynamicHpMult    || 1.0) * _earlyPreview;
+    const cntMult = (this._dynamicCountMult || 1.0) * _earlyPreview;
     let monsterCount = 0;
     if (cfg && cfg.normal) monsterCount += Math.max(1, Math.round(cfg.normal.count * cntMult));
     if (cfg && cfg.elite)  monsterCount += Math.max(0, Math.round(cfg.elite.count  * cntMult));
@@ -7362,9 +7344,9 @@ class SurvivalGameEngine {
     const cfg = getWaveConfig(day);
     if (!cfg.boss) return;
     const themeHpMult = this._themeHpMult || 1.0;
-    const hpMult  = (this._monsterHpMult  || 1.0) * (this._dynamicHpMult   || 1.0) * themeHpMult;
-    // r17 GAP-R17-PM-01：补 _themeBossHpMult（与 boss_appeared L2990 / _initActiveMonsters L4154 / _spawnBossGuards L5206 / _scheduleActEndMiniBossRush L7031 4 乘数链对齐）
-    //   serene 主题（_themeBossHpMult=0.9）下 act1 双 Boss 第 2 只原本错位 ×1.11；blood_moon 影响小（_themeBossHpMult=1.0）但仍属设计不一致
+    // §14 v1.27：废止 _monsterHpMult 后链 = _dynamicHpMult × _themeHpMult × _themeBossHpMult × _earlyDayMult
+    const _earlyMult = this._getEarlyDayMult(this.fortressDay);
+    const hpMult  = (this._dynamicHpMult || 1.0) * themeHpMult * _earlyMult;
     const hp = Math.max(1, Math.round(cfg.boss.hp * hpMult * (this._themeBossHpMult || 1.0)));
     const id = `b_${day}_actend_${++this._monsterIdCounter}`;
     this._activeMonsters.set(id, {
@@ -7390,7 +7372,9 @@ class SurvivalGameEngine {
     const cfg = getWaveConfig(day);
     if (!cfg.boss) return;
     const themeHpMult = this._themeHpMult || 1.0;
-    const hpMult  = (this._monsterHpMult  || 1.0) * (this._dynamicHpMult   || 1.0) * themeHpMult;
+    // §14 v1.27：废止 _monsterHpMult 后链 = _dynamicHpMult × _themeHpMult × _themeBossHpMult × _earlyDayMult
+    const _earlyMult = this._getEarlyDayMult(this.fortressDay);
+    const hpMult  = (this._dynamicHpMult || 1.0) * themeHpMult * _earlyMult;
     for (let i = 0; i < 3; i++) {
       const t = setTimeout(() => {
         if (this.state !== 'night') return;
@@ -7648,10 +7632,10 @@ class SurvivalGameEngine {
         // PM 决策：直接改写 _activeMonsters（保留原 Boss 或新建 Boss × 3HP）
         const cfg = getWaveConfig(day);
         this._activeMonsters.clear();
+        const _earlyBM = this._getEarlyDayMult(this.fortressDay);
         if (cfg.boss) {
-          // r17 GAP-R17-PM-02：补 4 乘数链 _monsterHpMult × _dynamicHpMult × _themeHpMult × _themeBossHpMult（与 boss_appeared L2990 4 乘数链对齐）
-          //   原仅 cfg.boss.hp × MODIFIER_BLOOD_MOON_BOSS_HP_MULT 单乘数 — Hard 难度 × 高动态难度下错位 ×2.25
-          const bossHp = Math.max(1, Math.round(cfg.boss.hp * MODIFIER_BLOOD_MOON_BOSS_HP_MULT * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0) * (this._themeBossHpMult || 1.0)));
+          // §14 v1.27：废止 _monsterHpMult 后链 = MODIFIER_BLOOD_MOON × _dynamicHpMult × _themeHpMult × _themeBossHpMult × _earlyDayMult
+          const bossHp = Math.max(1, Math.round(cfg.boss.hp * MODIFIER_BLOOD_MOON_BOSS_HP_MULT * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0) * (this._themeBossHpMult || 1.0) * _earlyBM));
           const id = `b_${day}_bm_${++this._monsterIdCounter}`;
           this._activeMonsters.set(id, {
             id, type: 'boss', variant: 'normal',
@@ -7664,9 +7648,8 @@ class SurvivalGameEngine {
           });
         }
         if (cfg.elite) {
-          // r17 GAP-R17-PM-03：补 _themeHpMult（赛季主题层）— 与 _initActiveMonsters L4138 / _spawnWave L4954 elite 同形态对齐
-          //   原仅 _monsterHpMult × _dynamicHpMult，blood_moon 主题下错位 ×1.2（注：elite 不叠 _themeBossHpMult，那只用于 Boss 派生层）
-          const eliteHp = Math.max(1, Math.round(cfg.elite.hp * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0)));
+          // §14 v1.27：废止 _monsterHpMult 后链 = _dynamicHpMult × _themeHpMult × _earlyDayMult（elite 不叠 _themeBossHpMult）
+          const eliteHp = Math.max(1, Math.round(cfg.elite.hp * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0) * _earlyBM));
           for (let i = 0; i < MODIFIER_BLOOD_MOON_ELITE_COUNT; i++) {
             const id = `e_${day}_bm_${++this._monsterIdCounter}`;
             this._activeMonsters.set(id, {
@@ -7930,124 +7913,17 @@ class SurvivalGameEngine {
     }, ENGAGEMENT_REMINDER_INTERVAL_MS);
   }
 
-  // ==================== §34.4 E9 赛季/周期间难度切换 ====================
+  // ==================== §14 v1.27：§34.4 E9 难度切换协议已废止 ====================
+  // 旧 handleChangeDifficulty / _softApplyDifficulty / _consumePendingDifficultyOnNight 全部删除。
+  // change_difficulty_accepted / change_difficulty_failed / difficulty_changed 三个 emit 同步移除。
+  // 压力曲线由 _initBaselinePreset 基线 + _getEarlyDayMult(fortressDay) 渐进 + §30.6 _dynamicHpMult 动态难度控制。
 
   /**
-   * §34.4 E9：C→S handler，主播请求下一夜/下一赛季切换难度
-   * @param {string} playerId
-   * @param {object} data { difficulty: 'easy'|'normal'|'hard'|'nightmare', applyAt: 'next_night'|'next_season' }
+   * §14 v1.27：onSeasonStart 保留为 noop（兼容外部插件调用 / 测试）。
+   *   旧 §34.4 E9 next_season 难度切换语义已废止；新赛季压力随 fortressDay 自然演化。
    */
-  handleChangeDifficulty(playerId, data) {
-    // audit-r6 P1-E5：内层 broadcaster guard 双保险（外层 SurvivalRoom._requireBroadcaster 已保护，
-    //   内层回保为防其他调用路径绕过）。reason 用 not_broadcaster 对齐其他 failed 分支。
-    if (this.room && this.room.roomCreatorOpenId && playerId !== this.room.roomCreatorOpenId) {
-      const failMsg = { type: 'change_difficulty_failed', data: { reason: 'not_broadcaster' } };
-      if (!playerId || !this._sendToPlayer(playerId, failMsg)) this._broadcast(failMsg);
-      return;
-    }
-    const diff    = (data && data.difficulty) || '';
-    const applyAt = (data && data.applyAt)    || '';
-    // Fix 7: §34D E9 —— `nightmare` preset 策划案未定具体参数,_softApplyDifficulty 会静默回退 hard,
-    //   客户端与主播不会被告知差异 → 直接拒绝该值,强制 supported = ['easy','normal','hard'],
-    //   与 ChangeDifficultyData.difficulty 文档字段声明口径对齐。
-    const SUPPORTED_DIFFS = ['easy', 'normal', 'hard'];
-    const validDiff    = SUPPORTED_DIFFS.includes(diff);
-    const validApplyAt = (applyAt === 'next_night' || applyAt === 'next_season');
-    // audit-r5 §34.4 E9：失败消息改单播给发起方（主播），避免把主播失败信息泄露全房
-    //   成功 change_difficulty_accepted 仍 broadcast（全房通知 OK）
-    if (!validDiff) {
-      const msg = {
-        type: 'change_difficulty_failed',
-        data: { reason: 'invalid_difficulty', supported: SUPPORTED_DIFFS, difficulty: diff, applyAt },
-      };
-      if (!playerId || !this._sendToPlayer(playerId, msg)) this._broadcast(msg);
-      return;
-    }
-    if (!validApplyAt) {
-      const msg = {
-        type: 'change_difficulty_failed',
-        data: { reason: 'invalid_args', difficulty: diff, applyAt },
-      };
-      if (!playerId || !this._sendToPlayer(playerId, msg)) this._broadcast(msg);
-      return;
-    }
-    this._pendingDifficulty = { difficulty: diff, applyAt };
-    this._broadcast({
-      type: 'change_difficulty_accepted',
-      data: { difficulty: diff, applyAt },
-    });
-    console.log(`[SurvivalEngine] change_difficulty pending: ${diff} @ ${applyAt}`);
-  }
-
-  /**
-   * §34.4 E9：软难度切换（中途切换，不重置资源 / 不改 currentDay / 不改 gateHp）
-   * 仅更新：_difficulty / _monsterHpMult / _monsterCntMult / _poolNightBase / dayDuration / nightDuration
-   *         / foodDecayDay / foodDecayNight / tempDecayDay / tempDecayNight / coalBurnTicks / totalDays
-   * 不更新：food / coal / ore / gateHp / gateMaxHp（_applyDifficulty 里的 resource reset 仅开局 startGame 时合适）
-   */
-  _softApplyDifficulty(difficulty) {
-    const presets = {
-      easy:   { hpMult: 0.6, cntMult: 0.6, decayMult: 0.7, coalBurnTicks: 10, totalDays: 30, poolNightBase: 300, dayDuration: 120, nightDuration: 120 },
-      normal: { hpMult: 1.0, cntMult: 1.0, decayMult: 1.0, coalBurnTicks: 7,  totalDays: 50, poolNightBase: 500, dayDuration: 120, nightDuration: 120 },
-      hard:   { hpMult: 1.5, cntMult: 1.5, decayMult: 1.5, coalBurnTicks: 5,  totalDays: 40, poolNightBase: 800, dayDuration: 120, nightDuration: 120 },
-    };
-    const p = presets[difficulty] || presets.normal;
-    this._difficulty       = difficulty;
-    this._monsterHpMult    = p.hpMult;
-    this._monsterCntMult   = p.cntMult;
-    this._poolNightBase    = p.poolNightBase;
-    this.totalDays         = p.totalDays;
-    this.dayDuration       = p.dayDuration;
-    this.nightDuration     = p.nightDuration;
-    this.foodDecayDay      = (this.config.foodDecayDay   ?? 1.0)  * p.decayMult;
-    this.foodDecayNight    = (this.config.foodDecayNight ?? 1.0)  * p.decayMult;
-    this.tempDecayDay      = (this.config.tempDecayDay   ?? 0.15) * p.decayMult;
-    this.tempDecayNight    = (this.config.tempDecayNight ?? 0.40) * p.decayMult;
-    this.coalBurnTicks     = p.coalBurnTicks || 10;
-    console.log(`[Engine] 软难度切换: ${difficulty} | HP×${p.hpMult} 数量×${p.cntMult} 衰减×${p.decayMult} （不重置资源）`);
-  }
-
-  /**
-   * §34.4 E9：在 _enterNight 消费 applyAt='next_night' 的 pending
-   * 使用 _softApplyDifficulty，不重置资源；nightmare MVP 回退 hard
-   */
-  _consumePendingDifficultyOnNight() {
-    if (!this._pendingDifficulty) return;
-    if (this._pendingDifficulty.applyAt !== 'next_night') return;
-    const diff = this._pendingDifficulty.difficulty;
-    const effectiveDiff = (diff === 'nightmare') ? 'hard' : diff;
-    this._softApplyDifficulty(effectiveDiff);
-    const applied = this._pendingDifficulty;
-    this._pendingDifficulty = null;
-    this.broadcast({
-      type: 'difficulty_changed',
-      timestamp: Date.now(),
-      data: { difficulty: applied.difficulty, appliedDifficulty: effectiveDiff, applyAt: 'next_night' },
-    });
-    console.log(`[SurvivalEngine] difficulty applied (next_night): ${diff} → ${effectiveDiff}`);
-  }
-
-  /**
-   * §34.4 E9：由 _enterDay 检测新赛季 D1 时调用；消费 applyAt='next_season' 的 pending
-   * 同样使用 _softApplyDifficulty
-   */
-  onSeasonStart(newSeasonId) {
-    if (!this._pendingDifficulty) return;
-    if (this._pendingDifficulty.applyAt !== 'next_season') return;
-    const diff = this._pendingDifficulty.difficulty;
-    const effectiveDiff = (diff === 'nightmare') ? 'hard' : diff;
-    this._softApplyDifficulty(effectiveDiff);
-    const applied = this._pendingDifficulty;
-    this._pendingDifficulty = null;
-    this.broadcast({
-      type: 'difficulty_changed',
-      timestamp: Date.now(),
-      data: {
-        difficulty: applied.difficulty, appliedDifficulty: effectiveDiff,
-        applyAt: 'next_season', seasonId: newSeasonId,
-      },
-    });
-    console.log(`[SurvivalEngine] difficulty applied (next_season ${newSeasonId}): ${diff} → ${effectiveDiff}`);
+  onSeasonStart(_newSeasonId) {
+    // intentional no-op
   }
 
   // ==================== 内部：矿工成长系统（策划案 §30）====================
@@ -8224,21 +8100,26 @@ class SurvivalGameEngine {
    */
   _updateDynamicDifficulty() {
     const avg = this._getAverageLevel();
-    const isHard = this._difficulty === 'hard';
+    // §14 v1.27：废止 difficulty 三档后 isHard 分支移除；统一使用原 Normal 档加成（_dynamicHpMult 上限 1.50）
     if (avg < 20) {
-      this._dynamicHpMult = 1.0;
+      this._dynamicHpMult    = 1.0;
       this._dynamicCountMult = 1.0;
     } else if (avg < 40) {
-      this._dynamicHpMult    = isHard ? 1.10 : 1.15;
+      this._dynamicHpMult    = 1.15;
       this._dynamicCountMult = 1.0;
     } else if (avg < 60) {
-      this._dynamicHpMult    = isHard ? 1.20 : 1.30;
+      this._dynamicHpMult    = 1.30;
       this._dynamicCountMult = 1.10;
     } else {
-      this._dynamicHpMult    = isHard ? 1.25 : 1.50;
+      this._dynamicHpMult    = 1.50;
       this._dynamicCountMult = 1.20;
     }
-    console.log(`[SurvivalEngine] Dynamic difficulty: avgLv=${avg.toFixed(1)} hpMult=${this._dynamicHpMult} countMult=${this._dynamicCountMult} diff=${this._difficulty}`);
+    // §14.5 v1.27：D1-D5 早期保护期内 _dynamicHpMult / _dynamicCountMult 封顶 1.0（与 _earlyDayMult 渐进保护协同）
+    if (this.fortressDay <= 5) {
+      this._dynamicHpMult    = Math.min(1.0, this._dynamicHpMult);
+      this._dynamicCountMult = Math.min(1.0, this._dynamicCountMult);
+    }
+    console.log(`[SurvivalEngine] Dynamic difficulty: avgLv=${avg.toFixed(1)} fd=${this.fortressDay} hpMult=${this._dynamicHpMult} countMult=${this._dynamicCountMult}`);
   }
 
   // ==================== 内部：工具 ====================

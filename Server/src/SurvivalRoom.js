@@ -444,9 +444,9 @@ class SurvivalRoom {
       // （StreamerRankingStore 仅在 result === 'win' 时计胜场，现在永续循环不再累加胜场；
       //   totalGames / maxDays / score 按最佳记录正常更新）
       try {
-        const difficulty = this.survivalEngine._difficulty || 'normal';
+        // §14 v1.27：废止 difficulty 三档系统；StreamerRankingStore.addGameResult 仍接受兼容字段，传 'normal' 占位（不参与 v1.26 maxFortressDay 排名权重）
         const streamerName = this.roomId; // 房间ID即主播标识，后续可改为真实昵称
-        this.streamerRanking.addGameResult(this.roomId, streamerName, difficulty, d.dayssurvived || 0, 'lose');
+        this.streamerRanking.addGameResult(this.roomId, streamerName, 'normal', d.dayssurvived || 0, 'lose');
         setTimeout(() => this._broadcastStreamerRanking(), 600);
       } catch (e) {
         console.error(`[SurvivalRoom:${this.roomId}] StreamerRanking update error: ${e.message}`);
@@ -613,15 +613,15 @@ class SurvivalRoom {
         if (!this._requireBroadcaster(ws, 'start_game')) break;
         // 新一局开始时，停止上一局残留的模拟器
         this._stopSimulation();
-        // 支持难度参数：data.difficulty = 'easy' | 'normal' | 'hard'
-        this.survivalEngine.startGame(data && data.difficulty ? data.difficulty : 'normal');
+        // §14 v1.27：废止 difficulty 三档系统；startGame 不再接受 difficulty 参数（统一基线 + fortressDay 渐进压力曲线）
+        this.survivalEngine.startGame();
         // P0-A5 room_state：start_game 后推一次房间全量快照
         try {
           if (typeof this.survivalEngine._broadcastRoomState === 'function') {
             this.survivalEngine._broadcastRoomState('start_game');
           }
         } catch (_) { /* ignore */ }
-        this._gmAudit(ws, 'start_game', { difficulty: data && data.difficulty });
+        this._gmAudit(ws, 'start_game', {});
         break;
       case 'reset_game':
         if (!this._requireBroadcaster(ws, 'reset_game')) break;
@@ -1098,15 +1098,9 @@ class SurvivalRoom {
         break;
       }
 
-      // ==================== §34.4 E9 难度切换（主播） ====================
-      // C→S：{ difficulty: 'easy'|'normal'|'hard'|'nightmare', applyAt: 'next_night'|'next_season' }
-      case 'change_difficulty': {
-        if (!this._requireBroadcaster(ws, 'change_difficulty')) break;
-        const pid = ws._playerId || '';
-        this.survivalEngine.handleChangeDifficulty(pid, data || {});
-        this._gmAudit(ws, 'change_difficulty', { difficulty: data && data.difficulty, applyAt: data && data.applyAt });
-        break;
-      }
+      // ==================== §14 v1.27：§34.4 E9 难度切换协议已废止 ====================
+      // 旧 case 'change_difficulty' / handleChangeDifficulty / change_difficulty_accepted/failed/difficulty_changed 全部移除。
+      // 压力曲线由 _initBaselinePreset 基线 + _getEarlyDayMult(fortressDay) 渐进 + §30.6 _dynamicHpMult 动态难度控制。
 
       // ==================== §17.15 新手引导气泡 ====================
       // TODO: 抖音 SDK 观众进房事件接入后，由 SDK 路由到本 case（或直接在 SDK 回调里调 engine._maybeTriggerOnboarding()）。

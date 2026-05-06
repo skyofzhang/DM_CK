@@ -24,12 +24,10 @@ const path = require('path');
 const DATA_DIR = path.join(__dirname, '../../data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-// v1.25 旧兼容：对仍调用 addGameResult(difficulty) 的路径保留权重映射（用于 legacy score，
-// 不影响 v1.26 的 maxFortressDay 排名；仅保留旧兼容字段以便客户端老版本显示）
-// 🔴 audit-r27 GAP-B26-05 预防性修复：客户端协议字段 'nightmare' 与服务端配置 'hell' 字段名错位。
-//   服务端 handleChangeDifficulty (SurvivalGameEngine.js:7703/7723) 接收 'nightmare' 后回退 'hard'，
-//   addGameResult 若直接传 'nightmare' 会落到 fallback 1（被当作 normal 加权）。
-//   加 nightmare 别名映射避免未来 nightmare 入口启用时主播榜计分错误。
+// §14 v1.27：废止 difficulty 三档系统后 addGameResult 调用方统一传 'normal' 占位；
+//   排行榜按 maxFortressDay 排序（v1.26+），DIFFICULTY_WEIGHT 仅用于旧 legacy score 字段读写兼容，
+//   不影响 v1.26 maxFortressDay 排名。保留映射以避免未来 nightmare/hell 入口启用时主播榜计分错误。
+//   v1.25 旧存档/接口若仍传 difficulty，本表照常加权读取（向下兼容）。
 const DIFFICULTY_WEIGHT = { normal: 1, hard: 2, hell: 3, nightmare: 3 };
 
 class StreamerRankingStore {

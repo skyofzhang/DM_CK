@@ -268,6 +268,10 @@ class RoomPersistence {
       }
     }
 
+    // §14 v1.27：废止 difficulty 三档系统。RoomPersistence 历史从未持久化 _difficulty 字段，
+    //   但若旧版本测试快照 / 外部工具写入了 obj.difficulty，加载后保留（不再使用，由 _applyPersistedSnapshot 静默忽略）。
+    //   类似 audit-r45 的 snap._seasonFailure 兼容模式：仅读取不消费，不报错。
+
     // 读后统一标记为最新
     obj.schemaVersion = CURRENT_SCHEMA_VERSION;
     return obj;
