@@ -31,60 +31,27 @@ namespace DrscfZ.Editor
             int destroyed = 0;
             int notFound  = 0;
 
-            // ---- 1. 找 Canvas（场景层级根） ----
-            GameObject canvasGO = null;
-            foreach (var go in Resources.FindObjectsOfTypeAll<GameObject>())
-            {
-                if (!go.scene.isLoaded) continue;
-                if (PrefabUtility.IsPartOfPrefabAsset(go)) continue;
-                if (go.name == "Canvas" && go.transform.parent == null)
-                {
-                    canvasGO = go;
-                    break;
-                }
-            }
+            // ---- 1. 全场景 GameObject 扫描（不限 Canvas 子树）----
+            //   修复 r2：DifficultyChangeButton 父级是 BroadcasterPanelController（独立根节点，非 Canvas 子树），
+            //   原 Canvas-only BFS 漏抓。改为遍历活动场景全部 GameObject 名匹配。
+            var activeScene = SceneManager.GetActiveScene();
+            var allRoots = activeScene.GetRootGameObjects();
+            var allGOs = new System.Collections.Generic.List<GameObject>();
+            foreach (var root in allRoots)
+                CollectAllChildren(root.transform, allGOs);
 
-            if (canvasGO == null)
-            {
-                Debug.LogWarning("[RemoveDifficultyUIFromScene] Canvas 未找到，终止。");
-                return;
-            }
-
-            // ---- 2. 销毁 GameUIPanel/DifficultySelect（实际 Scene 节点名，无 Panel 后缀；同时兜底 DifficultySelectPanel）----
-            //   PM 复核时 grep MainScene.unity 确认 m_Name=DifficultySelect (line 149064)
+            // ---- 2. 销毁 DifficultySelect / DifficultySelectPanel（兜底两个名字）----
             string[] diffSelectNames = { "DifficultySelect", "DifficultySelectPanel" };
-            bool diffSelectFound = false;
-            foreach (var name in diffSelectNames)
-            {
-                var diffSelectPanel = FindDeepChild(canvasGO.transform, name);
-                if (diffSelectPanel != null)
-                {
-                    Debug.Log($"[RemoveDifficultyUIFromScene] 销毁 {GetPath(diffSelectPanel)}（节点名={name}）");
-                    Object.DestroyImmediate(diffSelectPanel.gameObject);
-                    destroyed++;
-                    diffSelectFound = true;
-                    break;
-                }
-            }
-            if (!diffSelectFound)
-            {
-                Debug.Log("[RemoveDifficultyUIFromScene] DifficultySelect / DifficultySelectPanel 均未找到（已清理）");
-                notFound++;
-            }
+            int selectDestroyed = DestroyByNames(allGOs, diffSelectNames);
+            if (selectDestroyed > 0) { destroyed += selectDestroyed; }
+            else { Debug.Log("[RemoveDifficultyUIFromScene] DifficultySelect / DifficultySelectPanel 均未找到（已清理）"); notFound++; }
 
-            // ---- 3. 销毁 BroadcasterPanel/DifficultyChangeButton ----
-            var diffChangeBtn = FindDeepChild(canvasGO.transform, "DifficultyChangeButton");
-            if (diffChangeBtn != null)
-            {
-                Debug.Log($"[RemoveDifficultyUIFromScene] 销毁 {GetPath(diffChangeBtn)}");
-                Object.DestroyImmediate(diffChangeBtn.gameObject);
-                destroyed++;
-            }
-            else
-            {
-                Debug.Log("[RemoveDifficultyUIFromScene] DifficultyChangeButton 未找到（已清理）");
-                notFound++;
-            }
+            // ---- 3. 销毁 DifficultyChangeButton（含层级 BroadcasterPanelController/DifficultyChangeButton）----
+            //   修复 r2：父级 BroadcasterPanelController（L205698）非 Canvas 子树
+            string[] diffChangeNames = { "DifficultyChangeButton" };
+            int changeDestroyed = DestroyByNames(allGOs, diffChangeNames);
+            if (changeDestroyed > 0) { destroyed += changeDestroyed; }
+            else { Debug.Log("[RemoveDifficultyUIFromScene] DifficultyChangeButton 未找到（已清理）"); notFound++; }
 
             // ---- 4. 标脏并保存场景（CLAUDE.md 铁律 #3） ----
             var scene = SceneManager.GetActiveScene();
@@ -94,24 +61,36 @@ namespace DrscfZ.Editor
             Debug.Log($"[RemoveDifficultyUIFromScene] 完成：销毁 {destroyed} 个节点，{notFound} 个未找到（已清理）；场景保存={saved}");
         }
 
-        /// <summary>BFS 深度搜索：找到指定名字的子节点（首个匹配）。</summary>
-        private static Transform FindDeepChild(Transform root, string name)
+        /// <summary>递归收集 root 及全部后代 GameObject 到列表。</summary>
+        private static void CollectAllChildren(Transform root, System.Collections.Generic.List<GameObject> bag)
         {
-            if (root == null) return null;
+            if (root == null) return;
+            bag.Add(root.gameObject);
+            for (int i = 0; i < root.childCount; i++)
+                CollectAllChildren(root.GetChild(i), bag);
+        }
 
-            var queue = new System.Collections.Generic.Queue<Transform>();
-            queue.Enqueue(root);
-            while (queue.Count > 0)
+        /// <summary>按名字数组从全场景列表中销毁所有匹配的 GameObject，返回销毁数量。</summary>
+        private static int DestroyByNames(System.Collections.Generic.List<GameObject> bag, string[] names)
+        {
+            int n = 0;
+            // 复制一份列表（销毁会改 children 顺序）
+            var snapshot = new System.Collections.Generic.List<GameObject>(bag);
+            foreach (var go in snapshot)
             {
-                var cur = queue.Dequeue();
-                for (int i = 0; i < cur.childCount; i++)
+                if (go == null) continue;
+                foreach (var name in names)
                 {
-                    var child = cur.GetChild(i);
-                    if (child.name == name) return child;
-                    queue.Enqueue(child);
+                    if (go.name == name)
+                    {
+                        Debug.Log($"[RemoveDifficultyUIFromScene] 销毁 {GetPath(go.transform)}（节点名={name}）");
+                        Object.DestroyImmediate(go);
+                        n++;
+                        break;
+                    }
                 }
             }
-            return null;
+            return n;
         }
 
         /// <summary>调试用：返回 GameObject 的层级路径（Canvas/GameUIPanel/DifficultySelectPanel 等）。</summary>
