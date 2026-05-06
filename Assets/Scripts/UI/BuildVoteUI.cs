@@ -58,11 +58,17 @@ namespace DrscfZ.UI
             // §17.16 A 类 modal：新 API Request(id, priority=60, onReplaced)；被高优抢占时自动关闭
             if (_panel != null)
             {
-                _panel.SetActive(true);
-                ModalRegistry.Request(MODAL_A_ID, 60, () =>
+                if (!ModalRegistry.Request(MODAL_A_ID, 60, () =>
                 {
                     if (_panel != null) _panel.SetActive(false);
-                });
+                    if (_tickCoroutine != null) { StopCoroutine(_tickCoroutine); _tickCoroutine = null; }
+                    _current = null;
+                }))
+                {
+                    _current = null;
+                    return;
+                }
+                _panel.SetActive(true);
             }
             if (_proposerText != null) _proposerText.text = $"{data.proposerName} 发起建造投票";
 

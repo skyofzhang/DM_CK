@@ -424,6 +424,7 @@ namespace DrscfZ.Survival
     public class BossAppearedData
     {
         public int    day;
+        public string bossId;
         public int    bossHp;
         public int    bossAtk;
         public bool   isActEndBoss; // audit-r18 §16 act1 终结之夜双 Boss 第 2 只标记（_spawnExtraBossForActEnd L7017 emit）

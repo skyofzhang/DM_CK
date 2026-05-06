@@ -163,9 +163,9 @@ namespace DrscfZ.UI
             // audit-r12 GAP-B02：§17.16 互斥组 A 注册（被更高优先级抢占时回调关面板）
             if (!ModalRegistry.Request(MODAL_A_ID, MODAL_PRIO, OnModalReplaced))
             {
-                Debug.LogWarning($"[TraderOfferUI] ModalRegistry.Request 被拒（更高优先级 modal 在前），降级为后台等待");
+                _expiresAtUnixMs = 0;
+                return;
             }
-
             _panel.SetActive(true);
             Debug.Log($"[TraderOfferUI] 显示交易邀约：A={FormatCard(data.cardA)} B={FormatCard(data.cardB)}");
 

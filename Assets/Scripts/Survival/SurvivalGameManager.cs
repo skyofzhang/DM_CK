@@ -356,6 +356,7 @@ namespace DrscfZ.Survival
         private static void EnsureOptionalRuntimeUI()
         {
             EnsureRuntimeUI<UI.TopFloatingTextUI>("TopFloatingTextUI");
+            EnsureRuntimeUI<UI.FortressDayBadgeUI>("FortressDayBadgeUI");
             EnsureRuntimeUI<UI.TraderOfferUI>("TraderOfferUI");
             EnsureRuntimeUI<UI.TribeWarLobbyUI>("TribeWarLobbyUI");
             EnsureRuntimeUI<UI.TribeWarAttackStatusPanel>("TribeWarAttackStatusPanel");
@@ -463,15 +464,13 @@ namespace DrscfZ.Survival
                 case "resource_update":
                     var ru = JsonUtility.FromJson<ResourceUpdateData>(dataJson);
                     resourceSystem?.ApplyServerUpdate(ru);
-                    cityGateSystem?.SyncFromServer(ru.gateHp, ru.gateMaxHp);
                     // 🆕 v1.22 §10 同步城门层级元数据（若服务端下发）
                     if (cityGateSystem != null)
                     {
-                        cityGateSystem.ApplyDailyUpgraded(ru.gateDailyUpgraded);
-                        cityGateSystem.ApplyTierMeta(ru.gateTierName, ru.gateFeatures);
+                        cityGateSystem.ApplySnapshot(ru.gateLevel, ru.gateHp, ru.gateMaxHp, ru.gateTierName, ru.gateFeatures, ru.gateDailyUpgraded);
                     }
                     dayNightManager?.SyncRemainingTime(ru.remainingTime);
-                    if (ru.scorePool > 0) OnScorePoolUpdated?.Invoke(ru.scorePool);
+                    OnScorePoolUpdated?.Invoke(ru.scorePool);
                     // 🆕 §24.5 主播决策中心 HUD 依赖：每次资源更新触发推荐重算
                     OnResourceUpdate?.Invoke(ru);
                     break;
@@ -1088,6 +1087,21 @@ namespace DrscfZ.Survival
                     if (rst != null)
                     {
                         Debug.Log($"[SGM] room_state 收到断线重连快照 (dailyGained={rst.dailyFortressDayGained}/{rst.dailyCapMax})");
+                        if (!string.IsNullOrEmpty(rst.phase))
+                        {
+                            string roomVariant = string.IsNullOrEmpty(rst.variant) ? "normal" : rst.variant;
+                            bool roomVariantChanged = roomVariant != _lastPhaseVariant;
+                            _lastPhaseVariant = roomVariant;
+                            if (roomVariantChanged)
+                                OnPhaseVariantChanged?.Invoke(roomVariant);
+                            OnPhaseChanged?.Invoke(new PhaseChangedData
+                            {
+                                phase = rst.phase == "recovery" ? "day" : rst.phase,
+                                day = rst.fortressDay,
+                                phaseDuration = 0f,
+                                variant = roomVariant
+                            });
+                        }
                         OnRoomState?.Invoke(rst);
                     }
                     break;
@@ -1440,12 +1454,10 @@ namespace DrscfZ.Survival
             // 🆕 v1.22 §10 同步城门层级元数据（断线重连时确保状态一致）
             if (cityGateSystem != null)
             {
-                cityGateSystem.SyncFromServer(data.gateHp, data.gateMaxHp);
-                cityGateSystem.ApplyDailyUpgraded(data.gateDailyUpgraded);
-                cityGateSystem.ApplyTierMeta(data.gateTierName, data.gateFeatures);
+                cityGateSystem.ApplySnapshot(data.gateLevel, data.gateHp, data.gateMaxHp, data.gateTierName, data.gateFeatures, data.gateDailyUpgraded);
             }
             // 同步积分池（连接/断线重连时立即刷新显示）
-            if (data.scorePool > 0) OnScorePoolUpdated?.Invoke(data.scorePool);
+            OnScorePoolUpdated?.Invoke(data.scorePool);
             OnResourceUpdate?.Invoke(resourceUpdate);
 
             // 🆕 v1.27 §36.12 分时段解锁：survival_game_state 每次推送都携带已解锁功能全集
@@ -1505,22 +1517,24 @@ namespace DrscfZ.Survival
                                   "跳过自动进入 Running（请在断线重连对话框选择[重连]）");
                     }
                     // 同步昼夜（仅在 Running 状态才同步，避免影响 Waiting 场景）
+                    var snapshotPhase = new PhaseChangedData
+                    {
+                        phase = data.state,
+                        day = data.day,
+                        phaseDuration = data.remainingTime,
+                        variant = dataVariant
+                    };
+                    bool svVariantChanged = dataVariant != _lastPhaseVariant;
+                    _lastPhaseVariant = dataVariant;
+                    if (svVariantChanged)
+                        OnPhaseVariantChanged?.Invoke(dataVariant);
                     if (_state == SurvivalState.Running)
                     {
                         // 🆕 §16 / §4.2：从 survival_game_state 同步 variant，供 HUD 差异化 UI 识别恢复期
                         //   dataVariant 在上方已从 data.variant 规范化，此处复用
-                        bool svVariantChanged = dataVariant != _lastPhaseVariant;
-                        _lastPhaseVariant = dataVariant;
-                        if (svVariantChanged)
-                            OnPhaseVariantChanged?.Invoke(dataVariant);
-                        dayNightManager?.HandlePhaseChanged(new PhaseChangedData
-                        {
-                            phase = data.state,
-                            day = data.day,
-                            phaseDuration = data.remainingTime,
-                            variant = dataVariant
-                        });
+                        dayNightManager?.HandlePhaseChanged(snapshotPhase);
                     }
+                    OnPhaseChanged?.Invoke(snapshotPhase);
                     break;
 
                 case "settlement":
@@ -1555,15 +1569,17 @@ namespace DrscfZ.Survival
                     }
                     if (_state == SurvivalState.Running)
                     {
-                        bool rcVariantChanged = recoveryVariant != _lastPhaseVariant;
-                        _lastPhaseVariant = recoveryVariant;
-                        if (rcVariantChanged) OnPhaseVariantChanged?.Invoke(recoveryVariant);
-                        dayNightManager?.HandlePhaseChanged(new PhaseChangedData
+                        var recoveryPhase = new PhaseChangedData
                         {
                             phase = "day", day = data.day,
                             phaseDuration = data.remainingTime,
                             variant = recoveryVariant
-                        });
+                        };
+                        bool rcVariantChanged = recoveryVariant != _lastPhaseVariant;
+                        _lastPhaseVariant = recoveryVariant;
+                        if (rcVariantChanged) OnPhaseVariantChanged?.Invoke(recoveryVariant);
+                        dayNightManager?.HandlePhaseChanged(recoveryPhase);
+                        OnPhaseChanged?.Invoke(recoveryPhase);
                     }
                     break;
             }
@@ -2711,7 +2727,7 @@ namespace DrscfZ.Survival
 
             // 视觉：生成 Boss（X_guai01 放大 2.5 倍，红色标识）
             if (data != null)
-                monsterWaveSpawner?.SpawnBoss(data.day, data.bossHp, data.bossAtk);
+                monsterWaveSpawner?.SpawnBoss(data.day, data.bossHp, data.bossAtk, data.bossId);
 
             UI.AnnouncementUI.Instance?.ShowAnnouncement(
                 "BOSS降临!",

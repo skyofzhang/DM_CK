@@ -411,6 +411,22 @@ test('T14: early boss kill completes night success and increments fortressDay on
   }
 });
 
+test('T15: season_ending gate only applies during D7 night final 300s', () => {
+  const eng = makeEngine();
+  eng.seasonMgr = { seasonDay: 7, seasonId: 1, themeId: 'classic_frozen' };
+
+  eng.state = 'day';
+  eng.remainingTime = 1;
+  assert.strictEqual(eng._isSeasonEnding(), false, 'D7 day is still preparation time and must not be season_ending');
+
+  eng.state = 'night';
+  eng.remainingTime = 301;
+  assert.strictEqual(eng._isSeasonEnding(), false, 'D7 night with >300s remaining should not be locked');
+
+  eng.remainingTime = 300;
+  assert.strictEqual(eng._isSeasonEnding(), true, 'D7 night at <=300s remaining should be season_ending');
+});
+
 // ============================================================
 // Summary
 // ============================================================

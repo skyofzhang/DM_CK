@@ -124,6 +124,7 @@ namespace DrscfZ.Core
         private bool _isConnecting;
         private float _lastHeartbeatResponse;
         private bool _heartbeatTimeoutFired;
+        private long _lastServerTick;
 
         private void Awake()
         {
@@ -166,6 +167,23 @@ namespace DrscfZ.Core
             {
                 _frameMessages.Add(msg);
             }
+            long batchMinTick = long.MaxValue;
+            long batchMaxTick = 0;
+            for (int i = 0; i < _frameMessages.Count; i++)
+            {
+                long tick = _frameMessages[i].tick;
+                if (tick <= 0) continue;
+                if (tick < batchMinTick) batchMinTick = tick;
+                if (tick > batchMaxTick) batchMaxTick = tick;
+            }
+            if (batchMaxTick > 0 && _lastServerTick > 0 && batchMinTick < _lastServerTick)
+            {
+                Debug.LogWarning($"[Net] Server tick rollback detected: {_lastServerTick} -> {batchMinTick}. Requesting sync_state.");
+                while (_messageQueue.TryDequeue(out _)) { }
+                _lastServerTick = 0;
+                SendMessage("sync_state");
+                return;
+            }
             if (_frameMessages.Count > 1)
             {
                 // OrderBy + ThenBy 是 stable sort（同 priority + 同 tick 保入队顺序）
@@ -191,6 +209,8 @@ namespace DrscfZ.Core
                 try { OnMessageReceived?.Invoke(msg.type, msg.data); }
                 catch (Exception e) { Debug.LogError($"[Net] Handler error: {e}"); }
             }
+            if (batchMaxTick > 0 && batchMaxTick > _lastServerTick)
+                _lastServerTick = batchMaxTick;
             while (_actionQueue.TryDequeue(out var action))
             {
                 try { action(); }
@@ -358,6 +378,7 @@ namespace DrscfZ.Core
                 _lastHeartbeatResponse = Time.realtimeSinceStartup;
                 _heartbeatTimeoutFired = false;
                 IsServerTimeout = false;
+                _lastServerTick = 0;
 
                 // 连接后立即发送 join_room（告知服务器要加入哪个房间 + 当前模式）
                 // 服务端据 isGMMode 字段区分 GM 模式（显式或兜底）与真实抖音模式，用于权限/路由分流

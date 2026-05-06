@@ -1021,6 +1021,15 @@ namespace DrscfZ.Survival
         /// - 跨阶段时触发白色闪光
         /// - TODO §30：newTier 达到阶段升级时切皮肤模型（目前仅改 NameTag 颜色）
         /// </summary>
+        public void SyncLevelSnapshot(int level, int tier)
+        {
+            CurrentLevel = Mathf.Clamp(level <= 0 ? CurrentLevel : level, 1, 100);
+            int resolvedTier = Mathf.Clamp(tier > 0 ? tier : CurrentTier, 1, 10);
+            var tag = GetComponentInChildren<PlayerNameTag>(true);
+            if (tag != null) tag.SetLevel(CurrentLevel, resolvedTier);
+            SetTierSkin(resolvedTier);
+        }
+
         public void HandleWorkerLevelUp(WorkerLevelUpData data)
         {
             if (data == null || PlayerId != data.playerId) return;

@@ -6,8 +6,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "test": "jest",
-    "test:watch": "jest --watch"
+    "test": "node tools/run_all_tests.js",
+    "test:watch": "node tools/run_all_tests.js"
   },
   "author": "DrscfZ Team",
   "license": "UNLICENSED",

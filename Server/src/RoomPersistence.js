@@ -1,5 +1,5 @@
 /**
- * RoomPersistence - §36 房间持久化（schemaVersion 4）
+ * RoomPersistence - §36 房间持久化（schemaVersion 6）
  *
  * 职责：
  * 1. 每房一 JSON 文件：./data/rooms/{roomId}.json
@@ -15,17 +15,21 @@
  *   v3 → v4（audit-r7 §30.4）：
  *     - 补齐 _lastDailyDecayDayKey=null（UTC+8 "YYYY-MM-DD"）
  *     - 补齐 _playerLastActiveTs={}（playerId → ms，活跃/不活跃分档输入）
+ *   v4 → v5：
+ *     - 补齐 _buildingInProgress=[]（重启恢复暂停中的建造）
+ *   v5 → v6：
+ *     - 补齐 _seasonFailure={ seasonId, failed }（赛季结算 survivingRooms 统计口径）
  *
  * PM 决策（MVP 裁剪项）：
- * - schemaVersion=4；字段缺失自动回退默认值
+ * - schemaVersion=6；字段缺失自动回退默认值
  * - 失败只记 warn，不 throw（避免主循环阻塞）
  */
 
 const fs = require('fs');
 const path = require('path');
 
-// audit-r7 schemaVersion 4（在 v3 基础上新增 _lastDailyDecayDayKey / _playerLastActiveTs）
-const CURRENT_SCHEMA_VERSION = 4;
+// schemaVersion 6：在 v5 基础上新增 _seasonFailure（本赛季失败标记）
+const CURRENT_SCHEMA_VERSION = 6;
 
 class RoomPersistence {
   /**
@@ -105,6 +109,10 @@ class RoomPersistence {
       // §36 堡垒日 per-room
       fortressDay: engine.fortressDay || 1,
       maxFortressDay: engine.maxFortressDay || 1,
+      _seasonFailure: {
+        seasonId: currentSeasonId,
+        failed: !!engine._seasonFailed,
+      },
 
       // §30 矿工成长（跨局永续）
       _lifetimeContrib: engine._lifetimeContrib || {},
@@ -136,6 +144,19 @@ class RoomPersistence {
       _buildings: (engine._buildings && typeof engine._buildings[Symbol.iterator] === 'function')
         ? [...engine._buildings]
         : [],
+      _buildingInProgress: (engine._buildingInProgress && typeof engine._buildingInProgress.entries === 'function')
+        ? Array.from(engine._buildingInProgress.entries()).map(([buildId, info]) => ({
+            buildId,
+            startedAt: Number(info && info.startedAt) || 0,
+            totalMs: Number(info && info.totalMs) || 0,
+            completesAt: Number(info && info.completesAt) || 0,
+            remainingMs: info && info.paused
+              ? Math.max(0, Number(info.remainingMs) || 0)
+              : Math.max(0, (Number(info && info.completesAt) || 0) - Date.now()),
+            paused: !!(info && info.paused),
+            pausedSeasonId: info && info.pausedSeasonId ? info.pausedSeasonId : null,
+          }))
+        : [],
 
       // ---- P0-A2 v3 新增 8 字段 ----
       totalCycles,                      // v1.26 累计周期数（镜像自 streamerRanking entry）
@@ -165,7 +186,7 @@ class RoomPersistence {
   }
 
   /**
-   * 加载房间快照，并执行 schemaVersion 迁移（v1/v2 → v3）
+   * 加载房间快照，并执行 schemaVersion 迁移（旧版本 → CURRENT_SCHEMA_VERSION）
    * @returns {object|null}  JSON 对象或 null（文件不存在/解析失败均返 null）
    */
   load(roomId) {
@@ -210,7 +231,7 @@ class RoomPersistence {
   }
 
   /**
-   * schemaVersion 迁移：v1 → v2 → v3 → v4
+   * schemaVersion 迁移：v1 → v2 → v3 → v4 → v5 → v6
    *   - v1→v2：补 _contribBalance（从 _lifetimeContrib 拷贝）
    *   - v2→v3：
    *       - 旧 _playerSkinId 字段 → _playerSkinTier（不存在则空）
@@ -220,6 +241,8 @@ class RoomPersistence {
    *       - 补齐 _lastDailyDecayDayKey=null / _playerLastActiveTs={}
    *       - 旧存档加载后首次 _tickDailyDecayIfDue 触发时将当前 dayKey 回填，不立即衰减
    *         （_tickDailyDecayIfDue 内部: null → 仅记录不衰减，避免服务器启动即衰减）
+   *   - v4→v5：补 _buildingInProgress=[]
+   *   - v5→v6：补 _seasonFailure={ seasonId, failed:false }
    */
   _migrate(obj) {
     if (!obj || typeof obj !== 'object') return obj;
@@ -266,6 +289,15 @@ class RoomPersistence {
       if (!obj._playerLastActiveTs || typeof obj._playerLastActiveTs !== 'object') {
         obj._playerLastActiveTs = {};
       }
+    }
+
+    if (fromVersion < 5 || !Array.isArray(obj._buildingInProgress)) {
+      obj._buildingInProgress = [];
+    }
+
+    if (fromVersion < 6 || !obj._seasonFailure || typeof obj._seasonFailure !== 'object') {
+      const seasonId = Number(obj.currentSeasonId) || (obj.seasonSnapshot && Number(obj.seasonSnapshot.seasonId)) || 1;
+      obj._seasonFailure = { seasonId, failed: false };
     }
 
     // 读后统一标记为最新

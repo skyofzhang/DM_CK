@@ -67,10 +67,7 @@ namespace DrscfZ.UI
             TrySubscribe();
             // OnEnable 时立即按当前缓存刷新一次（避免订阅前已同步过一次错过）
             var sgm = SurvivalGameManager.Instance;
-            if (sgm != null && sgm.CurrentUnlockedFeatures != null)
-            {
-                Apply(sgm.IsFeatureUnlocked(_featureId));
-            }
+            Apply(sgm != null && sgm.CurrentUnlockedFeatures != null && sgm.IsFeatureUnlocked(_featureId));
         }
 
         private void Start()

@@ -327,7 +327,7 @@ namespace DrscfZ.Monster
         // ==================== Boss 生成（C：Boss视觉）====================
 
         /// <summary>生成Boss：使用普通怪Prefab但放大2.5倍，红色材质标识</summary>
-        public void SpawnBoss(int day, int bossHp = 1000, int bossAtk = 10)
+        public void SpawnBoss(int day, int bossHp = 1000, int bossAtk = 10, string bossIdOverride = null)
         {
             Vector3 spawnPos = GetSpawnPos("top");
             spawnPos += new Vector3(0, 0, -2f); // Boss稍微靠前，确保显眼
@@ -353,7 +353,9 @@ namespace DrscfZ.Monster
                 Debug.LogWarning("[WaveSpawner] Boss prefab missing! Using invisible placeholder.");
             }
 
-            string bossId = $"boss_{day}_{UnityEngine.Random.Range(1000, 9999)}";
+            string bossId = string.IsNullOrEmpty(bossIdOverride)
+                ? $"boss_{day}_{UnityEngine.Random.Range(1000, 9999)}"
+                : bossIdOverride;
             go.name = $"Boss_{bossId}";
 
             var ctrl = go.GetComponent<MonsterController>() ?? go.AddComponent<MonsterController>();

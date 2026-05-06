@@ -113,9 +113,10 @@ namespace DrscfZ.UI
             // audit-r12 GAP-B02：§17.16 互斥组 A 注册
             if (!ModalRegistry.Request(MODAL_A_ID, MODAL_PRIO, OnModalReplaced))
             {
-                Debug.LogWarning($"[TraderCaravanUI] ModalRegistry.Request 被拒（更高优先级 modal 在前）");
+                _expeditionId    = null;
+                _expiresAtUnixMs = 0;
+                return;
             }
-
             _panel.SetActive(true);
 
             // 启动超时自动关闭

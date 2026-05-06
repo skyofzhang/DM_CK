@@ -91,12 +91,16 @@ namespace DrscfZ.UI
             // §17.16 A 类 modal（audit-r5 切换新 API，priority=75 升级确认关键）
             if (_panel != null)
             {
-                _panel.SetActive(true);
-                ModalRegistry.Request(MODAL_A_ID, 75, () =>
+                if (!ModalRegistry.Request(MODAL_A_ID, 75, () =>
                 {
                     if (_panel != null) _panel.SetActive(false);
                     _onConfirm = null;
-                });
+                }))
+                {
+                    _onConfirm = null;
+                    return;
+                }
+                _panel.SetActive(true);
             }
         }
 

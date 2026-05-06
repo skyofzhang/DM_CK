@@ -154,12 +154,15 @@ namespace DrscfZ.UI
                 RequestRoomList();
                 return;
             }
-            _panel.SetActive(true);
-            if (_statusText != null) _statusText.text = "加载中...";
-            ModalRegistry.Request(MODAL_A_ID, 70, () =>
+            if (!ModalRegistry.Request(MODAL_A_ID, 70, () =>
             {
                 if (_panel != null) _panel.SetActive(false);
-            });
+            }))
+            {
+                return;
+            }
+            _panel.SetActive(true);
+            if (_statusText != null) _statusText.text = "加载中...";
             RequestRoomList();
         }
 

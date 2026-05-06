@@ -58,6 +58,12 @@ namespace DrscfZ.Survival
         // ── §10.7 Lv5/Lv6 占位视觉（美术资源到位后替换）──────────────────────────
         private GameObject _frostAuraRing;     // Lv5 常驻冰雾环（frost_aura 激活时可见）
         private bool       _frostAuraActive;
+        private SurvivalGameManager _subscribedSgm;
+        private ResourceSystem _subscribedRes;
+        private bool _gateEffectSubscribed;
+        private bool _hpAlarmSubscribed;
+        private bool _resourceAlarmSubscribed;
+        private Coroutine _subscriptionRetryCoroutine;
 
         private void Awake()
         {
@@ -76,36 +82,110 @@ namespace DrscfZ.Survival
             }
         }
 
+        private void OnEnable()
+        {
+            TrySubscribeExternalEvents();
+            if (_subscriptionRetryCoroutine == null)
+                _subscriptionRetryCoroutine = StartCoroutine(RetrySubscribeExternalEvents());
+        }
+
         private void Start()
         {
-            // §10.7 订阅 SurvivalGameManager.OnGateEffectTriggered，按 effect 分流播视觉
-            //   thorns 仍由 SurvivalGameManager 统一处理伤害飘字；本类仅负责 frost_aura / frost_pulse 视觉占位
-            var sgm = SurvivalGameManager.Instance;
-            if (sgm != null) sgm.OnGateEffectTriggered += HandleGateEffect;
+            TrySubscribeExternalEvents();
+        }
 
-            // §29 警报音效：订阅自身 OnHpChanged + ResourceSystem.OnResourceChanged
-            OnHpChanged += OnHpChangedForAlarm;
-            var res = ResourceSystem.Instance;
-            if (res != null) res.OnResourceChanged += OnResourceChangedForAlarm;
+        private void OnDisable()
+        {
+            UnsubscribeExternalEvents();
+            StopAlarmLoops();
         }
 
         private void OnDestroy()
         {
-            var sgm = SurvivalGameManager.Instance;
-            if (sgm != null) sgm.OnGateEffectTriggered -= HandleGateEffect;
-
-            OnHpChanged -= OnHpChangedForAlarm;
-            var res = ResourceSystem.Instance;
-            if (res != null) res.OnResourceChanged -= OnResourceChangedForAlarm;
-            // 停掉潜在残留的循环警报
-            var audio = AudioManager.Instance;
-            if (audio != null)
-            {
-                audio.StopLoopSFX(AudioConstants.SFX_GATE_ALARM);
-                audio.StopLoopSFX(AudioConstants.SFX_COLD_ALARM);
-            }
+            UnsubscribeExternalEvents();
+            StopAlarmLoops();
 
             if (Instance == this) Instance = null;
+        }
+
+        private void StopAlarmLoops()
+        {
+            var audio = AudioManager.Instance;
+            if (audio == null) return;
+            audio.StopLoopSFX(AudioConstants.SFX_GATE_ALARM);
+            audio.StopLoopSFX(AudioConstants.SFX_COLD_ALARM);
+            _gateAlarmOn = false;
+            _coldAlarmOn = false;
+        }
+
+        private IEnumerator RetrySubscribeExternalEvents()
+        {
+            const int maxFrames = 60;
+            for (int i = 0; i < maxFrames && (!_gateEffectSubscribed || !_resourceAlarmSubscribed); i++)
+            {
+                TrySubscribeExternalEvents();
+                if (_gateEffectSubscribed && _resourceAlarmSubscribed) break;
+                yield return null;
+            }
+            _subscriptionRetryCoroutine = null;
+        }
+
+        private void TrySubscribeExternalEvents()
+        {
+            // §10.7 订阅 SurvivalGameManager.OnGateEffectTriggered，按 effect 分流播视觉
+            //   thorns 仍由 SurvivalGameManager 统一处理伤害飘字；本类仅负责 frost_aura / frost_pulse 视觉占位
+            if (!_gateEffectSubscribed)
+            {
+                var sgm = SurvivalGameManager.Instance;
+                if (sgm != null)
+                {
+                    sgm.OnGateEffectTriggered += HandleGateEffect;
+                    _subscribedSgm = sgm;
+                    _gateEffectSubscribed = true;
+                }
+            }
+
+            // §29 警报音效：订阅自身 OnHpChanged + ResourceSystem.OnResourceChanged
+            if (!_hpAlarmSubscribed)
+            {
+                OnHpChanged += OnHpChangedForAlarm;
+                _hpAlarmSubscribed = true;
+            }
+
+            if (!_resourceAlarmSubscribed)
+            {
+                var res = ResourceSystem.Instance;
+                if (res != null)
+                {
+                    res.OnResourceChanged += OnResourceChangedForAlarm;
+                    _subscribedRes = res;
+                    _resourceAlarmSubscribed = true;
+                }
+            }
+        }
+
+        private void UnsubscribeExternalEvents()
+        {
+            if (_subscriptionRetryCoroutine != null)
+            {
+                StopCoroutine(_subscriptionRetryCoroutine);
+                _subscriptionRetryCoroutine = null;
+            }
+
+            if (_gateEffectSubscribed && _subscribedSgm != null)
+                _subscribedSgm.OnGateEffectTriggered -= HandleGateEffect;
+
+            if (_hpAlarmSubscribed)
+                OnHpChanged -= OnHpChangedForAlarm;
+
+            if (_resourceAlarmSubscribed && _subscribedRes != null)
+                _subscribedRes.OnResourceChanged -= OnResourceChangedForAlarm;
+
+            _subscribedSgm = null;
+            _subscribedRes = null;
+            _gateEffectSubscribed = false;
+            _hpAlarmSubscribed = false;
+            _resourceAlarmSubscribed = false;
         }
 
         // ── §29 警报音效 ──────────────────────────────────────────────────────────
@@ -350,6 +430,11 @@ namespace DrscfZ.Survival
         /// <summary>切换城门等级外观（启用 _gateModels[level-1]，其余隐藏）🆕 v1.22</summary>
         public void SetGateLevel(int level)
         {
+            SetGateLevelVisual(level, true);
+        }
+
+        private void SetGateLevelVisual(int level, bool playFx)
+        {
             if (_gateModels == null) return;
             for (int i = 0; i < _gateModels.Length; i++)
             {
@@ -358,7 +443,7 @@ namespace DrscfZ.Survival
             }
             // §10.7 frost_aura 常驻环仅 Lv5+ 生效；降级或回 Lv1-4 时清理
             if (level < 5) EnableFrostAuraRing(false);
-            StartCoroutine(PlayUpgradeFX());
+            if (playFx) StartCoroutine(PlayUpgradeFX());
         }
 
         private IEnumerator PlayUpgradeFX()
@@ -382,6 +467,18 @@ namespace DrscfZ.Survival
                 TierName = tierName;
             if (features != null)
                 Features = features;
+        }
+
+        public void ApplySnapshot(int level, int hp, int maxHp, string tierName, string[] features, bool dailyUpgraded)
+        {
+            int clampedLevel = Mathf.Clamp(level <= 0 ? GateLevel : level, 1, 6);
+            GateLevel = clampedLevel;
+            DailyUpgraded = dailyUpgraded;
+            ApplyTierMeta(tierName, features);
+            int safeMaxHp = maxHp > 0 ? maxHp : MaxHp;
+            int safeHp = hp > 0 || maxHp > 0 ? hp : CurrentHp;
+            SyncFromServer(safeHp, safeMaxHp);
+            SetGateLevelVisual(clampedLevel, false);
         }
 
         // ── 子任务5：受击变色 ────────────────────────────────────────────────────

@@ -47,6 +47,15 @@ namespace DrscfZ.UI
         public TextMeshProUGUI scorePoolText;   // "积分池:1234" 或 "积分池:1.2万"
 
         private bool _subscribed = false;
+        private bool _resSubscribed = false;
+        private bool _gateSubscribed = false;
+        private bool _dnSubscribed = false;
+        private bool _sgmSubscribed = false;
+        private ResourceSystem _subscribedRes;
+        private CityGateSystem _subscribedGate;
+        private DayNightCycleManager _subscribedDn;
+        private SurvivalGameManager _subscribedSgm;
+        private SurvivalGameManager _subscribedSgmS36;
 
         // T213：前值追踪，数值增加时触发弹跳动画
         private int   _prevFood, _prevCoal, _prevOre;
@@ -71,6 +80,7 @@ namespace DrscfZ.UI
 
         private void OnDestroy()
         {
+            Unsubscribe();
             if (Instance == this) Instance = null;
         }
 
@@ -92,88 +102,110 @@ namespace DrscfZ.UI
 
         private void TrySubscribe()
         {
-            if (_subscribed) return;
-
-            // 全サブシステムが揃っている場合のみ購読完了とする
             var res  = ResourceSystem.Instance;
             var gate = CityGateSystem.Instance;
             var dn   = DayNightCycleManager.Instance;
             var sgm  = SurvivalGameManager.Instance;
 
-            // いずれかが未初期化なら次のフレームに持ち越す（_subscribedはtrueにしない）
+            // 全部未初期化なら次の Start/OnEnable に持ち越す。
             if (res == null && gate == null && dn == null && sgm == null) return;
 
-            if (res != null)
+            if (!_resSubscribed && res != null)
             {
                 res.OnResourceChanged += HandleResourceChanged;
+                _subscribedRes = res;
+                _resSubscribed = true;
                 // 立即同步当前值
                 HandleResourceChanged(res.Food, res.Coal, res.Ore, res.FurnaceTemp);
             }
 
-            if (gate != null)
+            if (!_gateSubscribed && gate != null)
             {
                 gate.OnHpChanged += HandleGateHpChanged;
+                _subscribedGate = gate;
+                _gateSubscribed = true;
                 HandleGateHpChanged(gate.CurrentHp, gate.MaxHp);
             }
 
-            if (dn != null)
+            if (!_dnSubscribed && dn != null)
             {
-                dn.OnDayStarted    += _ => UpdatePhaseDisplay();
-                dn.OnNightStarted  += _ => UpdatePhaseDisplay();
+                dn.OnDayStarted    += HandleDayStarted;
+                dn.OnNightStarted  += HandleNightStarted;
                 dn.OnTimeTick      += HandleTimeTick;
+                _subscribedDn = dn;
+                _dnSubscribed = true;
                 UpdatePhaseDisplay();
             }
 
-            if (sgm != null)
+            if (!_sgmSubscribed && sgm != null)
             {
-                sgm.OnPlayerJoined     += _ => UpdatePlayerCount();
+                sgm.OnPlayerJoined     += HandlePlayerJoinedForCount;
                 sgm.OnScorePoolUpdated += HandleScorePoolUpdated;
+                _subscribedSgm = sgm;
+                _sgmSubscribed = true;
                 UpdatePlayerCount();
+            }
 
-                // §36 全服同步订阅
-                if (!_sgmSubscribedS36)
+            // §36 全服同步订阅
+            if (!_sgmSubscribedS36 && sgm != null)
+            {
+                sgm.OnWorldClockTick     += HandleWorldClockTick;
+                sgm.OnSeasonState        += HandleSeasonState;
+                sgm.OnFortressDayChanged += HandleFortressDayChanged;
+                _subscribedSgmS36 = sgm;
+                _sgmSubscribedS36 = true;
+                // 若已有缓存则立即同步一次
+                var snap = sgm.CurrentSeasonState;
+                if (snap != null)
                 {
-                    sgm.OnWorldClockTick     += HandleWorldClockTick;
-                    sgm.OnSeasonState        += HandleSeasonState;
-                    sgm.OnFortressDayChanged += HandleFortressDayChanged;
-                    _sgmSubscribedS36 = true;
-                    // 若已有缓存则立即同步一次
-                    var snap = sgm.CurrentSeasonState;
-                    if (snap != null)
-                    {
-                        _seasonDay = snap.seasonDay;
-                        _themeId   = snap.themeId;
-                        UpdatePhaseDisplay();
-                    }
+                    _seasonDay = snap.seasonDay;
+                    _themeId   = snap.themeId;
+                    UpdatePhaseDisplay();
                 }
             }
 
-            _subscribed = true;
+            _subscribed = _resSubscribed || _gateSubscribed || _dnSubscribed || _sgmSubscribed || _sgmSubscribedS36;
         }
 
         private void Unsubscribe()
         {
             if (!_subscribed) return;
-            var res = ResourceSystem.Instance;
-            if (res != null) res.OnResourceChanged -= HandleResourceChanged;
+            if (_resSubscribed && _subscribedRes != null)
+                _subscribedRes.OnResourceChanged -= HandleResourceChanged;
 
-            var gate = CityGateSystem.Instance;
-            if (gate != null) gate.OnHpChanged -= HandleGateHpChanged;
+            if (_gateSubscribed && _subscribedGate != null)
+                _subscribedGate.OnHpChanged -= HandleGateHpChanged;
 
-            var dn = DayNightCycleManager.Instance;
-            if (dn != null) dn.OnTimeTick -= HandleTimeTick;
-
-            var sgm = SurvivalGameManager.Instance;
-            if (sgm != null) sgm.OnScorePoolUpdated -= HandleScorePoolUpdated;
-
-            if (_sgmSubscribedS36 && sgm != null)
+            if (_dnSubscribed && _subscribedDn != null)
             {
-                sgm.OnWorldClockTick     -= HandleWorldClockTick;
-                sgm.OnSeasonState        -= HandleSeasonState;
-                sgm.OnFortressDayChanged -= HandleFortressDayChanged;
-                _sgmSubscribedS36 = false;
+                _subscribedDn.OnDayStarted   -= HandleDayStarted;
+                _subscribedDn.OnNightStarted -= HandleNightStarted;
+                _subscribedDn.OnTimeTick     -= HandleTimeTick;
             }
 
+            if (_sgmSubscribed && _subscribedSgm != null)
+            {
+                _subscribedSgm.OnPlayerJoined     -= HandlePlayerJoinedForCount;
+                _subscribedSgm.OnScorePoolUpdated -= HandleScorePoolUpdated;
+            }
+
+            if (_sgmSubscribedS36 && _subscribedSgmS36 != null)
+            {
+                _subscribedSgmS36.OnWorldClockTick     -= HandleWorldClockTick;
+                _subscribedSgmS36.OnSeasonState        -= HandleSeasonState;
+                _subscribedSgmS36.OnFortressDayChanged -= HandleFortressDayChanged;
+            }
+
+            _resSubscribed = false;
+            _gateSubscribed = false;
+            _dnSubscribed = false;
+            _sgmSubscribed = false;
+            _sgmSubscribedS36 = false;
+            _subscribedRes = null;
+            _subscribedGate = null;
+            _subscribedDn = null;
+            _subscribedSgm = null;
+            _subscribedSgmS36 = null;
             _subscribed = false;
         }
 
@@ -263,6 +295,21 @@ namespace DrscfZ.UI
             }
             if (gateIcon && CityGateSystem.Instance != null)
                 gateIcon.color = CityGateSystem.Instance.GetHpColor();
+        }
+
+        private void HandleDayStarted(int dayNumber)
+        {
+            UpdatePhaseDisplay();
+        }
+
+        private void HandleNightStarted(int dayNumber)
+        {
+            UpdatePhaseDisplay();
+        }
+
+        private void HandlePlayerJoinedForCount(SurvivalPlayerJoinedData data)
+        {
+            UpdatePlayerCount();
         }
 
         private void HandleTimeTick(float remaining)

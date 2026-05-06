@@ -239,17 +239,21 @@ namespace DrscfZ.UI
             }
 
             // 切换到 Spinning，显示面板（§17.16 走 ModalRegistry A 类互斥，priority=70 主播轮盘高优）
-            SetSpinButtonState(State.Spinning);
             if (_panel != null)
             {
-                _panel.SetActive(true);
-                ModalRegistry.Request(MODAL_A_ID, 70, () =>
+                if (!ModalRegistry.Request(MODAL_A_ID, 70, () =>
                 {
-                    // 被更高优先级抢占时自动关闭面板
                     if (_panel != null) _panel.SetActive(false);
-                });
+                }))
+                {
+                    _currentResult = null;
+                    SetSpinButtonState(State.Charging);
+                    return;
+                }
+                _panel.SetActive(true);
             }
 
+            SetSpinButtonState(State.Spinning);
             if (_rollCoroutine != null) StopCoroutine(_rollCoroutine);
             _rollCoroutine = StartCoroutine(Roll(data));
         }

@@ -72,14 +72,14 @@ namespace DrscfZ.UI
             if (net != null)
             {
                 net.OnConnected    += RefreshVisibility;
-                net.OnDisconnected += _ => HidePanel();
+                net.OnDisconnected += HandleDisconnected;
             }
 
             var sgm = SurvivalGameManager.Instance;
             if (sgm != null)
             {
-                sgm.OnStateChanged  += _ => RefreshVisibility();
-                sgm.OnDifficultySet += _ => RefreshVisibility();
+                sgm.OnStateChanged  += HandleStateChanged;
+                sgm.OnDifficultySet += HandleDifficultySet;
             }
 
             RefreshVisibility();
@@ -93,16 +93,20 @@ namespace DrscfZ.UI
             if (net != null)
             {
                 net.OnConnected    -= RefreshVisibility;
-                net.OnDisconnected -= _ => HidePanel();
+                net.OnDisconnected -= HandleDisconnected;
             }
 
             var sgm = SurvivalGameManager.Instance;
             if (sgm != null)
             {
-                sgm.OnStateChanged  -= _ => RefreshVisibility();
-                sgm.OnDifficultySet -= _ => RefreshVisibility();
+                sgm.OnStateChanged  -= HandleStateChanged;
+                sgm.OnDifficultySet -= HandleDifficultySet;
             }
         }
+
+        private void HandleDisconnected(string reason) => HidePanel();
+        private void HandleStateChanged(SurvivalGameManager.SurvivalState state) => RefreshVisibility();
+        private void HandleDifficultySet(SurvivalGameManager.DifficultyLevel level) => RefreshVisibility();
 
         // ==================== 显隐逻辑 ====================
 

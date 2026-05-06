@@ -728,12 +728,12 @@ namespace DrscfZ.Survival
                 if (worker == null) continue;
                 // HP 同步
                 if (ws.maxHp > 0) worker.SetHp(ws.currentHp, ws.maxHp);
-                // 阶段皮肤同步（r37 GAP-D37-01 已闭环 _cachedTier 缓存，此处仅外观）
-                if (ws.skinTier >= 1 && ws.skinTier <= 10) worker.SetTierSkin(ws.skinTier);
+                // 等级 + 阶段皮肤冷同步（不播放升级特效）
+                worker.SyncLevelSnapshot(ws.level, ws.skinTier);
                 // 死亡 / 冻结同步
                 if (ws.state == "dead" && !worker.IsDead) worker.EnterDead(0);
                 else if (ws.state == "frozen") worker.TriggerFrozen(0f);
-                else if (ws.state == "active" && worker.IsDead) worker.Revive();
+                else if (ws.state != "dead" && ws.state != "frozen" && worker.IsDead) worker.Revive();
             }
             Debug.Log($"[WorkerManager] HandleWorkersFullSnapshot: 同步 {workers.Length} 个矿工状态（r37 GAP-A37-04 闭环）");
         }

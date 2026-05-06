@@ -9,9 +9,9 @@
  * 5. 应用主题对昼夜时长的倍率（dawn ×0.8 / serene 夜长 ×1.3）
  * 6. §36.4 维护全服 Boss Rush HP 池（D7 夜晚启动，累加跨房间伤害）
  *
- * PM 决策（MVP 裁剪项）：
+ * PM 决策：
  * - 赛季结算 season_settlement 由 SeasonManager.advanceDay 负责（携带 nextThemeId）
- * - D7 Boss 池归零 → 仅推 `season_boss_rush_killed`，不提前切换赛季（仍走 advanceDay 原路径）
+ * - D7 Boss 池归零 → 推 `season_boss_rush_killed` 后立即走赛季结算
  * - 不同步 fortressDay（fortressDay 仍是 per-room）
  */
 
@@ -51,6 +51,7 @@ class GlobalClock {
     this._bossRushHpTotal  = 0;                    // 总 HP（不随扣减变化，客户端进度条参考）
     this._bossRushParticipatingRooms = new Set();  // 参与房间 id（快照；每次启动重刷）
     this._bossRushKilled = false;                  // 本赛季是否已击杀过（防重复推送）
+    this._bossRushSettlementScheduled = false;     // 击杀后结算只调度一次
 
     // 启动 tick
     this._timer = setInterval(() => this._tick(), this._tickMs);
@@ -212,8 +213,56 @@ class GlobalClock {
         } catch (e) { /* ignore */ }
       }
       console.log(`[GlobalClock] BossRush KILLED at season ${this._bossRushSeasonId}`);
+      this._scheduleBossRushSettlement();
     }
     return { ok: true, remaining: this._bossRushHpPool };
+  }
+
+  _scheduleBossRushSettlement() {
+    if (this._bossRushSettlementScheduled) return;
+    this._bossRushSettlementScheduled = true;
+    const timer = setTimeout(() => {
+      try { this._settleSeasonAfterBossRushKilled(); }
+      catch (e) { console.warn(`[GlobalClock] BossRush settlement error: ${e.message}`); }
+    }, 0);
+    if (timer && typeof timer.unref === 'function') timer.unref();
+  }
+
+  _settleSeasonAfterBossRushKilled() {
+    if (!this._seasonMgr || this._seasonMgr.seasonDay !== 7) {
+      this._resetBossRushPool();
+      return;
+    }
+
+    const oldSeasonDay = this._seasonMgr.seasonDay;
+    this._phase = 'day';
+    this._phaseStartedAt = Date.now();
+
+    // 与自然 night→day 一致：先让各房间完成 D7 夜晚成功收尾，再推进赛季结算。
+    for (const room of this._rooms) {
+      try {
+        if (!room || !room.survivalEngine) continue;
+        if (typeof room.survivalEngine._enterDayFromClock === 'function') {
+          room.survivalEngine._enterDayFromClock();
+        }
+      } catch (e) {
+        console.warn(`[GlobalClock] boss rush day callback error (room=${room && room.roomId}): ${e.message}`);
+      }
+    }
+
+    try {
+      this._seasonMgr.advanceDay(this._rooms);
+    } catch (e) {
+      console.warn(`[GlobalClock] boss rush advanceDay error: ${e.message}`);
+    }
+
+    const newSeasonDay = this._seasonMgr.seasonDay;
+    if (newSeasonDay !== oldSeasonDay) {
+      this._pendingNewlyUnlocked = getNewlyUnlockedFeatures(oldSeasonDay, newSeasonDay);
+      this._lastSeasonDayTicked = newSeasonDay;
+    }
+    this._resetBossRushPool();
+    console.log(`[GlobalClock] BossRush settlement completed: seasonDay ${oldSeasonDay} → ${newSeasonDay}`);
   }
 
   /** 查询 BossRush 池状态（给外部诊断/单测用）*/
@@ -234,6 +283,7 @@ class GlobalClock {
     this._bossRushHpTotal = 0;
     this._bossRushParticipatingRooms = new Set();
     this._bossRushKilled = false;
+    this._bossRushSettlementScheduled = false;
   }
 
   // ==================== 内部：tick 循环 ====================

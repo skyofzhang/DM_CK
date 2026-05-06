@@ -21,6 +21,7 @@ namespace DrscfZ.UI
         public static FortressDayBadgeUI Instance { get; private set; }
 
         [Header("文本字段（Prefab 绑定由人工）")]
+        [SerializeField] private GameObject _root;
         [SerializeField] private TMP_Text _dayText;       // "堡垒日 Lv.43"
         [SerializeField] private TMP_Text _capText;       // "今日 120/150"
         [SerializeField] private Image    _icon;          // 徽标图标（reason tint 用）
@@ -56,6 +57,9 @@ namespace DrscfZ.UI
         {
             if (Instance != null && Instance != this) { /* 保留先进入的实例 */ return; }
             Instance = this;
+            EnsureFallbackUI();
+            RefreshDayText();
+            RefreshCapText();
         }
 
         private void OnDestroy()
@@ -92,6 +96,29 @@ namespace DrscfZ.UI
             DailyCapBlocked    = dailyCapBlocked;
             RefreshDayText();
             RefreshCapText();
+        }
+
+        private void EnsureFallbackUI()
+        {
+            if (_dayText != null || _capText != null || _icon != null) return;
+
+            if (transform.parent == null)
+                transform.SetParent(RuntimeUIFactory.GetCanvasTransform(), false);
+
+            _root = RuntimeUIFactory.CreatePanel(transform, "FortressDayBadgePanel",
+                new Vector2(1f, 1f), new Vector2(1f, 1f),
+                new Vector2(-190f, -72f), new Vector2(300f, 72f),
+                new Color(0.05f, 0.08f, 0.12f, 0.84f));
+            RuntimeUIFactory.AddVerticalLayout(_root, 2f, new RectOffset(14, 14, 8, 8), TextAnchor.MiddleCenter);
+
+            _icon = _root.GetComponent<Image>();
+            _dayText = RuntimeUIFactory.CreateText(_root.transform, "DayText", "堡垒日 Lv.1", 22f,
+                Color.white, TextAlignmentOptions.Center, new Vector2(270f, 28f));
+            RuntimeUIFactory.AddLayoutElement(_dayText.gameObject, 28f);
+
+            _capText = RuntimeUIFactory.CreateText(_root.transform, "CapText", "", 18f,
+                Color.white, TextAlignmentOptions.Center, new Vector2(270f, 24f));
+            RuntimeUIFactory.AddLayoutElement(_capText.gameObject, 24f);
         }
 
         private void RefreshDayText()

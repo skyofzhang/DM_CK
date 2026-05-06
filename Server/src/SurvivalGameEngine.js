@@ -99,6 +99,7 @@ const FROST_PULSE_INTERVAL_MS = 15000;
 const FROST_PULSE_RADIUS      = 8;
 const FROST_PULSE_DAMAGE      = 100;
 const FROST_PULSE_FREEZE_MS   = 2000;
+const SERVER_MONSTER_APPROACH_DISTANCE = 20;
 
 // ==================== §17.15 新手引导气泡（🆕 v1.27 待实现）====================
 // ONBOARDING_THROTTLE_MS：
@@ -808,6 +809,7 @@ class SurvivalGameEngine {
     // §36.5.1：每日闯关上限 150，以 UTC+8 05:00 为 dayKey
     this.fortressDay    = 1;
     this.maxFortressDay = 1;
+    this._seasonFailed  = false;  // §36 season_settlement.survivingRooms：本赛季是否失败过
 
     // §36.5.1 每日闯关上限（DAILY_CAP_MAX=150）
     this._dailyFortressDayGained = 0;      // 本 dayKey 已获得的 fortressDay 数
@@ -1103,6 +1105,16 @@ class SurvivalGameEngine {
     if (typeof snap.fortressDay === 'number')    this.fortressDay    = Math.max(1, snap.fortressDay | 0);
     if (typeof snap.maxFortressDay === 'number') this.maxFortressDay = Math.max(this.fortressDay, snap.maxFortressDay | 0);
 
+    // §36 赛季结算 survivingRooms：只统计本赛季未失败过的房间。
+    this._seasonFailed = false;
+    if (snap._seasonFailure && typeof snap._seasonFailure === 'object') {
+      const snapSeasonId = Number(snap._seasonFailure.seasonId) || Number(snap.currentSeasonId) || 1;
+      const activeSeasonId = this.seasonMgr ? (this.seasonMgr.seasonId || 1) : snapSeasonId;
+      if (snapSeasonId === activeSeasonId) {
+        this._seasonFailed = !!snap._seasonFailure.failed;
+      }
+    }
+
     // §30 矿工成长
     if (snap._lifetimeContrib && typeof snap._lifetimeContrib === 'object') this._lifetimeContrib = { ...snap._lifetimeContrib };
     if (snap._playerLevel     && typeof snap._playerLevel     === 'object') this._playerLevel     = { ...snap._playerLevel };
@@ -1134,6 +1146,42 @@ class SurvivalGameEngine {
       this._buildings.clear();
       for (const bid of snap._buildings) {
         if (BUILDING_CATALOG[bid]) this._buildings.add(bid);   // 未知 buildId 跳过（版本兼容）
+      }
+    }
+    if (Array.isArray(snap._buildingInProgress)) {
+      for (const [, info] of this._buildingInProgress) {
+        if (info && info.timer) clearTimeout(info.timer);
+        if (info && info.progressTimer) clearInterval(info.progressTimer);
+      }
+      this._buildingInProgress.clear();
+      const now = Date.now();
+      for (const item of snap._buildingInProgress) {
+        if (!item || !BUILDING_CATALOG[item.buildId] || this._buildings.has(item.buildId)) continue;
+        const cfg = BUILDING_CATALOG[item.buildId];
+        const totalMs = Number(item.totalMs) || cfg.buildMs || 1;
+        const paused = !!item.paused;
+        let remainingMs = paused
+          ? Math.max(1, Number(item.remainingMs) || totalMs)
+          : Math.max(0, Number(item.completesAt || 0) - now);
+        if (!paused && remainingMs <= 0) {
+          this._buildings.add(item.buildId);
+          continue;
+        }
+        const info = {
+          startedAt: Number(item.startedAt) || now,
+          totalMs,
+          completesAt: paused ? 0 : now + remainingMs,
+          remainingMs: paused ? remainingMs : 0,
+          paused,
+          pausedSeasonId: item.pausedSeasonId || null,
+          timer: null,
+          progressTimer: null,
+        };
+        if (!paused) {
+          info.timer = setTimeout(() => this._completeBuild(item.buildId), remainingMs);
+          info.progressTimer = setInterval(() => this._broadcastBuildProgress(item.buildId), 2000);
+        }
+        this._buildingInProgress.set(item.buildId, info);
       }
     }
 
@@ -2175,18 +2223,20 @@ class SurvivalGameEngine {
 
       case 'energy_battery': {
         // audit-r6 P1-E6 §30.7：G01 限时皮肤（覆盖阶段皮肤，持续到下一次昼夜切换结束）
-        if (playerId) this._applyGiftSkin(playerId, 'G01');
+        // D1-D5 满员 overflow ghost 无专属矿工：按 §33.4 重路由到随机守护者。
+        const boostTargetId = _isOverflowGhost ? this._pickRandomGuardianId() : playerId;
+        if (boostTargetId) this._applyGiftSkin(boostTargetId, 'G01');
         // 炉温+30℃（共享资源），发送者效率+30%（持续180秒，仅影响自己矿工，刷新计时）
         this.furnaceTemp = Math.min(this.maxTemp, this.furnaceTemp + 30);
-        this._playerTempBoost[playerId] = 1.3;
-        if (this._playerTempBoostTimers[playerId]) clearTimeout(this._playerTempBoostTimers[playerId]);
-        this._playerTempBoostTimers[playerId] = setTimeout(() => {
-          this._playerTempBoost[playerId] = 1.0;
-          delete this._playerTempBoostTimers[playerId];
-        }, 180000);
+        this._applyEnergyBatteryBoostTo(boostTargetId);
         effects.addHeat           = 30;
         effects.tempBoost         = 1.3;
         effects.boostDuration     = 180;
+        if (_isOverflowGhost && boostTargetId) {
+          effects.supporterRedirect = true;
+          effects.redirectTargetId = boostTargetId;
+          effects.redirectTargetName = this.playerNames[boostTargetId] || boostTargetId;
+        }
         // §31.3 T4 联动：额外解冻当前所有被冰封怪冻结的矿工（不改变礼物文案）
         if (this._frozenWorkers.size > 0) {
           const unfrozen = [];
@@ -2248,7 +2298,9 @@ class SurvivalGameEngine {
 
       case 'love_explosion': {
         // audit-r6 P1-E6 §30.7：G02 限时皮肤（覆盖阶段皮肤，持续到下一次昼夜切换结束）
-        if (playerId) this._applyGiftSkin(playerId, 'G02');
+        // D1-D5 满员 overflow ghost 无专属矿工：T5 复活随机死亡矿工。
+        const loveExplosionTargetId = _isOverflowGhost ? this._pickRandomDeadWorkerId() : playerId;
+        if (loveExplosionTargetId) this._applyGiftSkin(loveExplosionTargetId, 'G02');
         // 爱的爆炸：全体怪物AOE伤害200、所有矿工HP全满恢复、城门+200HP
         // §34.4 E3b legend 里程碑（10000）：AOE 伤害 ×_milestoneGlobalMult（+20%）
         const aoeDmg = Math.round(200 * (this._milestoneGlobalMult || 1.0));
@@ -2286,15 +2338,25 @@ class SurvivalGameEngine {
         effects.aoeDamage     = aoeDmg;
         effects.monstersKilled = killed.length;
 
-        // 只治疗/复活发送者自己的矿工（不影响其他人）
-        const myWorker = this._workerHp[playerId];
-        if (myWorker) {
-          if (myWorker.isDead) {
-            this._reviveWorker(playerId);
-            effects.revivedWorkers = [playerId];
-          } else {
-            myWorker.hp = myWorker.maxHp;
-            effects.healedWorkers = 1;
+        // 守护者路径：只治疗/复活发送者自己的矿工；overflow ghost 路径：随机复活一名死亡矿工。
+        if (_isOverflowGhost) {
+          if (loveExplosionTargetId) {
+            this._reviveWorker(loveExplosionTargetId);
+            effects.revivedWorkers = [loveExplosionTargetId];
+            effects.supporterRedirect = true;
+            effects.redirectTargetId = loveExplosionTargetId;
+            effects.redirectTargetName = this.playerNames[loveExplosionTargetId] || loveExplosionTargetId;
+          }
+        } else {
+          const myWorker = this._workerHp[playerId];
+          if (myWorker) {
+            if (myWorker.isDead) {
+              this._reviveWorker(playerId);
+              effects.revivedWorkers = [playerId];
+            } else {
+              myWorker.hp = myWorker.maxHp;
+              effects.healedWorkers = 1;
+            }
           }
         }
 
@@ -2355,7 +2417,7 @@ class SurvivalGameEngine {
    * 处理新玩家加入（评论首次出现）
    */
   handlePlayerJoined(playerId, playerName, avatarUrl) {
-    if (!this.contributions[playerId]) {
+    if (!Object.prototype.hasOwnProperty.call(this.contributions, playerId)) {
       // §33 助威模式：满员时降级为助威者（替代原"静默丢弃"行为）
       if (this.totalPlayers >= SurvivalGameEngine.MAX_PLAYERS) {
         if (playerId && !this._supporters.has(playerId)) {
@@ -2579,14 +2641,47 @@ class SurvivalGameEngine {
   }
 
   /**
+   * 随机挑一名正式守护者（contributions 轨道内的玩家）。
+   */
+  _pickRandomGuardianId() {
+    const guardians = Object.keys(this.contributions || {});
+    if (guardians.length <= 0) return null;
+    return guardians[Math.floor(Math.random() * guardians.length)];
+  }
+
+  /**
+   * 随机挑一名已死亡矿工。
+   */
+  _pickRandomDeadWorkerId() {
+    const deadWorkers = Object.entries(this._workerHp || {})
+      .filter(([, w]) => w && w.isDead)
+      .map(([pid]) => pid);
+    if (deadWorkers.length <= 0) return null;
+    return deadWorkers[Math.floor(Math.random() * deadWorkers.length)];
+  }
+
+  /**
+   * T4 能量电池的单人效率 boost；用于守护者、助威者重路由、D1-D5 overflow ghost 重路由。
+   */
+  _applyEnergyBatteryBoostTo(targetId) {
+    if (!targetId) return false;
+    this._playerTempBoost[targetId] = 1.3;
+    if (this._playerTempBoostTimers[targetId]) clearTimeout(this._playerTempBoostTimers[targetId]);
+    this._playerTempBoostTimers[targetId] = setTimeout(() => {
+      this._playerTempBoost[targetId] = 1.0;
+      delete this._playerTempBoostTimers[targetId];
+    }, 180000);
+    return true;
+  }
+
+  /**
    * 助威者送 T1 仙女棒：随机挑一名在场守护者挂载 +0.05 效率（上限 1.0）。
    * 贡献值 +1，积分池 +1。
    */
   _handleSupporterFairyWand(playerId, playerName, avatarUrl, gift, giftValue) {
     const effects = { efficiencyBonus: 0, supporterRedirect: true };
-    const guardians = Object.keys(this.contributions);
-    if (guardians.length > 0) {
-      const targetId = guardians[Math.floor(Math.random() * guardians.length)];
+    const targetId = this._pickRandomGuardianId();
+    if (targetId) {
       const prev = this._playerEfficiencyBonus[targetId] || 0;
       this._playerEfficiencyBonus[targetId] = Math.min(1.0, prev + 0.05);
       effects.efficiencyBonus = this._playerEfficiencyBonus[targetId];
@@ -2664,13 +2759,12 @@ class SurvivalGameEngine {
     effects.monstersKilled = killed.length;
 
     // 随机复活一名已死亡矿工（替代"仅发送者矿工"）
-    const deadWorkers = Object.entries(this._workerHp)
-      .filter(([, w]) => w && w.isDead)
-      .map(([pid]) => pid);
-    if (deadWorkers.length > 0) {
-      const targetId = deadWorkers[Math.floor(Math.random() * deadWorkers.length)];
+    const targetId = this._pickRandomDeadWorkerId();
+    if (targetId) {
       this._reviveWorker(targetId);
       effects.revivedWorkers = [targetId];
+      effects.redirectTargetId = targetId;
+      effects.redirectTargetName = this.playerNames[targetId] || targetId;
     }
 
     // 城门 +200HP
@@ -2727,15 +2821,8 @@ class SurvivalGameEngine {
     effects.addHeat = 30;
 
     // 重路由 +30% 效率到随机守护者
-    const guardians = Object.keys(this.contributions);
-    if (guardians.length > 0) {
-      const targetId = guardians[Math.floor(Math.random() * guardians.length)];
-      this._playerTempBoost[targetId] = 1.3;
-      if (this._playerTempBoostTimers[targetId]) clearTimeout(this._playerTempBoostTimers[targetId]);
-      this._playerTempBoostTimers[targetId] = setTimeout(() => {
-        this._playerTempBoost[targetId] = 1.0;
-        delete this._playerTempBoostTimers[targetId];
-      }, 180000);
+    const targetId = this._pickRandomGuardianId();
+    if (this._applyEnergyBatteryBoostTo(targetId)) {
       effects.tempBoost = 1.3;
       effects.boostDuration = 180;
       effects.redirectTargetId = targetId;
@@ -3116,6 +3203,8 @@ class SurvivalGameEngine {
 
     // §34.4 E2 幕末事件：应用当日幕末修正（spawn 额外 Boss / mini BossRush / HP × N 等）
     //   仅非和平夜执行；finale（seasonDay=7）复用 §36 BossRush，不重复触发
+    this._actEndHpBaseMult = 1.0;
+    this._actEndHpBossMult = 1.0;
     if (!this._peaceNightSkipSpawn) {
       this._applyActEndEventIfNeeded(day);
     }
@@ -3175,7 +3264,9 @@ class SurvivalGameEngine {
     // 播报 Boss 出现
     //   §36.5 整夜和平夜 → 跳过 boss_appeared 与 guard 生成（该夜无战斗）
     const cfg = getWaveConfig(day);
-    if (cfg.boss && !this._peaceNightSkipSpawn) {
+    const suppressRegularBoss = this._currentNightModifier
+      && (this._currentNightModifier.id === 'blood_moon' || this._currentNightModifier.id === 'fortified');
+    if (cfg.boss && !this._peaceNightSkipSpawn && !suppressRegularBoss) {
       // §31 Boss 刷新侧随机选（供首领卫兵同侧刷新参考；'all' 亦允许）
       const sides = ['left', 'right', 'top', 'all'];
       this._lastBossSpawnSide = sides[Math.floor(Math.random() * sides.length)];
@@ -3184,12 +3275,23 @@ class SurvivalGameEngine {
       //   L4148 Boss = cfg.boss.hp × hpMult × _themeBossHpMult
       //   完整乘数 = _monsterHpMult × _dynamicHpMult × _themeHpMult × _themeBossHpMult
       //   r14 修复时漏 _themeHpMult（blood_moon 主题 ×1.2），r15 补齐
-      const _bossSpawnHp = Math.max(1, Math.round(cfg.boss.hp * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0) * (this._themeBossHpMult || 1.0)));
+      const _bossSpawnHp = Math.max(1, Math.round(cfg.boss.hp * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0) * (this._themeBossHpMult || 1.0) * (this._actEndHpBossMult || 1.0)));
+      const bossId = `b_${day}_${++this._monsterIdCounter}`;
+      this._activeMonsters.set(bossId, this._withMonsterSpawnMeta({
+        id: bossId,
+        type: 'boss',
+        variant: 'normal',
+        maxHp: _bossSpawnHp,
+        currentHp: _bossSpawnHp,
+        atk: cfg.boss.atk,
+        spd: 1.2 + day * 0.05,
+      }, this._lastBossSpawnSide, Date.now()));
       this.broadcast({
         type: 'boss_appeared',
         timestamp: Date.now(),
         data: {
           day,
+          bossId,
           bossHp:  _bossSpawnHp,
           bossAtk: cfg.boss.atk,
         }
@@ -3855,6 +3957,7 @@ class SurvivalGameEngine {
     const oldFortressDay = this.fortressDay;
     let demotionReason = '';
     let newbieProtected = false;
+    this._seasonFailed = true;
 
     if (oldFortressDay <= FORTRESS_NEWBIE_PROTECT_DAY) {
       // 新手保护期
@@ -4332,55 +4435,9 @@ class SurvivalGameEngine {
     const hpMult  = (this._monsterHpMult  || 1.0) * (this._dynamicHpMult   || 1.0) * themeHpMult;
     const cntMult = (this._monsterCntMult || 1.0) * (this._dynamicCountMult || 1.0) * themeCntMult;
 
-    // 普通怪
-    if (cfg.normal) {
-      const count = Math.max(1, Math.round(cfg.normal.count * cntMult));
-      const hp    = Math.max(1, Math.round(cfg.normal.hp    * hpMult));
-      for (let i = 0; i < count; i++) {
-        const id = `n_${day}_${++this._monsterIdCounter}`;
-        this._activeMonsters.set(id, {
-          id,
-          type: 'normal',
-          variant: 'normal',  // §31
-          maxHp: hp,
-          currentHp: hp,
-          atk: cfg.normal.atk,
-        });
-      }
-    }
-
-    // 精英怪
-    if (cfg.elite) {
-      const count = Math.max(0, Math.round(cfg.elite.count * cntMult));
-      const hp    = Math.max(1, Math.round(cfg.elite.hp    * hpMult));
-      for (let i = 0; i < count; i++) {
-        const id = `e_${day}_${++this._monsterIdCounter}`;
-        this._activeMonsters.set(id, {
-          id,
-          type: 'elite',
-          variant: 'normal',  // §31
-          maxHp: hp,
-          currentHp: hp,
-          atk: cfg.elite.atk,
-        });
-      }
-    }
-
-    // Boss（每晚一只，HP受难度影响）
-    if (cfg.boss) {
-      const hp = Math.max(1, Math.round(cfg.boss.hp * hpMult * (this._themeBossHpMult || 1.0)));
-      const id = `b_${day}_${++this._monsterIdCounter}`;
-      this._activeMonsters.set(id, {
-        id,
-        type: 'boss',
-        variant: 'normal',  // §31（Boss 自身非变种，但 guard 死亡后会改 atk）
-        maxHp: hp,
-        currentHp: hp,
-        atk: cfg.boss.atk,
-      });
-    }
-
-    console.log(`[SurvivalEngine] Night ${day} monsters initialized: ${this._activeMonsters.size} total (diff:${this._difficulty||'normal'} hpMult:${hpMult} cntMult:${cntMult})`);
+    const expectedNormal = cfg.normal ? Math.max(1, Math.round(cfg.normal.count * cntMult)) : 0;
+    const expectedElite  = cfg.elite  ? Math.max(0, Math.round(cfg.elite.count  * cntMult)) : 0;
+    console.log(`[SurvivalEngine] Night ${day} monster ledger reset: normal~${expectedNormal} elite~${expectedElite} boss=${cfg.boss ? 1 : 0} (diff:${this._difficulty||'normal'} hpMult:${hpMult} cntMult:${cntMult})`);
   }
 
   // ==================== 内部：攻击处理（commandId=6）====================
@@ -4400,7 +4457,7 @@ class SurvivalGameEngine {
   }
 
   _handleAttack(secOpenId, nickname) {
-    const monsters = [...this._activeMonsters.values()];
+    const monsters = [...this._activeMonsters.values()].filter(m => m && m.currentHp > 0);
     if (monsters.length === 0) return;
 
     // 目标优先级：普通怪 > 精英怪 > Boss
@@ -4711,6 +4768,29 @@ class SurvivalGameEngine {
     });
   }
 
+  _withMonsterSpawnMeta(monster, spawnSide = 'all', nowMs = Date.now(), startDistance = SERVER_MONSTER_APPROACH_DISTANCE) {
+    if (!monster || typeof monster !== 'object') return monster;
+    monster.spawnedAt = nowMs;
+    monster.spawnSide = spawnSide || 'all';
+    monster.startDistance = Number.isFinite(startDistance) ? startDistance : SERVER_MONSTER_APPROACH_DISTANCE;
+    return monster;
+  }
+
+  _isMonsterInFrostPulseRadius(monster, nowMs = Date.now()) {
+    if (!monster) return false;
+    const spawnedAt = Number(monster.spawnedAt || 0);
+    if (!spawnedAt) return true;
+    const speed = Number(monster.spd || monster.speed || 0);
+    if (!Number.isFinite(speed) || speed <= 0) return true;
+    const startDistance = Number.isFinite(Number(monster.startDistance))
+      ? Number(monster.startDistance)
+      : SERVER_MONSTER_APPROACH_DISTANCE;
+    const elapsedSec = Math.max(0, (nowMs - spawnedAt) / 1000);
+    const distanceToGate = Math.max(0, startDistance - elapsedSec * speed);
+    monster.estimatedGateDistance = Math.round(distanceToGate * 10) / 10;
+    return distanceToGate <= FROST_PULSE_RADIUS;
+  }
+
   /**
    * Lv6 寒冰冲击波定时器（每 15s 对活跃怪物造成 100 伤害 + 2s 冻结）
    *
@@ -4727,6 +4807,7 @@ class SurvivalGameEngine {
       // 冲击波：伤害+冻结（先收集，再遍历应用死亡广播，避免在迭代中修改 Map）
       const deaths = [];
       for (const [id, m] of this._activeMonsters) {
+        if (!this._isMonsterInFrostPulseRadius(m, now)) continue;
         m.currentHp -= FROST_PULSE_DAMAGE;
         m.frozenUntil = now + FROST_PULSE_FREEZE_MS;
         hits.push(id);
@@ -5203,10 +5284,11 @@ class SurvivalGameEngine {
     // r16 GAP-R16-PM-02：补 _themeHpMult（赛季主题层）
     //   原仅含 themeHpMult（夜间修饰符 polar_night 层），漏 _themeHpMult（赛季主题 blood_moon=1.2 层）
     //   完整链与 _initActiveMonsters L4115 对齐：_monsterHpMult × _dynamicHpMult × _themeHpMult × _themeMonsterHpMult
-    const baseHp       = Math.max(1, Math.round(cfg.normal ? cfg.normal.hp * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0) * themeHpMult : 50));
+    const baseHp       = Math.max(1, Math.round(cfg.normal ? cfg.normal.hp * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0) * themeHpMult * (this._actEndHpBaseMult || 1.0) : 50));
     const baseAtk      = Math.max(1, Math.round((cfg.normal ? cfg.normal.atk : 3) * themeAtkMult));
     const baseSpd      = cfg.normal ? cfg.normal.spd : 2.0;
     const waveMonsters = [];
+    const spawnedAt    = Date.now();
     let rushCountInWave     = 0;
     let assassinCountInWave = 0;
     let iceCountInWave      = 0;
@@ -5217,7 +5299,7 @@ class SurvivalGameEngine {
       const id = `w_${day}_${waveIndex}_${++this._monsterIdCounter}`;
       // §31.7 所有 variant 进 _activeMonsters（T5 AOE / 反伤 / 贡献记录都依赖 _activeMonsters 命中）
       //   maxAliveMonsters=15 为客户端渲染上限，服务端不阻塞 wave 生成；仅 mini spawn 遵守（§31.4）
-      this._activeMonsters.set(id, {
+      this._activeMonsters.set(id, this._withMonsterSpawnMeta({
         id,
         type: 'normal',     // Unity 客户端按 type 选择模型，variant 决定行为/色调
         variant,
@@ -5225,7 +5307,7 @@ class SurvivalGameEngine {
         currentHp: hp,
         atk: baseAtk,
         spd: speed,
-      });
+      }, spawnSide, spawnedAt));
       waveMonsters.push({ monsterId: id, type: 'normal', variant, hp, speed });
       if (variant === 'rush')     rushCountInWave++;
       else if (variant === 'assassin') assassinCountInWave++;
@@ -5264,8 +5346,7 @@ class SurvivalGameEngine {
     // —— 子路 1：rush 直打城门（跳过减伤）——
     const rushGateDmg = rushCountInWave * perMonsterDmg;
     if (rushGateDmg > 0) {
-      this.gateHp = Math.max(0, this.gateHp - rushGateDmg);
-      console.log(`[SurvivalEngine] Wave ${waveIndex} rush×${rushCountInWave} → gate -${rushGateDmg} (no reduction)`);
+      console.log(`[SurvivalEngine] Wave ${waveIndex} rush×${rushCountInWave} queued gate raw=${rushGateDmg}`);
     }
 
     // —— 子路 2：assassin 优先打最低 HP 矿工 ——
@@ -5312,7 +5393,8 @@ class SurvivalGameEngine {
     // ── 城门减伤（Lv3+）+ 反伤（Lv4+）──────────────────────
     const gateIdx = Math.max(0, this.gateLevel - 1);
     const dmgRed  = GATE_DMG_REDUCTION[gateIdx] || 0;
-    const reducedDamage = remainingDamage > 0 ? Math.floor(remainingDamage * (1 - dmgRed)) : 0;
+    const rawGateDamage = remainingDamage + rushGateDmg;
+    const reducedDamage = rawGateDamage > 0 ? Math.floor(rawGateDamage * (1 - dmgRed)) : 0;
     if (reducedDamage > 0) {
       this.gateHp = Math.max(0, this.gateHp - reducedDamage);
     }
@@ -5322,12 +5404,12 @@ class SurvivalGameEngine {
     //                     CityGateSystem.cs:267 仍用单参 Show + 服务端从未下发 rawDamage
     //   修复：rawDamage > reducedDamage 时（Lv3+ 减伤生效）单独 emit gate_damage_taken
     //         客户端 case 'gate_damage_taken' handler 调 DamageNumber.Show 双色重载（青色，与 hp delta 黄色区分）
-    if (remainingDamage > 0 && reducedDamage < remainingDamage) {
+    if (rawGateDamage > 0 && reducedDamage < rawGateDamage) {
       this._broadcast({
         type: 'gate_damage_taken',
         timestamp: Date.now(),
         data: {
-          rawDamage:     remainingDamage,
+          rawDamage:     rawGateDamage,
           reducedDamage,
           dmgRedPct:     Math.round(dmgRed * 100),  // 例 Lv3=10 / Lv4=15 / Lv5=20 / Lv6=25
           gateLevel:     this.gateLevel,
@@ -5403,7 +5485,7 @@ class SurvivalGameEngine {
     this._broadcastWorkerHp();
 
     const variantSummary = `rush=${rushCountInWave} assassin=${assassinCountInWave} ice=${iceCountInWave} other=${otherCount}`;
-    console.log(`[SurvivalEngine] Wave ${waveIndex}: ${count} monsters (${spawnSide}) [${variantSummary}], workers=${aliveWorkersInitial.length}, rush→gate=${rushGateDmg}, remain raw=${remainingDamage} reduced=${reducedDamage} (Lv${this.gateLevel} red=${(dmgRed*100)|0}%) → HP ${this.gateHp}`);
+    console.log(`[SurvivalEngine] Wave ${waveIndex}: ${count} monsters (${spawnSide}) [${variantSummary}], workers=${aliveWorkersInitial.length}, rush→gate=${rushGateDmg}, gate raw=${rawGateDamage} reduced=${reducedDamage} (Lv${this.gateLevel} red=${(dmgRed*100)|0}%) → HP ${this.gateHp}`);
 
     // 立即推送资源更新（城门HP变化）
     this._broadcastResourceUpdate();
@@ -5430,7 +5512,7 @@ class SurvivalGameEngine {
     // guards 固定生成 2 只（§31.4）；不受 maxAliveMonsters=15 限制（Boss 体验组合关键）
     for (let i = 0; i < GUARD_COUNT; i++) {
       const id = `guard_${day}_${++this._monsterIdCounter}`;
-      this._activeMonsters.set(id, {
+      this._activeMonsters.set(id, this._withMonsterSpawnMeta({
         id,
         type: 'normal',      // guard 沿用普通怪模型 type（客户端可按 variant 切暗金色调）
         variant: 'guard',
@@ -5438,7 +5520,7 @@ class SurvivalGameEngine {
         currentHp: guardHp,
         atk: guardAtk,
         spd: guardSpd,
-      });
+      }, this._lastBossSpawnSide || 'all', Date.now()));
       guardList.push({ monsterId: id, type: 'normal', variant: 'guard', hp: guardHp, speed: guardSpd });
       this._guardsAlive++;
     }
@@ -5502,7 +5584,7 @@ class SurvivalGameEngine {
     for (let i = 0; i < SUMMONER_MINI_COUNT; i++) {
       if (this._activeMonsters.size >= maxAlive) break;
       const id = `mini_${++this._monsterIdCounter}`;
-      this._activeMonsters.set(id, {
+      this._activeMonsters.set(id, this._withMonsterSpawnMeta({
         id,
         type: 'normal',
         variant: 'mini',
@@ -5510,7 +5592,7 @@ class SurvivalGameEngine {
         currentHp: MINI_HP,
         atk: MINI_ATK,
         spd: miniSpd,
-      });
+      }, 'spawn_at_death', Date.now(), FROST_PULSE_RADIUS));
       miniList.push({ monsterId: id, type: 'normal', variant: 'mini', hp: MINI_HP, speed: miniSpd });
     }
     if (miniList.length === 0) {
@@ -5635,10 +5717,10 @@ class SurvivalGameEngine {
         if (this.state === 'night') {
           for (let i = 0; i < 2; i++) {
             const id = `wave_event_${++this._monsterIdCounter}`;
-            this._activeMonsters.set(id, {
+            this._activeMonsters.set(id, this._withMonsterSpawnMeta({
               id, type: 'normal', variant: 'normal',
-              maxHp: 30, currentHp: 30, atk: 3,
-            });
+              maxHp: 30, currentHp: 30, atk: 3, spd: 2.0,
+            }, 'all', Date.now()));
           }
         } else if (this.state === 'day') {
           // 白天弱侦察怪：atk=0（不攻击矿工），hp 为普通怪 0.3
@@ -5652,10 +5734,10 @@ class SurvivalGameEngine {
             const id = `scout_${++this._monsterIdCounter}`;
             // type='normal' + atk=0 近似 scout；客户端无 scout 类型时按普通渲染但不计伤害（atk=0 本身就不打矿工）
             const normalSpd = +((cfg && cfg.normal && cfg.normal.spd) ? cfg.normal.spd : 2.0).toFixed(2);
-            this._activeMonsters.set(id, {
+            this._activeMonsters.set(id, this._withMonsterSpawnMeta({
               id, type: 'normal', variant: 'normal',
               maxHp: scoutHp, currentHp: scoutHp, atk: 0, spd: normalSpd,
-            });
+            }, 'all', Date.now()));
             scoutIds.push(id);
             scoutList.push({ monsterId: id, type: 'normal', variant: 'normal', hp: scoutHp, speed: normalSpd });
           }
@@ -6130,14 +6212,87 @@ class SurvivalGameEngine {
    * audit-r6 P1-E1/E2：赛季末 5 分钟守门
    * 策划案 §36.8 / §37 / §38：seasonDay===7 && 夜晚剩余 ≤ 300s 视为 season_ending，
    *   对 build_propose / expedition_command / broadcaster 特权拒绝。
-   * 注：仅 night 相位统计 remainingTime；day 相位时保守返回 false（dayDuration=120，不会短于 300）。
+   * 注：仅 night 相位统计 remainingTime；D7 白天仍允许备战采集 / 建造 / 探险。
    * @returns {boolean} 是否处于赛季末 5 分钟窗口
    */
   _isSeasonEnding() {
     if (!this.seasonMgr || this.seasonMgr.seasonDay !== 7) return false;
-    if (this.state !== 'night') return false;
-    // remainingTime：_enterNight 置为 nightDuration，每秒递减；≤300 即赛季末 5 分钟
-    return typeof this.remainingTime === 'number' && this.remainingTime <= 300;
+    const phase = this.globalClock ? (this.globalClock._phase || this.state) : this.state;
+    if (phase !== 'night') return false;
+    const remainingSec = this._getSeasonEndRemainingSec();
+    return Number.isFinite(remainingSec) && remainingSec <= 300;
+  }
+
+  _getSeasonEndRemainingSec() {
+    if (!this.seasonMgr || this.seasonMgr.seasonDay !== 7) return Infinity;
+    let phase = this.state;
+    let phaseRemainingSec = Number(this.remainingTime);
+    if (this.globalClock) {
+      phase = this.globalClock._phase || phase;
+      try {
+        if (typeof this.globalClock.getPhaseRemainingSec === 'function') {
+          phaseRemainingSec = this.globalClock.getPhaseRemainingSec();
+        }
+      } catch (_) { /* keep local remainingTime */ }
+    }
+    if (!Number.isFinite(phaseRemainingSec)) phaseRemainingSec = 0;
+    if (phase === 'night') return phaseRemainingSec;
+    if (phase === 'day') {
+      let nightSec = Number(this.nightDuration) || 0;
+      if (this.globalClock && Number.isFinite(Number(this.globalClock._baseNightDurationMs))) {
+        nightSec = Math.round(Number(this.globalClock._baseNightDurationMs) / 1000);
+        const themeId = this.seasonMgr ? this.seasonMgr.themeId : null;
+        if (themeId === 'dawn') nightSec = Math.round(nightSec * 0.8);
+        else if (themeId === 'serene') nightSec = Math.round(nightSec * 1.3);
+      }
+      return phaseRemainingSec + nightSec;
+    }
+    return Infinity;
+  }
+
+  onBeforeSeasonReset(oldSeasonId) {
+    const now = Date.now();
+    if (this._buildingInProgress && this._buildingInProgress.size > 0) {
+      for (const [buildId, info] of this._buildingInProgress) {
+        if (!info) continue;
+        if (info.timer) { clearTimeout(info.timer); info.timer = null; }
+        if (info.progressTimer) { clearInterval(info.progressTimer); info.progressTimer = null; }
+        info.remainingMs = Math.max(1, Number(info.completesAt || now) - now);
+        info.paused = true;
+        info.pausedSeasonId = oldSeasonId;
+        this._broadcast({
+          type: 'build_progress',
+          data: {
+            buildId,
+            progress: Math.min(1, Math.max(0, ((info.totalMs || 1) - info.remainingMs) / (info.totalMs || 1))),
+            remainingMs: info.remainingMs,
+            completesAt: 0,
+            paused: true,
+            reason: 'season_reset',
+          },
+        });
+      }
+    }
+    if (this._expeditions && this._expeditions.size > 0) {
+      this._cancelAllExpeditions('season_reset');
+    }
+    this._meteorFragmentPending = false;
+    console.log(`[SurvivalEngine] season reset pre-hook: oldSeason=${oldSeasonId} pausedBuilds=${(this._buildingInProgress && this._buildingInProgress.size) || 0}`);
+  }
+
+  onSeasonStarted(newSeasonId) {
+    this._seasonFailed = false;
+    this._resumePausedSeasonBuilds();
+    if (this._supporters && typeof this._supporters.values === 'function') {
+      for (const entry of this._supporters.values()) {
+        if (entry) entry.totalContrib = 0;
+      }
+    }
+    const now = Date.now();
+    for (const pid of Object.keys(this.contributions || {})) this._guardianLastActive[pid] = now;
+    if (this._pendingDifficulty && this._pendingDifficulty.applyAt === 'next_season') {
+      this.onSeasonStart(newSeasonId);
+    }
   }
 
   /**
@@ -6442,6 +6597,39 @@ class SurvivalGameEngine {
     });
     this._broadcastResourceUpdate();
     console.log(`[Building] started: ${buildId} completesAt=+${totalMs/1000}s cost=${JSON.stringify(cfg.cost)}`);
+  }
+
+  _resumePausedSeasonBuilds() {
+    if (!this._buildingInProgress || this._buildingInProgress.size === 0) return;
+    const now = Date.now();
+    for (const [buildId, info] of this._buildingInProgress) {
+      if (!info || !info.paused) continue;
+      const cfg = BUILDING_CATALOG[buildId];
+      if (!cfg || this._buildings.has(buildId)) {
+        this._buildingInProgress.delete(buildId);
+        continue;
+      }
+      const remainingMs = Math.max(1, Number(info.remainingMs) || Number(info.totalMs) || cfg.buildMs || 1);
+      info.startedAt = now - Math.max(0, (Number(info.totalMs) || cfg.buildMs || remainingMs) - remainingMs);
+      info.totalMs = Number(info.totalMs) || cfg.buildMs || remainingMs;
+      info.completesAt = now + remainingMs;
+      info.remainingMs = 0;
+      info.paused = false;
+      info.pausedSeasonId = null;
+      info.timer = setTimeout(() => this._completeBuild(buildId), remainingMs);
+      info.progressTimer = setInterval(() => this._broadcastBuildProgress(buildId), 2000);
+      this._broadcast({
+        type: 'build_started',
+        data: {
+          buildId,
+          completesAt: info.completesAt,
+          position: { x: cfg.position.x, y: cfg.position.y, z: cfg.position.z },
+          resumed: true,
+        },
+      });
+      this._broadcastBuildProgress(buildId);
+      console.log(`[Building] resumed after season reset: ${buildId} remaining=${remainingMs}ms`);
+    }
   }
 
   /**
@@ -7337,6 +7525,8 @@ class SurvivalGameEngine {
     }
     // seasonDay 6 act3 结束夜：全怪 HP ×1.5 + 终极 Boss HP ×2（即时应用到 _activeMonsters）
     else if (seasonDay === 6) {
+      this._actEndHpBaseMult = 1.5;
+      this._actEndHpBossMult = 2.0;
       this._applyActEndHpMultiplier(1.5, 2.0);
       extra = { actTag: 'act3', event: 'hp_amplified', hint: '极限挑战：怪物 HP ×1.5，Boss HP ×2！' };
     }
@@ -7365,20 +7555,21 @@ class SurvivalGameEngine {
     const hpMult  = (this._monsterHpMult  || 1.0) * (this._dynamicHpMult   || 1.0) * themeHpMult;
     // r17 GAP-R17-PM-01：补 _themeBossHpMult（与 boss_appeared L2990 / _initActiveMonsters L4154 / _spawnBossGuards L5206 / _scheduleActEndMiniBossRush L7031 4 乘数链对齐）
     //   serene 主题（_themeBossHpMult=0.9）下 act1 双 Boss 第 2 只原本错位 ×1.11；blood_moon 影响小（_themeBossHpMult=1.0）但仍属设计不一致
-    const hp = Math.max(1, Math.round(cfg.boss.hp * hpMult * (this._themeBossHpMult || 1.0)));
+    const hp = Math.max(1, Math.round(cfg.boss.hp * hpMult * (this._themeBossHpMult || 1.0) * (this._actEndHpBossMult || 1.0)));
     const id = `b_${day}_actend_${++this._monsterIdCounter}`;
-    this._activeMonsters.set(id, {
+    this._activeMonsters.set(id, this._withMonsterSpawnMeta({
       id,
       type: 'boss',
       variant: 'normal',
       maxHp: hp,
       currentHp: hp,
       atk: cfg.boss.atk,
-    });
+      spd: 1.2 + day * 0.05,
+    }, this._lastBossSpawnSide || 'top', Date.now()));
     this.broadcast({
       type: 'boss_appeared',
       timestamp: Date.now(),
-      data: { day, bossHp: hp, bossAtk: cfg.boss.atk, isActEndBoss: true },
+      data: { day, bossId: id, bossHp: hp, bossAtk: cfg.boss.atk, isActEndBoss: true },
     });
   }
 
@@ -7394,20 +7585,21 @@ class SurvivalGameEngine {
     for (let i = 0; i < 3; i++) {
       const t = setTimeout(() => {
         if (this.state !== 'night') return;
-        const hp = Math.max(1, Math.round(cfg.boss.hp * hpMult * (this._themeBossHpMult || 1.0)));
+        const hp = Math.max(1, Math.round(cfg.boss.hp * hpMult * (this._themeBossHpMult || 1.0) * (this._actEndHpBossMult || 1.0)));
         const id = `b_${day}_actend_${i}_${++this._monsterIdCounter}`;
-        this._activeMonsters.set(id, {
+        this._activeMonsters.set(id, this._withMonsterSpawnMeta({
           id,
           type: 'boss',
           variant: 'normal',
           maxHp: hp,
           currentHp: hp,
           atk: cfg.boss.atk,
-        });
+          spd: 1.2 + day * 0.05,
+        }, this._lastBossSpawnSide || 'top', Date.now()));
         this.broadcast({
           type: 'boss_appeared',
           timestamp: Date.now(),
-          data: { day, bossHp: hp, bossAtk: cfg.boss.atk, isActEndBoss: true, rushIndex: i + 1 },
+          data: { day, bossId: id, bossHp: hp, bossAtk: cfg.boss.atk, isActEndBoss: true, rushIndex: i + 1 },
         });
       }, i * 30000);
       this._waveTimers.push(t);
@@ -7648,30 +7840,53 @@ class SurvivalGameEngine {
         // PM 决策：直接改写 _activeMonsters（保留原 Boss 或新建 Boss × 3HP）
         const cfg = getWaveConfig(day);
         this._activeMonsters.clear();
+        const sides = ['left', 'right', 'top', 'all'];
+        this._lastBossSpawnSide = sides[Math.floor(Math.random() * sides.length)];
         if (cfg.boss) {
           // r17 GAP-R17-PM-02：补 4 乘数链 _monsterHpMult × _dynamicHpMult × _themeHpMult × _themeBossHpMult（与 boss_appeared L2990 4 乘数链对齐）
           //   原仅 cfg.boss.hp × MODIFIER_BLOOD_MOON_BOSS_HP_MULT 单乘数 — Hard 难度 × 高动态难度下错位 ×2.25
           const bossHp = Math.max(1, Math.round(cfg.boss.hp * MODIFIER_BLOOD_MOON_BOSS_HP_MULT * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0) * (this._themeBossHpMult || 1.0)));
           const id = `b_${day}_bm_${++this._monsterIdCounter}`;
-          this._activeMonsters.set(id, {
+          this._activeMonsters.set(id, this._withMonsterSpawnMeta({
             id, type: 'boss', variant: 'normal',
             maxHp: bossHp, currentHp: bossHp, atk: cfg.boss.atk,
-          });
+            spd: 1.2 + day * 0.05,
+          }, this._lastBossSpawnSide, Date.now()));
           this.broadcast({
             type: 'boss_appeared',
             timestamp: Date.now(),
-            data: { day, bossHp, bossAtk: cfg.boss.atk, isBloodMoon: true },
+            data: { day, bossId: id, bossHp, bossAtk: cfg.boss.atk, isBloodMoon: true },
           });
         }
         if (cfg.elite) {
           // r17 GAP-R17-PM-03：补 _themeHpMult（赛季主题层）— 与 _initActiveMonsters L4138 / _spawnWave L4954 elite 同形态对齐
           //   原仅 _monsterHpMult × _dynamicHpMult，blood_moon 主题下错位 ×1.2（注：elite 不叠 _themeBossHpMult，那只用于 Boss 派生层）
           const eliteHp = Math.max(1, Math.round(cfg.elite.hp * (this._monsterHpMult || 1.0) * (this._dynamicHpMult || 1.0) * (this._themeHpMult || 1.0)));
+          const eliteSpd = cfg.normal ? cfg.normal.spd : 2.0;
+          const eliteList = [];
           for (let i = 0; i < MODIFIER_BLOOD_MOON_ELITE_COUNT; i++) {
             const id = `e_${day}_bm_${++this._monsterIdCounter}`;
-            this._activeMonsters.set(id, {
+            this._activeMonsters.set(id, this._withMonsterSpawnMeta({
               id, type: 'elite', variant: 'normal',
               maxHp: eliteHp, currentHp: eliteHp, atk: cfg.elite.atk,
+              spd: eliteSpd,
+            }, this._lastBossSpawnSide, Date.now()));
+            eliteList.push({ monsterId: id, type: 'elite', variant: 'normal', hp: eliteHp, speed: eliteSpd });
+          }
+          if (eliteList.length > 0) {
+            this.broadcast({
+              type: 'monster_wave',
+              timestamp: Date.now(),
+              data: {
+                waveIndex: -1,
+                day,
+                monsterId: cfg.monsterId,
+                count: eliteList.length,
+                spawnSide: this._lastBossSpawnSide,
+                monsters: eliteList,
+                isBloodMoonEliteSpawn: true,
+                bypassCap: true,
+              },
             });
           }
         }
@@ -8587,13 +8802,14 @@ class SurvivalGameEngine {
     const atk = Math.max(1, Math.round(baseAtk * 2));
 
     const id = `eliteraid_${++this._monsterIdCounter}`;
-    this._activeMonsters.set(id, {
+    this._activeMonsters.set(id, this._withMonsterSpawnMeta({
       id,
       type: 'elite_raid', // 特殊 type，客户端据此跳过 maxAliveMonsters 上限
       maxHp: hp,
       currentHp: hp,
       atk,
-    });
+      spd: 1.0,
+    }, 'all', nowMs));
     this._eliteRaidMonsterId = id;
     this._eliteRaidEndsAt    = nowMs + 30 * 1000;
 

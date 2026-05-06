@@ -4,7 +4,7 @@
  * 职责：
  * 1. 维护 seasonId / seasonDay(1..7) / themeId
  * 2. advanceDay() — 每次 night→day 切换时推进 seasonDay
- * 3. seasonDay > 7 → 赛季结束：seasonId +1, seasonDay 归 1, 主题按 6 主题顺序轮换
+ * 3. seasonDay > 7 → 赛季结束：seasonId +1, seasonDay 归 1, 前 6 赛季固定主题，S7+ 6 选 1 随机
  * 4. 广播 season_settlement（空占位）与 season_started
  *
  * 实装状态（audit-r11 GAP-D02 注释更新；原 r2 MVP 裁剪声明已实现）：
@@ -38,8 +38,7 @@ class SeasonManager {
    *
    * §36.6 决策 2 + 决策 3：
    *   - 前 6 个赛季按 SEASON_THEMES 固定顺序轮换
-   *   - seasonId >= 7 → 从 SEASON_THEMES 中**排除当前 themeId（lastThemeId）** 后随机
-   *                     （防止连续两赛季同主题）
+   *   - seasonId >= 7 → 从 SEASON_THEMES 中 6 选 1 随机，允许连续两赛季同主题
    *
    * @returns {string} 下一赛季的 themeId
    */
@@ -49,29 +48,24 @@ class SeasonManager {
     if (nextSeasonId >= 1 && nextSeasonId <= SEASON_THEMES.length) {
       return SEASON_THEMES[nextSeasonId - 1];
     }
-    // seasonId >= 7 → 排除 lastThemeId（即当前 this.themeId）后随机
-    const lastThemeId = this.themeId;
-    const pool = SEASON_THEMES.filter(t => t !== lastThemeId);
-    const pickFrom = pool.length > 0 ? pool : SEASON_THEMES; // 极端兜底（不可能为空）
-    const idx = Math.floor(Math.random() * pickFrom.length);
-    return pickFrom[idx];
+    // seasonId >= 7 → 6 选 1，允许重复（策划案 §36.6 最终口径）
+    const idx = Math.floor(Math.random() * SEASON_THEMES.length);
+    return SEASON_THEMES[idx];
   }
 
   /**
    * §36.6 新赛季主题 resolver：
    *   seasonId 1..6 → 固定主题顺序
-   *   seasonId >= 7 → 排除 lastThemeId 后随机
+   *   seasonId >= 7 → 6 选 1 随机，允许重复
    */
   _resolveThemeForSeason(seasonId, lastThemeId) {
     if (seasonId >= 1 && seasonId <= SEASON_THEMES.length) return SEASON_THEMES[seasonId - 1];
-    const pool = SEASON_THEMES.filter(t => t !== lastThemeId);
-    const pickFrom = pool.length > 0 ? pool : SEASON_THEMES;
-    return pickFrom[Math.floor(Math.random() * pickFrom.length)];
+    return SEASON_THEMES[Math.floor(Math.random() * SEASON_THEMES.length)];
   }
 
   /**
    * §36 P0-A3：聚合跨房间 topContributors Top10 + survivingRooms
-   *   - survivingRooms：当前注册房间中 fortressDay > 0 的房间数
+   *   - survivingRooms：当前注册房间中本赛季未失败过的房间数
    *   - topContributors[]：跨房间按 _lifetimeContrib 汇总（同玩家跨房间取最大值），取 Top10
    *     每项 { playerId, playerName, contribution }
    */
@@ -85,8 +79,7 @@ class SeasonManager {
         if (!room) continue;
         const engine = room.survivalEngine;
         if (!engine) continue;
-        const fd = engine.fortressDay || 0;
-        if (fd > 0) survivingRooms += 1;
+        if (engine._seasonFailed !== true) survivingRooms += 1;
 
         const lc = engine._lifetimeContrib || {};
         const names = engine.playerNames || {};
@@ -135,6 +128,18 @@ class SeasonManager {
       // §36 P0-A3：聚合跨房间 topContributors + survivingRooms（在新赛季开始前采集，
       //   此时各房引擎的 _lifetimeContrib 仍为上一赛季的最终值）
       const extras = this._buildSeasonSettlementExtras(rooms);
+
+      if (rooms && rooms.size > 0) {
+        for (const room of rooms) {
+          try {
+            if (room && room.survivalEngine && typeof room.survivalEngine.onBeforeSeasonReset === 'function') {
+              room.survivalEngine.onBeforeSeasonReset(oldSeasonId);
+            }
+          } catch (e) {
+            console.warn(`[SeasonManager] onBeforeSeasonReset error: ${e.message}`);
+          }
+        }
+      }
 
       // 新赛季
       this.seasonId += 1;
@@ -212,6 +217,13 @@ class SeasonManager {
                 }
               } catch (_) { /* ignore single room errors */ }
             }, 30000);
+            try {
+              if (room.survivalEngine && typeof room.survivalEngine.onSeasonStarted === 'function') {
+                room.survivalEngine.onSeasonStarted(this.seasonId);
+              }
+            } catch (e) {
+              console.warn(`[SeasonManager] onSeasonStarted error: ${e.message}`);
+            }
             // P0-A5 room_state 广播：season_changed（season_started）后推一次
             try {
               if (room.survivalEngine && typeof room.survivalEngine._broadcastRoomState === 'function') {

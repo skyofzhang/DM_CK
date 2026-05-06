@@ -702,7 +702,7 @@ namespace DrscfZ.UI
         {
             var sgm = SurvivalGameManager.Instance;
             if (sgm == null || sgm.CurrentUnlockedFeatures == null)
-                return false;
+                return true;
 
             if (sgm.IsFeatureUnlocked(featureId))
                 return false;

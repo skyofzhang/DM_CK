@@ -41,6 +41,7 @@ namespace DrscfZ.UI
 
         private readonly Queue<GameObject> _msgRows = new Queue<GameObject>();
         private bool _subscribed = false;
+        private SurvivalGameManager _subscribedSgm;
         private Coroutine _scrollCoroutine;
 
         private void Awake()
@@ -65,6 +66,7 @@ namespace DrscfZ.UI
         private void OnDisable() { Unsubscribe(); }
         private void OnDestroy()
         {
+            Unsubscribe();
             if (Instance == this) Instance = null;
         }
 
@@ -84,20 +86,36 @@ namespace DrscfZ.UI
             if (sgm == null) return;
 
             sgm.OnPlayerActivityMessage += AddMessage;
-            sgm.OnPlayerJoined          += data => AddMessage(GetJoinMessage(data.playerName), COLOR_JOIN);
-            sgm.OnGiftReceived          += gift  => AddMessage(GetGiftMessage(gift.playerName, gift.giftName), COLOR_GIFT);
+            sgm.OnPlayerJoined          += HandlePlayerJoined;
+            sgm.OnGiftReceived          += HandleGiftReceived;
+            _subscribedSgm = sgm;
             _subscribed = true;
         }
 
         private void Unsubscribe()
         {
             if (!_subscribed) return;
-            var sgm = SurvivalGameManager.Instance;
+            var sgm = _subscribedSgm;
             if (sgm != null)
             {
                 sgm.OnPlayerActivityMessage -= AddMessage;
+                sgm.OnPlayerJoined          -= HandlePlayerJoined;
+                sgm.OnGiftReceived          -= HandleGiftReceived;
             }
+            _subscribedSgm = null;
             _subscribed = false;
+        }
+
+        private void HandlePlayerJoined(SurvivalPlayerJoinedData data)
+        {
+            if (data == null) return;
+            AddMessage(GetJoinMessage(data.playerName), COLOR_JOIN);
+        }
+
+        private void HandleGiftReceived(SurvivalGiftData gift)
+        {
+            if (gift == null) return;
+            AddMessage(GetGiftMessage(gift.playerName, gift.giftName), COLOR_GIFT);
         }
 
         // ==================== 公共接口 ====================
