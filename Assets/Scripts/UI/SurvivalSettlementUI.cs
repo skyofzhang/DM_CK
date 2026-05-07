@@ -127,6 +127,12 @@ namespace DrscfZ.UI
             // §34 B2 订阅 NetworkManager 识别主播身份（必须在 SetActive(false) 之前订阅，
             // 否则 join_room_confirm 在面板显示前先到，OnEnable 未触发将错过该消息）。
             // 保留 gameObject.SetActive(false) 的既有行为（SurvivalSettlementUI 原本就是 inactive → ShowSettlement 激活）。
+            // 🟡 audit-r46 GAP-m-05：本路径违反 CLAUDE.md 规则 6（"禁 Awake 中 SetActive(false) 阻断 OnEnable"）但
+            //   net.OnMessageReceived 是 static 委托不依赖 GameObject 激活，当前侥幸工作。
+            //   理想改法：加 [SerializeField] _panelRoot 字段 + Inspector 拖入子节点，
+            //   把 gameObject.SetActive(false) 替换为 _panelRoot.SetActive(false)。
+            //   暂不改：需要 scene Editor 同步重建，超出 PM main thread 安全范围。
+            //   line 241 PlaySettlementSequence 已 _skipButton.SetActive(_isRoomCreator) 兜底，无功能问题。
             TrySubscribeNet();
 
             gameObject.SetActive(false);
@@ -185,24 +191,28 @@ namespace DrscfZ.UI
 
         public void ShowSettlement(SettlementData data)
         {
-            gameObject.SetActive(true);
             // 保险：显示时再订阅一次（Awake 顺序若早于 NetworkManager 初始化时会跳过，此处兜底）
-            TrySubscribeNet();
 
             // audit-r10 §29：结算面板出现 SFX（翻页声）
-            DrscfZ.Systems.AudioManager.Instance?.PlaySFX(DrscfZ.Core.AudioConstants.SFX_UI_SETTLEMENT);
 
             // audit-r6 P1-F8：§17.16 登记 A 类 priority=80（最高）；其他 A 类（GateUpgradeConfirm 75 / Roulette 70 / BuildVote 60）自动被抢占
             if (!_modalRegistered)
             {
-                DrscfZ.UI.ModalRegistry.Request(MODAL_A_ID_SETTLEMENT, 80, () =>
+                if (!DrscfZ.UI.ModalRegistry.Request(MODAL_A_ID_SETTLEMENT, 80, () =>
                 {
                     // 被更高优先级替换时（理论上不会发生，因为 80 已是最高），兜底关闭本面板
                     _modalRegistered = false;
                     gameObject.SetActive(false);
-                });
+                }))
+                {
+                    return;
+                }
                 _modalRegistered = true;
             }
+
+            gameObject.SetActive(true);
+            TrySubscribeNet();
+            DrscfZ.Systems.AudioManager.Instance?.PlaySFX(DrscfZ.Core.AudioConstants.SFX_UI_SETTLEMENT);
 
             if (_sequenceCoroutine != null) StopCoroutine(_sequenceCoroutine);
             _sequenceCoroutine = StartCoroutine(PlaySettlementSequence(data));
@@ -683,7 +693,8 @@ namespace DrscfZ.UI
         private void OnViewRankingClicked()
         {
             // 与大厅"排行榜"按钮打开同一个面板：SurvivalRankingUI.ShowPanel()
-            var rankingUI = FindObjectOfType<SurvivalRankingUI>(true);
+            // 🔴 audit-r46 GAP-m-06：优先用 Instance 单例（点击高频时避免全场 FindObjectOfType 抖动）
+            var rankingUI = SurvivalRankingUI.Instance ?? FindObjectOfType<SurvivalRankingUI>(true);
             if (rankingUI != null)
             {
                 rankingUI.ShowPanel();

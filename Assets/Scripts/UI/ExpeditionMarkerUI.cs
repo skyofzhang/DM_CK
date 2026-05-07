@@ -51,11 +51,38 @@ namespace DrscfZ.UI
             Instance = this;
         }
 
+        private void Start()
+        {
+            // 🔴 audit-r46 GAP-M-05：订阅 room_state.expeditions[] 重连恢复
+            //   原 SGM case "room_state" 完全跳过 expeditions 字段 → marker 重连后永久消失
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm != null) sgm.OnExpeditionsRestore += HandleExpeditionsRestore;
+        }
+
         private void OnDestroy()
         {
+            // 🔴 audit-r46 GAP-M-05：解除订阅
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm != null) sgm.OnExpeditionsRestore -= HandleExpeditionsRestore;
+
             if (Instance == this) Instance = null;
             _markers.Clear();
             _returnsAt.Clear();
+        }
+
+        // 🔴 audit-r46 GAP-M-05：断线重连时从 room_state.expeditions[] 恢复 marker
+        //   每个 ExpeditionInProgressData 含 playerId + returnsAt → 直接调 AddMarker
+        private void HandleExpeditionsRestore(ExpeditionInProgressData[] expeditions)
+        {
+            if (expeditions == null || expeditions.Length == 0) return;
+            // 重连时清空旧 marker（避免叠加）
+            ClearAll();
+            foreach (var exp in expeditions)
+            {
+                if (exp == null || string.IsNullOrEmpty(exp.playerId)) continue;
+                AddMarker(exp.playerId, exp.returnsAt);
+            }
+            Debug.Log($"[ExpeditionMarkerUI] HandleExpeditionsRestore: 恢复 {expeditions.Length} 个 marker");
         }
 
         // ==================== 公共接口 ====================

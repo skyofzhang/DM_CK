@@ -64,11 +64,45 @@ namespace DrscfZ.UI
         private void Start()
         {
             if (_btnRetaliate != null) _btnRetaliate.onClick.AddListener(OnRetaliateClicked);
+
+            // 🔴 audit-r46 GAP-M-05：订阅 room_state 重连恢复事件
+            //   原 SGM case "room_state" 完全跳过 tribeWar 字段 → 防御方面板重连后永久消失
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm != null) sgm.OnTribeWarRestore += HandleTribeWarRestore;
         }
 
         private void OnDestroy()
         {
+            // 🔴 audit-r46 GAP-M-05：解除订阅
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm != null) sgm.OnTribeWarRestore -= HandleTribeWarRestore;
+
             if (Instance == this) Instance = null;
+        }
+
+        // 🔴 audit-r46 GAP-M-05：断线重连时从 room_state.tribeWar 恢复防守方面板
+        //   仅当 role=='defender' 时显示；InProgressData 缺 attackerStreamerName，
+        //   显示 targetRoomId（实际攻击方 roomId）占位
+        private void HandleTribeWarRestore(TribeWarInProgressData data)
+        {
+            if (data == null || data.role != "defender") return;
+            _sessionId          = data.sessionId;
+            _attackerRoomId     = data.targetRoomId;
+            _attackerName       = !string.IsNullOrEmpty(data.targetRoomId) ? data.targetRoomId : "—";
+            _expeditionReceived = data.remoteMonstersAlive;
+            _stolenFood         = data.stolenResources != null ? data.stolenResources.food : 0;
+            _stolenCoal         = data.stolenResources != null ? data.stolenResources.coal : 0;
+            _stolenOre          = data.stolenResources != null ? data.stolenResources.ore  : 0;
+            _reportLines.Clear();
+            _reportLines.Enqueue("[重连恢复] 正被攻击中…");
+
+            if (_panel == null) return;
+            _panel.SetActive(true);
+            if (_titleText != null) _titleText.text = $"攻击者：{_attackerName}";
+            UpdateExpeditionCountUI();
+            UpdateStolenUI();
+            UpdateReportUI();
+            if (_btnRetaliate != null) _btnRetaliate.interactable = !string.IsNullOrEmpty(_attackerRoomId);
         }
 
         // ==================== 对外接口 ====================

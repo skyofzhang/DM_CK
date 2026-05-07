@@ -16,7 +16,7 @@ namespace DrscfZ.Editor
         private const string PrimaryMaterialPath = "Assets/Resources/Fonts/AlibabaPuHuiTi-3-85-Bold SDF Material.mat";
         private const string LegacyFontPath = "Assets/Resources/Fonts/ChineseFont SDF.asset";
         private const string LegacyFontName = "ChineseFont SDF";
-        private const string AutoRepairSessionKey = "DrscfZ.RepairTmpFontReferences.AutoRepairRan.v3";
+        private const string AutoRepairSessionKey = "DrscfZ.RepairTmpFontReferences.AutoRepairRan.v4";
         private static readonly bool LogEachRebind = false;
 
         [InitializeOnLoadMethod]
@@ -224,13 +224,17 @@ namespace DrscfZ.Editor
                 var atlases = font.atlasTextures;
                 if (atlases == null || atlases.Length == 0) return false;
 
+                var hasUsableAtlas = false;
                 for (int i = 0; i < atlases.Length; i++)
                 {
-                    if (atlases[i] == null) return false;
-                    _ = atlases[i].name;
+                    var atlas = atlases[i];
+                    if (atlas == null) continue;
+
+                    _ = atlas.name;
+                    hasUsableAtlas = true;
                 }
 
-                return true;
+                return hasUsableAtlas;
             }
             catch (MissingReferenceException)
             {

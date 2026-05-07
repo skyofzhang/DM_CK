@@ -251,6 +251,13 @@ namespace DrscfZ.Survival
         public event Action<RoomStateData>                 OnRoomState;
         public event Action<FeatureUnlockedData>           OnFeatureUnlocked;
         public event Action<RouletteEffectPreventedData>   OnRouletteEffectPrevented;
+        // 🔴 audit-r46 GAP-M-05：room_state 子分发（断线重连恢复 §35 攻防战面板 / §38 远征 marker）
+        //   原 case "room_state" 仅分发 phase / roulette / build，跳过 tribeWar / expeditions →
+        //   重连后 TribeWarAttackStatusPanel / TribeWarDefenseStatusPanel / ExpeditionMarkerUI
+        //   状态永久消失（仅靠下一条增量推送才能恢复）。新增 2 个事件让对应 UI 在 reconnect 时订阅。
+        //   订阅方负责把 InProgressData 字段映射到自身 Show/Update 方法。
+        public event Action<TribeWarInProgressData>            OnTribeWarRestore;
+        public event Action<ExpeditionInProgressData[]>        OnExpeditionsRestore;
         // ⚠️ audit-r27 GAP-D26-02/E26-07 死代码清理：OnTribeWarRetaliate 事件已删除
         //   原因：服务端 0 emit 'tribe_war_retaliate' (S→C only)，仅 SurvivalRoom.js:945 是 C→S inbound handler；
         //   客户端 case 路由永不触发，0 订阅者。TribeWarRetaliateData 保留作 C→S 请求构造时序列化 targetRoomId 字段。
@@ -354,6 +361,9 @@ namespace DrscfZ.Survival
         {
             EnsureRuntimeUI<UI.TopFloatingTextUI>("TopFloatingTextUI");
             EnsureRuntimeUI<UI.FortressDayBadgeUI>("FortressDayBadgeUI");
+            EnsureRuntimeUI<UI.RoomFailedBannerUI>("RoomFailedBannerUI");
+            EnsureRuntimeUI<UI.RouletteUI>("RouletteUI");
+            EnsureRuntimeUI<UI.BuildVoteUI>("BuildVoteUI");
             EnsureRuntimeUI<UI.TraderOfferUI>("TraderOfferUI");
             EnsureRuntimeUI<UI.TribeWarLobbyUI>("TribeWarLobbyUI");
             EnsureRuntimeUI<UI.TribeWarAttackStatusPanel>("TribeWarAttackStatusPanel");
@@ -494,10 +504,17 @@ namespace DrscfZ.Survival
                     var wps = JsonUtility.FromJson<WaitingPhaseStartedData>(dataJson);
                     if (wps != null) OnWaitingPhaseStarted?.Invoke(wps);
                     break;
+                case "season_prepare_started":
+                    var sps = JsonUtility.FromJson<WaitingPhaseStartedData>(dataJson);
+                    if (sps != null) OnWaitingPhaseStarted?.Invoke(sps);
+                    break;
 
                 case "waiting_phase_ended":
                     var wpe = JsonUtility.FromJson<WaitingPhaseEndedData>(dataJson) ?? new WaitingPhaseEndedData();
                     OnWaitingPhaseEnded?.Invoke(wpe);
+                    break;
+                case "season_prepare_ended":
+                    OnWaitingPhaseEnded?.Invoke(new WaitingPhaseEndedData());
                     break;
 
                 // ----- 怪物波次 -----
@@ -1099,6 +1116,81 @@ namespace DrscfZ.Survival
                                 variant = roomVariant
                             });
                         }
+                        if (rst.roulette != null)
+                        {
+                            if (rst.roulette.readyAt != 0 || rst.roulette.phase == "ready" || rst.roulette.phase == "charging")
+                            {
+                                OnRouletteReady?.Invoke(new RouletteReadyData { readyAt = rst.roulette.readyAt });
+                            }
+                            if (rst.roulette.pending != null && !string.IsNullOrEmpty(rst.roulette.pending.cardId))
+                            {
+                                OnRouletteResult?.Invoke(new RouletteResultData
+                                {
+                                    cardId = rst.roulette.pending.cardId,
+                                    displayedCards = rst.roulette.pending.displayedCards,
+                                    spunAt = rst.roulette.pending.spunAt,
+                                    autoApplyAt = rst.roulette.pending.autoApplyAt
+                                });
+                            }
+                        }
+                        if (rst.build != null)
+                        {
+                            var voting = rst.build.voting;
+                            if (voting != null && !string.IsNullOrEmpty(voting.proposalId))
+                            {
+                                var started = new BuildVoteStartedData
+                                {
+                                    proposalId = voting.proposalId,
+                                    proposerName = voting.proposerName,
+                                    options = voting.options,
+                                    votingEndsAt = voting.votingEndsAt
+                                };
+                                OnBuildVoteStarted?.Invoke(started);
+                                UI.BuildVoteUI.Instance?.ShowVote(started);
+
+                                if (voting.voteBuildIds != null && voting.voteCounts != null)
+                                {
+                                    var update = new BuildVoteUpdateData
+                                    {
+                                        proposalId = voting.proposalId,
+                                        voteBuildIds = voting.voteBuildIds,
+                                        voteCounts = voting.voteCounts,
+                                        totalVoters = voting.totalVoters
+                                    };
+                                    OnBuildVoteUpdate?.Invoke(update);
+                                    UI.BuildVoteUI.Instance?.UpdateVoteCounts(update);
+                                }
+                            }
+
+                            var building = rst.build.building;
+                            string buildId = building != null && !string.IsNullOrEmpty(building.buildId)
+                                ? building.buildId
+                                : rst.build.buildingId;
+                            if (!string.IsNullOrEmpty(buildId))
+                            {
+                                long completesAt = building != null ? building.completesAt : rst.build.completedAt;
+                                OnBuildStarted?.Invoke(new BuildStartedData { buildId = buildId, completesAt = completesAt });
+                                OnBuildProgress?.Invoke(new BuildProgressData
+                                {
+                                    buildId = buildId,
+                                    progress = rst.build.progress,
+                                    completesAt = completesAt,
+                                    remainingMs = Math.Max(0, completesAt - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+                                });
+                            }
+                        }
+                        // 🔴 audit-r46 GAP-M-05：tribeWar / expeditions 子分发（重连恢复）
+                        //   tribeWar.state ∈ { "attacking", "defending", "idle" }；idle/null 不触发
+                        //   expeditions[]：null 或 length=0 表示无进行中探险，不触发
+                        if (rst.tribeWar != null && !string.IsNullOrEmpty(rst.tribeWar.state)
+                            && (rst.tribeWar.state == "attacking" || rst.tribeWar.state == "defending"))
+                        {
+                            OnTribeWarRestore?.Invoke(rst.tribeWar);
+                        }
+                        if (rst.expeditions != null && rst.expeditions.Length > 0)
+                        {
+                            OnExpeditionsRestore?.Invoke(rst.expeditions);
+                        }
                         OnRoomState?.Invoke(rst);
                     }
                     break;
@@ -1350,6 +1442,8 @@ namespace DrscfZ.Survival
                 case SurvivalMessageProtocol.VeteranUnlocked:
                 case SurvivalMessageProtocol.WaitingPhaseStarted:
                 case SurvivalMessageProtocol.WaitingPhaseEnded:
+                case SurvivalMessageProtocol.SeasonPrepareStarted:
+                case SurvivalMessageProtocol.SeasonPrepareEnded:
                 case SurvivalMessageProtocol.DailyTierDecay:
                 case SurvivalMessageProtocol.RoomDestroyed:
                     return true;
@@ -1554,8 +1648,15 @@ namespace DrscfZ.Survival
             // 🔴 audit-r45 GAP-D45-06：§33 助威者断线重连恢复
             //   服务端 getFullState 末尾 emit supporters[] + supporterCount，此处 invoke OnSupporterCountSync
             //   让 SupporterTopBarUI "守护者:N 助威:M" 计数初始化（不复用 OnSupporterJoined 避免 Toast 误报）
-            //   data.supporterCount 缺失时 JsonUtility 默认 0 → SupporterTopBarUI 清空 label 让 SurvivalTopBarUI 原始 "参与:N人" 生效
-            OnSupporterCountSync?.Invoke(data.supporterCount);
+            // 🔴 audit-r46 GAP-m-04：原直接 invoke data.supporterCount 在旧版服务端 emit 不带该字段时
+            //   会 JsonUtility 默认 0 → 错误清零既有显示。改为优先用 supporters[].Length 作 ground truth：
+            //   - supporters != null：以数组长度为准（field-present 信号明确）
+            //   - supporters == null 且 supporterCount > 0：fallback 到数值（兼容旧 schema）
+            //   - 都没有：invoke 0（保持原"清空 label 回退 SurvivalTopBarUI" 设计意图）
+            int supporterCount = data.supporters != null ? data.supporters.Length
+                               : data.supporterCount > 0 ? data.supporterCount
+                               : 0;
+            OnSupporterCountSync?.Invoke(supporterCount);
 
             // 🔴 audit-r25 GAP-A25-01 + 🔴 audit-r26 GAP-A26-02/A26-10 重构：
             //   r25 修复仅 Invoke 事件，跳过 HandleSeasonState/HandleFortressDayChanged 完整链路（CurrentSeasonState 缓存 + ApplyTheme + UpdateFortressDay 等 5+ 步）。
@@ -3176,6 +3277,11 @@ namespace DrscfZ.Survival
         /// <summary>B 类 ≥1000 主播 HUD 购买：弹双确认弹窗（5s TTL 倒计时）</summary>
         private void HandleShopPurchaseConfirmPrompt(ShopPurchaseConfirmPromptData data)
         {
+            if (!_isRoomCreator)
+            {
+                Debug.Log("[SGM] shop_purchase_confirm_prompt ignored on non-broadcaster client");
+                return;
+            }
             OnShopPurchaseConfirmPrompt?.Invoke(data);
             UI.ShopConfirmDialogUI.Instance?.Show(data);
             Debug.Log($"[SGM] shop_purchase_confirm_prompt: pendingId={data.pendingId} itemId={data.itemId} price={data.price} expiresAt={data.expiresAt}");
@@ -3349,6 +3455,9 @@ namespace DrscfZ.Survival
                 case "already_owned":          return "已拥有";
                 case "pending_expired":        return "确认超时";
                 case "pending_invalid":        return "确认凭证无效";
+                // 🔴 audit-r46 GAP-M-03：服务端 SurvivalGameEngine.js:9842 emit pending_required（非 §39.11 doc 14 项原始枚举）
+                //   原 default `return reason;` 让玩家跑马灯出现英文 "购买 X 失败：pending_required"
+                case "pending_required":       return "请通过商店面板完成确认（直接购买已禁用）";
                 case "limit_exceeded":         return "本局限购";
                 case "supporter_not_allowed":  return "助威者不可购买战术道具";
                 case "not_unlocked_yet":
@@ -3423,13 +3532,16 @@ namespace DrscfZ.Survival
         private void HandleTribeWarExpeditionIncoming(TribeWarExpeditionIncomingData data)
         {
             OnTribeWarExpeditionIncoming?.Invoke(data);
+            // 🔴 audit-r46 GAP-M-02 codex 方案 D：把 sessionId + monsters[].earliestHitAt 元数据传给 spawner
+            //   spawner 后续在 SpawnOneTribeWarMonster 时调 MonsterController.SetTribeWarMetadata(sessionId, earliestHitAt)
+            //   让 DoAttack 命中目标时能上报 tribe_war_expedition_hit 给服务端做实际结算
             if (monsterWaveSpawner != null)
             {
-                monsterWaveSpawner.SpawnTribeWarExpedition(data.count, data.attackerStreamerName, data.monsterIds);
+                monsterWaveSpawner.SpawnTribeWarExpedition(data.count, data.attackerStreamerName, data.monsterIds, data.sessionId, data.monsters);
             }
             else if (MonsterWaveSpawner.Instance != null)
             {
-                MonsterWaveSpawner.Instance.SpawnTribeWarExpedition(data.count, data.attackerStreamerName, data.monsterIds);
+                MonsterWaveSpawner.Instance.SpawnTribeWarExpedition(data.count, data.attackerStreamerName, data.monsterIds, data.sessionId, data.monsters);
             }
             else
             {
@@ -3781,6 +3893,16 @@ namespace DrscfZ.Survival
         private void HandleBroadcasterActionFailed(BroadcasterActionFailedData data)
         {
             OnBroadcasterActionFailed?.Invoke(data);
+            // 🔴 audit-r46 GAP-M-04（codex 路线 B'）：reason==='not_broadcaster' 静默化处理
+            //   服务端 _requireBroadcaster 拒绝时单播 broadcaster_action_failed 用于审计/调试，
+            //   但若客户端不是主播身份（_isRoomCreator=false），观众端不应弹红 toast / 跑马灯（避免骚扰）。
+            //   保留 OnBroadcasterActionFailed 事件 invoke 让 UI 订阅者按身份决策；仅 Debug.Log 记录。
+            //   主播身份客户端仍正常显示（理论上主播路径不会触发 not_broadcaster，作为防御日志保留）。
+            if (data.reason == "not_broadcaster" && !_isRoomCreator)
+            {
+                Debug.Log($"[SGM] broadcaster_action_failed: action={data.action} reason=not_broadcaster (静默化，观众端不弹 toast)");
+                return;
+            }
             string reasonText = FormatBroadcasterActionFailReason(data.reason, data.unlockDay, data.cooldownMs);
             string actionText = GetBroadcasterActionName(data.action);
             string msg = $"{actionText}：{reasonText}";

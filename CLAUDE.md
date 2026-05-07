@@ -3,8 +3,8 @@
 ## ⚡ 新会话启动指令（必须优先执行）
 > 新对话框打开后，在做任何任务之前，必须按顺序执行：
 > 1. 读取项目记忆: `C:\Users\Administrator\.claude\projects\E--AIProject-DM-CK\memory\MEMORY.md`
-> 2. 确认 Coplay MCP 可用（调用 `get_unity_editor_state`，若多 Unity 实例先调 `set_unity_project_root` 设为 `E:\AIProject\DM_CK`）
-> 3. 编译检查（`check_compile_errors`）
+> 2. 确认 UnityMCP 可用（调用 `mcp__UnityMCP__read_console` action='get'；若多 Unity 实例先调 `mcp__UnityMCP__set_active_instance` 指定 `DM_CK@<hash>`）
+> 3. 编译检查（`mcp__UnityMCP__read_console` types=['error','warning']）
 > 4. 向用户汇报当前状态 + 待完成列表，等待指示
 > 5. 若用户请求"Multi-Agent 流程跑 §XX"或类似 → 读取 `docs/multi_agent_workflow.md` 按流程执行（PM 由主对话担任）
 
@@ -183,7 +183,7 @@ KuanggongWorker_XX (root)
 
 1. **服务器权威**：客户端等服务器 `survival_game_state` 确认才切换状态，不本地跳转
 2. **UI 预创建**：所有面板 Editor 脚本预建，不在运行时 Instantiate
-3. **场景保存**：必须用 `EditorSceneManager.SaveScene()`，禁止用 Coplay `save_scene`（路径 bug）
+3. **场景保存**：必须用 `EditorSceneManager.SaveScene()` 或 `mcp__UnityMCP__manage_scene action='save'`（历史 Coplay save_scene 有路径 bug，已弃用）
 4. **Worker 动画**：使用 kuanggong 系列 controller（IsRunning/IsMining/IsIdle bool），不新建 Controller
 5. **资源产出**：由服务器推送，无需客户端定时器
 6. **脚本挂载**：UI 脚本挂 Canvas（always-active），禁止在 Awake() 中 SetActive(false) 阻断 OnEnable
@@ -229,12 +229,12 @@ KuanggongWorker_XX (root)
 
 ## 已知踩坑
 
-### Unity / Coplay
-- **Coplay 超时**：`create_coplay_task` 30s~2min，MCP 超时但 Unity 中照常执行
+### Unity / UnityMCP
+- **MCP 工具链**：当前仅用 **UnityMCP**（mcp__UnityMCP__*）。Coplay MCP 已弃用 — 历史踩坑见 feedback_mcp_preference.md / feedback_unity_mcp_only.md
 - **禁用 DisplayDialog**：Editor 脚本禁止 `EditorUtility.DisplayDialog`（阻塞进程）
-- **场景保存用**: `Assets/Editor/SaveCurrentScene.cs` 的 `Execute()` 方法
-- **多 Unity 实例**：Coplay MCP 报 "Multiple Unity Editor instances" 时先调 `set_unity_project_root`
-- **Play Mode 中不能执行 Editor 脚本**：execute_script 超时时先 Stop Game
+- **场景保存用**: `Assets/Editor/SaveCurrentScene.cs` 的 `Execute()` 方法 或 `mcp__UnityMCP__manage_scene action='save'`
+- **多 Unity 实例**：UnityMCP 报多实例时先调 `mcp__UnityMCP__set_active_instance instance='DM_CK'`（按 Name 或 hash 前缀）
+- **Play Mode 中不能执行 Editor 脚本**：`execute_menu_item` 超时时先 `manage_editor action='stop'`
 
 ### TMP（TextMeshProUGUI）
 - **faceColor 默认白色**：新建 TMP 组件时 `faceColor` 为白，`color=black` 只写 Graphic 层，渲染仍白色
@@ -270,7 +270,7 @@ KuanggongWorker_XX (root)
 | `AssignKuanggongPrefabs.cs` | 将新 Prefab 赋值到 WorkerManager/MonsterWaveSpawner |
 | `RebuildBossPrefab.cs` | 单独重建 KuanggongBoss_05.prefab |
 | `ReimportKuanggongFBX.cs` | 强制重导入所有 kuanggong FBX（Blender 改动后用）|
-| `SaveCurrentScene.cs` | 保存当前场景（替代 Coplay save_scene）|
+| `SaveCurrentScene.cs` | 保存当前场景（也可直接调 `mcp__UnityMCP__manage_scene action='save'`）|
 | `RebuildGiftIconBar.cs` | 重建底部礼物说明栏（6卡片，图标+名称+效果）|
 
 ---
@@ -281,6 +281,8 @@ KuanggongWorker_XX (root)
 3. **AudioManager**：音效素材填充
 4. **SettlementUI `_top3Slots`**：Inspector 手动绑定 3 个槽位
 
-## Coplay MCP
+## UnityMCP（v9.6.x）
 - **配置文件**: `.mcp.json`（项目根目录）
-- **多实例处理**: 先调 `set_unity_project_root("E:\\AIProject\\DM_CK")`
+- **多实例处理**: 先调 `mcp__UnityMCP__set_active_instance instance='DM_CK'`（按项目 Name 或 hash 前缀）
+- **常用工具**: `read_console` / `manage_editor` / `manage_scene` / `manage_gameobject` / `manage_script` / `script_apply_edits` / `execute_menu_item` / `find_gameobjects`
+- **历史**: 项目早期用 Coplay MCP，已全面切换到 UnityMCP。CLAUDE.md / MEMORY.md 中残留 "Coplay" 字眼仅作历史参考

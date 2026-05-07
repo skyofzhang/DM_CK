@@ -192,10 +192,10 @@ class SeasonManager {
               },
             });
             // §36.10 WaitingPhase：新赛季开局 30s 准备窗口（客户端主题预告 + 观众准备）
-            //   MVP：同帧广播 waiting_phase_started，30s 后自动 waiting_phase_ended
+            //   MVP：同帧广播 season_prepare_started，30s 后自动 season_prepare_ended
             //   生效范围：仅作为 UI 层提示（A 类阻塞横幅），不干预服务端时钟 / 资源推进
             room.broadcast({
-              type: 'waiting_phase_started',
+              type: 'season_prepare_started',
               timestamp: Date.now(),
               data: {
                 durationSec:   30,
@@ -203,14 +203,14 @@ class SeasonManager {
                 newThemeId:    this.themeId,
               },
             });
-            // 30s 后广播 waiting_phase_ended（兜底 UI 隐藏；客户端倒计时结束也可自关）
+            // 30s 后广播 season_prepare_ended（兜底 UI 隐藏；客户端倒计时结束也可自关）
             // 闭包捕获 room 引用，避免循环后 room 被篡改
             const _room = room;
             setTimeout(() => {
               try {
                 if (_room && typeof _room.broadcast === 'function') {
                   _room.broadcast({
-                    type: 'waiting_phase_ended',
+                    type: 'season_prepare_ended',
                     timestamp: Date.now(),
                     data: {},
                   });

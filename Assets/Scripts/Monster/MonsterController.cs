@@ -62,6 +62,14 @@ namespace DrscfZ.Monster
         // 当前正在攻击的矿工目标（为null则攻击城门）
         private Survival.WorkerController _currentWorkerTarget;
 
+        // 🔴 audit-r46 GAP-M-02 codex 方案 D：远征怪元数据
+        //   非空 _tribeWarSessionId 标识此怪物为 §35 远征怪
+        //   DoAttack 命中目标动画时若 now >= _earliestHitAtUnixMs && !_tribeWarHitReported → 上报 tribe_war_expedition_hit
+        //   上报后 _tribeWarHitReported=true 防客户端重复发送（服务端也防重放，双层保险）
+        private string _tribeWarSessionId;
+        private long   _earliestHitAtUnixMs;
+        private bool   _tribeWarHitReported;
+
         // 事件
         public event Action<MonsterController> OnDead;  // 死亡通知 WaveSpawner
 
@@ -462,6 +470,28 @@ namespace DrscfZ.Monster
 
             // audit-r12 GAP-C01：§29.2 怪物攻击撞击声（AudioManager 内部去重，多怪同时攻击不刷爆）
             DrscfZ.Systems.AudioManager.Instance?.PlaySFX(DrscfZ.Core.AudioConstants.SFX_MONSTER_ATTACK);
+
+            // 🔴 audit-r46 GAP-M-02 codex 方案 D：远征怪命中目标动画时上报 tribe_war_expedition_hit
+            //   服务端 TribeWarSession.handleExpeditionHit 收到后校验 sessionId + monsterId + earliestHitAt
+            //   通过后调真正结算（_damageBuildingSkeleton + onExpeditionHitWorker 偷资源/保底攻城）
+            //   每只远征怪仅上报 1 次（_tribeWarHitReported 客户端去重；服务端 _expeditionMonsters[mid].resolved 也去重，双层保险）
+            if (!string.IsNullOrEmpty(_tribeWarSessionId) && !_tribeWarHitReported)
+            {
+                long nowMs = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                if (nowMs >= _earliestHitAtUnixMs)
+                {
+                    string targetType = _currentWorkerTarget != null ? "worker" : "gate";
+                    // SendJson 接受单参数 (完整 JSON 字符串)，按项目惯例（如 BuildVoteUI.SendPropose）手工拼 type+data
+                    string json = $"{{\"type\":\"tribe_war_expedition_hit\",\"data\":{{\"sessionId\":\"{_tribeWarSessionId}\",\"monsterId\":\"{MonsterId}\",\"targetType\":\"{targetType}\"}}}}";
+                    DrscfZ.Core.NetworkManager.Instance?.SendJson(json);
+                    _tribeWarHitReported = true;
+                    Debug.Log($"[MonsterController] tribe_war_expedition_hit emit: sessionId={_tribeWarSessionId} mid={MonsterId} target={targetType}");
+                }
+                else
+                {
+                    Debug.Log($"[MonsterController] tribe_war_expedition_hit skipped (now {nowMs} < earliestHitAt {_earliestHitAtUnixMs})");
+                }
+            }
         }
 
         private void MoveToward(Vector3 target)
@@ -678,6 +708,18 @@ namespace DrscfZ.Monster
         {
             MonsterId    = monsterId;
             _monsterType = type;
+        }
+
+        /// <summary>🔴 audit-r46 GAP-M-02 codex 方案 D：标记此怪物为 §35 远征怪并设置最早可命中时间。
+        ///   服务端 TribeWarSession.releaseExpedition emit `tribe_war_expedition_incoming.monsters[].earliestHitAt`，
+        ///   MonsterWaveSpawner.SpawnOneTribeWarMonster 调本方法把元数据传进来。
+        ///   DoAttack 命中目标动画时若 now >= _earliestHitAtUnixMs && !_tribeWarHitReported → 上报 tribe_war_expedition_hit。
+        ///   服务端 TribeWarSession.handleExpeditionHit 校验 earliestHitAt 后做实际偷资源/拆骨架/保底攻城结算。</summary>
+        public void SetTribeWarMetadata(string sessionId, long earliestHitAtUnixMs)
+        {
+            _tribeWarSessionId    = sessionId;
+            _earliestHitAtUnixMs  = earliestHitAtUnixMs;
+            _tribeWarHitReported  = false;
         }
 
         /// <summary>设置城门目标（用于InitializeWithType后补充注入）</summary>

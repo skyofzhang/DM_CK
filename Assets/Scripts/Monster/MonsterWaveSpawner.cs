@@ -464,16 +464,27 @@ namespace DrscfZ.Monster
         public void SpawnTribeWarExpedition(int count, string attackerName)
         {
             if (count <= 0) return;
-            StartCoroutine(SpawnTribeWarExpeditionCoroutine(count, attackerName, null));
+            StartCoroutine(SpawnTribeWarExpeditionCoroutine(count, attackerName, null, null, null));
         }
 
         public void SpawnTribeWarExpedition(int count, string attackerName, string[] monsterIds)
         {
             if (count <= 0) return;
-            StartCoroutine(SpawnTribeWarExpeditionCoroutine(count, attackerName, monsterIds));
+            StartCoroutine(SpawnTribeWarExpeditionCoroutine(count, attackerName, monsterIds, null, null));
         }
 
-        private IEnumerator SpawnTribeWarExpeditionCoroutine(int count, string attackerName, string[] monsterIds)
+        // 🔴 audit-r46 GAP-M-02 codex 方案 D：新签名带 sessionId + monsters[].earliestHitAt
+        //   远征怪 spawn 后调 MonsterController.SetTribeWarMetadata(sessionId, earliestHitAt)
+        //   让 DoAttack 命中目标时能上报 tribe_war_expedition_hit 给服务端做实际结算
+        public void SpawnTribeWarExpedition(int count, string attackerName, string[] monsterIds,
+                                            string sessionId, Survival.TribeWarExpeditionMonsterData[] monsters)
+        {
+            if (count <= 0) return;
+            StartCoroutine(SpawnTribeWarExpeditionCoroutine(count, attackerName, monsterIds, sessionId, monsters));
+        }
+
+        private IEnumerator SpawnTribeWarExpeditionCoroutine(int count, string attackerName, string[] monsterIds,
+                                                              string sessionId, Survival.TribeWarExpeditionMonsterData[] monsters)
         {
             for (int i = 0; i < count; i++)
             {
@@ -490,12 +501,14 @@ namespace DrscfZ.Monster
                     yield break;
                 }
                 string serverMonsterId = (monsterIds != null && i < monsterIds.Length) ? monsterIds[i] : null;
-                SpawnOneTribeWarMonster(attackerName, serverMonsterId);
+                long earliestHitAt = (monsters != null && i < monsters.Length) ? monsters[i].earliestHitAt : 0L;
+                SpawnOneTribeWarMonster(attackerName, serverMonsterId, sessionId, earliestHitAt);
                 yield return new WaitForSeconds(0.1f + UnityEngine.Random.Range(0f, 0.1f));
             }
         }
 
-        private void SpawnOneTribeWarMonster(string attackerName, string serverMonsterId = null)
+        private void SpawnOneTribeWarMonster(string attackerName, string serverMonsterId = null,
+                                             string tribeWarSessionId = null, long earliestHitAt = 0L)
         {
             // 刷怪点固定为 top（策划案 §35.4）
             Vector3 spawnPos = GetSpawnPos("top");
@@ -530,6 +543,13 @@ namespace DrscfZ.Monster
             float spd = 1.8f + _currentDay * 0.1f;
             ctrl.Initialize(hp, atk, spd, _cityGateTarget);
             ctrl.SetMonsterIdAndType(monsterId, DrscfZ.Monster.MonsterType.Normal);
+            // 🔴 audit-r46 GAP-M-02 codex 方案 D：传入 sessionId + earliestHitAt
+            //   DoAttack 命中目标动画时上报 tribe_war_expedition_hit；服务端校验后做实际结算
+            //   tribeWarSessionId 为 null 时退化为普通怪行为（不上报）
+            if (!string.IsNullOrEmpty(tribeWarSessionId))
+            {
+                ctrl.SetTribeWarMetadata(tribeWarSessionId, earliestHitAt);
+            }
             ctrl.OnDead += HandleMonsterDead;
             _activeMonsters.Add(ctrl);
             ApplyInitialHpBarState(ctrl); // Fix B §34B B3：heavy_fog 期内新生成怪物同步隐藏血条

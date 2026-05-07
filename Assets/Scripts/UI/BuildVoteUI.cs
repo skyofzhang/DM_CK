@@ -23,6 +23,8 @@ namespace DrscfZ.UI
 
         // ModalRegistry A 类 id（§17.16 audit-r5 切换新 API）
         private const string MODAL_A_ID = "build_vote_panel";
+        private const string PROPOSE_MODAL_A_ID = "build_propose_menu";
+        private static readonly string[] ProposeBuildIds = { "watchtower", "market", "hospital", "altar", "beacon" };
 
         [Header("面板引用(Inspector 拖入)")]
         [SerializeField] private GameObject _panel;
@@ -36,17 +38,75 @@ namespace DrscfZ.UI
 
         private BuildVoteStartedData _current;
         private Coroutine _tickCoroutine;
+        private GameObject _proposeMenuPanel;
+        private bool _phaseSubscribed;
 
         private void Awake()
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
             if (_panel != null) _panel.SetActive(false);
+
+            // 🔴 audit-r46 GAP-M-07：订阅 phase 切换兜底关闭面板
+            //   原行为：投票仅靠 build_vote_ended 消息或 votingEndsAt 倒计时关闭。
+            //   若 build_vote_ended 丢包 + phase 离开可投票白天（入夜/结算/恢复期）→
+            //   面板永久滞留 + ModalRegistry MODAL_A_ID priority=60 永久占用 → 后续同级 modal 被拒
+            //   修复：任何非普通 day 时强制 CloseVote 兜底
+            TrySubscribePhaseChanged();
+        }
+
+        private void Start()
+        {
+            TrySubscribePhaseChanged();
         }
 
         private void OnDestroy()
         {
+            // 🔴 audit-r46 GAP-M-06：与 ShopUI/ShopConfirmDialogUI/TribeWarLobbyUI 兜底模式对齐
+            //   原 OnDestroy 仅清 Instance，MODAL_A_ID/PROPOSE_MODAL_A_ID 未释放
+            //   场景切换/Domain Reload/玩家退主播身份导致 BuildVoteUI 销毁时
+            //   ModalRegistry._activeIdA 残留 priority=60/55 → 后续同优先级 modal 被拒
+            if (_tickCoroutine != null) { StopCoroutine(_tickCoroutine); _tickCoroutine = null; }
+            ModalRegistry.Release(MODAL_A_ID);
+            ModalRegistry.Release(PROPOSE_MODAL_A_ID);
+
+            // 🔴 audit-r46 GAP-M-07：解除 phase 订阅
+            UnsubscribePhaseChanged();
+
             if (Instance == this) Instance = null;
+        }
+
+        private void TrySubscribePhaseChanged()
+        {
+            if (_phaseSubscribed) return;
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm == null) return;
+            sgm.OnPhaseChanged += HandlePhaseChanged;
+            _phaseSubscribed = true;
+        }
+
+        private void UnsubscribePhaseChanged()
+        {
+            if (!_phaseSubscribed) return;
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm != null) sgm.OnPhaseChanged -= HandlePhaseChanged;
+            _phaseSubscribed = false;
+        }
+
+        // 🔴 audit-r46 GAP-M-07：phase 切换兜底关闭活跃投票面板
+        private void HandlePhaseChanged(PhaseChangedData pc)
+        {
+            if (pc == null) return;
+            if (_current == null) return;
+            bool isNormalDay = pc.phase == "day" && (string.IsNullOrEmpty(pc.variant) || pc.variant == "normal");
+            if (isNormalDay) return;
+            Debug.Log($"[BuildVoteUI] HandlePhaseChanged → {pc.phase}/{pc.variant} 兜底关闭投票面板 proposalId={_current.proposalId}");
+            CloseVote(new BuildVoteEndedData
+            {
+                proposalId  = _current.proposalId,
+                winnerId    = null,
+                totalVoters = 0
+            });
         }
 
         /// <summary>服务端广播 build_vote_started 时调用:激活面板 + 启动倒计时 + 绑定按钮</summary>
@@ -99,7 +159,7 @@ namespace DrscfZ.UI
         /// <summary>服务端广播 build_vote_update 时调用:按并行数组更新票数</summary>
         public void UpdateVoteCounts(BuildVoteUpdateData data)
         {
-            if (data == null || _current == null) return;
+            if (data == null || _current == null || _current.options == null) return;
             if (data.proposalId != _current.proposalId) return;
 
             var map = new Dictionary<string, int>();
@@ -111,7 +171,7 @@ namespace DrscfZ.UI
 
             for (int i = 0; i < _voteCounts.Length; i++)
             {
-                if (_voteCounts[i] == null || i >= _current.options.Length) continue;
+                if (_voteCounts[i] == null || _current.options == null || i >= _current.options.Length) continue;
                 int c = map.TryGetValue(_current.options[i], out int n) ? n : 0;
                 _voteCounts[i].text = $"{c} 票";
             }
@@ -129,10 +189,12 @@ namespace DrscfZ.UI
             // 高亮 winner 按钮
             if (!string.IsNullOrEmpty(data.winnerId))
             {
+                string[] options = _current.options;
+                if (options == null) { StartCoroutine(DelayHide(2f)); return; }
                 for (int i = 0; i < _voteButtons.Length; i++)
                 {
-                    if (_voteButtons[i] == null || i >= _current.options.Length) continue;
-                    bool isWinner = _current.options[i] == data.winnerId;
+                    if (_voteButtons[i] == null || i >= options.Length) continue;
+                    bool isWinner = options[i] == data.winnerId;
                     var img = _voteButtons[i].image;
                     if (img != null)
                         img.color = isWinner ? new Color(0.4f, 1f, 0.6f) : new Color(0.7f, 0.7f, 0.7f);
@@ -193,11 +255,63 @@ namespace DrscfZ.UI
                 Debug.LogWarning("[BuildVoteUI] OpenProposeMenu: 当前已有活跃投票，跳过重复发起");
                 return;
             }
-            // MVP：默认 watchtower（瞭望塔，§37 5 个建造之首）
-            // 服务端 handleBuildPropose 会以此为 options[0]，再随机加 2 个候选广播 build_vote_started
-            const string defaultBuildId = "watchtower";
-            SendPropose(defaultBuildId);
-            Debug.Log($"[BuildVoteUI] OpenProposeMenu: r38 MVP 默认提案 {defaultBuildId}（GAP-PM38-01 闭环）");
+            ShowProposeMenu();
+            Debug.Log("[BuildVoteUI] OpenProposeMenu: opened 5-choice propose menu");
+        }
+
+        private void ShowProposeMenu()
+        {
+            if (!ModalRegistry.Request(PROPOSE_MODAL_A_ID, 55, CloseProposeMenu))
+                return;
+
+            if (_proposeMenuPanel == null)
+                CreateProposeMenuPanel();
+
+            if (_proposeMenuPanel != null)
+                _proposeMenuPanel.SetActive(true);
+        }
+
+        private void CreateProposeMenuPanel()
+        {
+            var parent = RuntimeUIFactory.GetCanvasTransform();
+            _proposeMenuPanel = RuntimeUIFactory.CreatePanel(
+                parent,
+                "BuildProposeMenu",
+                new Vector2(0.5f, 0.5f),
+                new Vector2(0.5f, 0.5f),
+                Vector2.zero,
+                new Vector2(420f, 470f),
+                new Color(0.08f, 0.10f, 0.14f, 0.94f));
+            RuntimeUIFactory.AddVerticalLayout(_proposeMenuPanel, 12f, new RectOffset(24, 24, 22, 22));
+
+            var title = RuntimeUIFactory.CreateText(_proposeMenuPanel.transform, "Title", "Choose Building", 28f, Color.white, TextAlignmentOptions.Center, new Vector2(360f, 42f));
+            RuntimeUIFactory.AddLayoutElement(title.gameObject, 42f);
+
+            for (int i = 0; i < ProposeBuildIds.Length; i++)
+            {
+                string buildId = ProposeBuildIds[i];
+                TextMeshProUGUI label;
+                var btn = RuntimeUIFactory.CreateButton(_proposeMenuPanel.transform, $"Build_{buildId}", GetBuildingDisplayName(buildId), out label, new Color(0.18f, 0.35f, 0.45f, 0.96f), new Vector2(360f, 52f));
+                RuntimeUIFactory.AddLayoutElement(btn.gameObject, 52f);
+                btn.onClick.AddListener(() =>
+                {
+                    CloseProposeMenu();
+                    SendPropose(buildId);
+                });
+            }
+
+            TextMeshProUGUI cancelLabel;
+            var cancel = RuntimeUIFactory.CreateButton(_proposeMenuPanel.transform, "Cancel", "Cancel", out cancelLabel, new Color(0.36f, 0.36f, 0.40f, 0.96f), new Vector2(360f, 46f));
+            RuntimeUIFactory.AddLayoutElement(cancel.gameObject, 46f);
+            cancel.onClick.AddListener(CloseProposeMenu);
+            _proposeMenuPanel.SetActive(false);
+        }
+
+        private void CloseProposeMenu()
+        {
+            if (_proposeMenuPanel != null)
+                _proposeMenuPanel.SetActive(false);
+            ModalRegistry.Release(PROPOSE_MODAL_A_ID);
         }
 
         private void SendVote(string buildId)

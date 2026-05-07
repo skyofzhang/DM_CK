@@ -57,6 +57,12 @@ assert.strictEqual(started.data.seasonId, 4);
 assert.strictEqual(started.data.seasonDay, 1);
 assert.ok(started.data.themeId, 'season_started should include themeId');
 assert.strictEqual(started.data.themeId, 'dawn', 'first 6 seasons should use fixed theme order');
+assert.ok(!broadcasts.find(m => m.type === 'waiting_phase_started' && m.data && m.data.newSeasonId), 'season prepare must not reuse wave waiting_phase_started');
+const prepareStarted = broadcasts.find(m => m.type === 'season_prepare_started');
+assert.ok(prepareStarted, 'season_prepare_started should broadcast for the new-season prepare window');
+assert.strictEqual(prepareStarted.data.newSeasonId, 4);
+assert.strictEqual(prepareStarted.data.newThemeId, 'dawn');
+assert.ok(broadcasts.find(m => m.type === 'season_prepare_ended'), 'season_prepare_ended should close the prepare window');
 
 const seq = new SeasonManager();
 assert.strictEqual(seq._resolveThemeForSeason(1), 'classic_frozen');

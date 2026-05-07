@@ -3,6 +3,7 @@ using UnityEngine.UI;
 using TMPro;
 using System;
 using System.Collections;
+using DrscfZ.Core;
 using DrscfZ.Survival;
 
 namespace DrscfZ.UI
@@ -57,12 +58,35 @@ namespace DrscfZ.UI
         {
             if (_btnConfirm != null) _btnConfirm.onClick.AddListener(OnConfirmClicked);
             if (_btnCancel  != null) _btnCancel.onClick.AddListener(OnCancelClicked);
+
+            // 🔴 audit-r46 GAP-M-08：订阅 OnDisconnected 兜底关闭面板
+            //   原行为：用户在 5s 倒计时内断网，重连后客户端面板仍显示旧 pendingId。
+            //   若用户在重连后点确认 → ShopUI.SendShopPurchase(itemId, oldPendingId) 发到新会话
+            //   → 服务端 _pendingShopPurchase 已自动清理 → 返 pending_invalid
+            //   修复：断网即关闭，重连后由服务端补发新 prompt 决定是否再开
+            var net = NetworkManager.Instance;
+            if (net != null) net.OnDisconnected += HandleDisconnected;
         }
 
         private void OnDestroy()
         {
             ModalRegistry.ReleaseB(MODAL_B_ID);  // audit-r12 GAP-B02 兜底释放
+
+            // 🔴 audit-r46 GAP-M-08：解除订阅
+            var net = NetworkManager.Instance;
+            if (net != null) net.OnDisconnected -= HandleDisconnected;
+
             if (Instance == this) Instance = null;
+        }
+
+        // 🔴 audit-r46 GAP-M-08
+        private void HandleDisconnected(string reason)
+        {
+            if (_panel != null && _panel.activeSelf)
+            {
+                Debug.Log($"[ShopConfirmDialogUI] OnDisconnected → ClosePanel pendingId={_pendingId} reason={reason}");
+                ClosePanel();
+            }
         }
 
         // ==================== 对外接口 ====================
@@ -70,6 +94,12 @@ namespace DrscfZ.UI
         public void Show(ShopPurchaseConfirmPromptData data)
         {
             if (data == null) return;
+            if (_panel != null && _panel.activeSelf && !string.IsNullOrEmpty(_pendingId) && _pendingId != data.pendingId)
+            {
+                // 服务端同玩家只保留一个 pending；收到新 prompt 说明旧 pending 已被替换。
+                Debug.Log($"[ShopConfirmDialogUI] Replacing prompt pendingId={_pendingId} -> {data.pendingId}");
+                if (_timerCoroutine != null) { StopCoroutine(_timerCoroutine); _timerCoroutine = null; }
+            }
 
             _pendingId       = data.pendingId;
             _itemId          = data.itemId;

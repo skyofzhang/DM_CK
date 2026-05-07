@@ -341,7 +341,14 @@ namespace DrscfZ.UI
         private void OnRouletteClicked()
         {
             if (IsKnownLocked(SurvivalMessageProtocol.FeatureRoulette, "事件轮盘")) return;
-            RouletteUI.Instance?.OpenPanel();
+            var roulette = RouletteUI.Instance ?? FindObjectOfType<RouletteUI>(true);
+            if (roulette != null)
+            {
+                roulette.OpenPanel();
+                return;
+            }
+            Debug.LogWarning("[BroadcasterPanel] OnRouletteClicked: RouletteUI instance missing");
+            AnnouncementUI.Instance?.ShowAnnouncement("Roulette", "Panel is loading...", new Color(1f, 0.84f, 0.25f), 2f);
         }
 
         /// <summary>
@@ -453,7 +460,8 @@ namespace DrscfZ.UI
                 try
                 {
                     var method = settings.GetType().GetMethod("OpenSupporterTab")
-                               ?? settings.GetType().GetMethod("Show");
+                               ?? settings.GetType().GetMethod("Show")
+                               ?? settings.GetType().GetMethod("Open");
                     if (method != null)
                     {
                         method.Invoke(settings, null);
@@ -620,6 +628,11 @@ namespace DrscfZ.UI
         {
             string action = ParseStringField(dataJson, "action");
             string reason = ParseStringField(dataJson, "reason");
+            if (reason == "not_broadcaster" && !_isRoomCreator)
+            {
+                Debug.Log($"[BroadcasterPanel] broadcaster_action_failed not_broadcaster ignored on viewer client (action={action})");
+                return;
+            }
             if (action == "efficiency_boost")
             {
                 _boostPending = false;

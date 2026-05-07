@@ -1380,6 +1380,10 @@ class SurvivalGameEngine {
     this._themeHpMult         = 1.0;
     this._themeCntMult        = 1.0;
     this._themeMaxAliveBonus  = 0;
+    this._themeDayMiningMult  = 1.0;
+    this._themeLootMult       = 1.0;
+    this._themeBossHpMult     = 1.0;
+    this._themeWaveIntervalMult = 1.0;
     // §31 polar_night 主题：怪物 hp / atk 额外 ×1.2（非主题时 1.0）
     this._themeMonsterHpMult  = 1.0;
     this._themeMonsterAtkMult = 1.0;
@@ -1698,7 +1702,7 @@ class SurvivalGameEngine {
         }
       }
       if (itemId) {
-        this.handleShopPurchase(playerId, playerName, itemId, null);
+        this.handleShopPurchase(playerId, playerName, itemId, null, 'barrage');
       }
       // 越界（idx<1 或 A>=5）静默忽略
       return;
@@ -2201,10 +2205,11 @@ class SurvivalGameEngine {
 
       case 'donut': {
         // 城门修复+200HP，全局食物+100
+        const addFood = this._applyThemeLootAmount(100);
         this.gateHp = Math.min(this.gateMaxHp, this.gateHp + 200);
-        this.food   = Math.min(2000, this.food + 100);
+        this.food   = Math.min(2000, this.food + addFood);
         effects.addGateHp = 200;
-        effects.addFood   = 100;
+        effects.addFood   = addFood;
         needsResourceSync = true;
         break;
       }
@@ -2246,13 +2251,16 @@ class SurvivalGameEngine {
         // audit-r6 P1-E6 §30.7：G03 限时皮肤（覆盖阶段皮肤，持续到下一次昼夜切换结束）
         if (playerId) this._applyGiftSkin(playerId, 'G03');
         // 超级补给：食物+500、煤炭+200、矿石+100、城门+300HP；触发 GIFT_PAUSE 3000ms
-        this.food    = Math.min(2000, this.food    + 500);
-        this.coal    = Math.min(1500, this.coal    + 200);
-        this.ore     = Math.min(800, this.ore     + 100);
+        const addFood = this._applyThemeLootAmount(500);
+        const addCoal = this._applyThemeLootAmount(200);
+        const addOre  = this._applyThemeLootAmount(100);
+        this.food    = Math.min(2000, this.food    + addFood);
+        this.coal    = Math.min(1500, this.coal    + addCoal);
+        this.ore     = Math.min(800, this.ore     + addOre);
         this.gateHp  = Math.min(this.gateMaxHp, this.gateHp + 300);
-        effects.addFood   = 500;
-        effects.addCoal   = 200;
-        effects.addOre    = 100;
+        effects.addFood   = addFood;
+        effects.addCoal   = addCoal;
+        effects.addOre    = addOre;
         effects.addGateHp = 300;
         effects.giftPause = 3000;
         this.broadcast({ type: 'gift_pause', timestamp: Date.now(), data: { duration: 3000 } });
@@ -3361,6 +3369,8 @@ class SurvivalGameEngine {
 
     this._clearAllTimers();
     this.state = 'settlement';
+    // 结算期不是夜晚/恢复期，room_state 不应继承上一阶段 variant。
+    this._currentPhaseVariant = null;
 
     // §16.6 fortressDayBefore：_onRoomFail 会修改 this.fortressDay，必须先缓存
     const fortressDayBefore = this.fortressDay || 1;
@@ -3765,9 +3775,9 @@ class SurvivalGameEngine {
    * 这些倍率在 _initActiveMonsters 中被消费（与难度 / 动态难度相乘）。
    *
    * MVP 实现的主题效果：
-   *   blood_moon: 怪物 HP ×1.2（资源掉落 ×1.2 暂未接入，TODO）
+   *   blood_moon: 怪物 HP ×1.2，礼物资源掉落 ×1.2
    *   frenzy:     maxAliveMonsters 上浮（由客户端消费；服务端仅标记）
-   *   snowstorm:  白天采矿 ×0.9（TODO 接入 _applyWorkEffect）
+   *   snowstorm:  白天采矿 ×0.9
    *   dawn/serene: 仅时长调整（由 GlobalClock 内部处理）
    */
   _applyThemeRulesForNight() {
@@ -3814,6 +3824,30 @@ class SurvivalGameEngine {
    * 避免硬编码 15 导致主题加成失效。
    * @returns {number}
    */
+  _currentSeasonThemeId() {
+    return (this.seasonMgr && this.seasonMgr.themeId) || 'classic_frozen';
+  }
+
+  _effectiveThemeDayMiningMult() {
+    return this._currentSeasonThemeId() === 'snowstorm'
+      ? 0.9
+      : (this._themeDayMiningMult || 1.0);
+  }
+
+  _effectiveThemeLootMult() {
+    return this._currentSeasonThemeId() === 'blood_moon'
+      ? 1.2
+      : (this._themeLootMult || 1.0);
+  }
+
+  _effectiveThemeNightOreBonus() {
+    return this._currentSeasonThemeId() === 'snowstorm' ? 1 : 0;
+  }
+
+  _applyThemeLootAmount(baseAmount) {
+    return Math.max(0, Math.round(baseAmount * this._effectiveThemeLootMult()));
+  }
+
   _effectiveMaxAliveMonsters() {
     return MAX_ALIVE_MONSTERS + (this._themeMaxAliveBonus || 0);
   }
@@ -4350,8 +4384,8 @@ class SurvivalGameEngine {
     const doubleMult = (workerTier >= 3 && this.state === 'day' && isMiningCmd && Math.random() < 0.10) ? 2 : 1;
 
     // audit-r4 §36.4 snowstorm 白天采矿 ×0.9（仅 cmd 1/2/3 + state==='day' 生效，cmd 4 添柴不受影响）
-    const themeMiningMult = (this._themeDayMiningMult && this.state === 'day' && isMiningCmd)
-      ? this._themeDayMiningMult : 1.0;
+    const themeMiningMult = (this.state === 'day' && isMiningCmd)
+      ? this._effectiveThemeDayMiningMult() : 1.0;
 
     // audit-r7 §30.7 礼物限时皮肤被动数值：
     //   G01（T4 炽热矿工）：每次发送工作指令（1-4）额外 +2 炉温
@@ -4371,7 +4405,8 @@ class SurvivalGameEngine {
         this.coal = Math.min(1500, this.coal + Math.round(3 * totalMult * doubleMult * themeMiningMult * giftMiningMult));
         break;
       case 3: // 采矿（矿脉事件额外加成）
-        this.ore = Math.min(800, this.ore + Math.round(2 * totalMult * (this.oreBonus || 1.0) * doubleMult * themeMiningMult * giftMiningMult));
+        var themeNightOreBonus = (this.state === 'night') ? this._effectiveThemeNightOreBonus() : 0;
+        this.ore = Math.min(800, this.ore + Math.round(2 * totalMult * (this.oreBonus || 1.0) * doubleMult * themeMiningMult * giftMiningMult) + themeNightOreBonus);
         break;
       case 4: // 添柴升温：每次+3℃（策划案要求），消耗1煤炭
         this.furnaceTemp = Math.min(this.maxTemp, this.furnaceTemp + Math.round(3 * totalMult));
@@ -9718,6 +9753,29 @@ class SurvivalGameEngine {
     if (cfg.price < 1000) return;              // 静默忽略（<1000 直接购买）
     // MVP PM 决策：_roomCreatorId 鉴权放开，任何玩家都可发起 prepare
 
+    // 🔴 audit-r46 GAP-m-01：prepare 缺 phase 校验 → 5s confirm 才返 wrong_phase（pending 池浪费 + UX 差）
+    //   与 handleShopPurchase line 9846 校验对齐，提前拦截在 phase 不允许时（如 idle/loading/settlement）
+    if (!this._shopIsPhaseAllowed(itemId)) {
+      return this._shopFailPurchase('wrong_phase', itemId, null, playerId);
+    }
+
+    // 🔴 audit-r46 GAP-m-02：prepare 缺 season_locked 校验 → 赛季末 5min 内仍可生成 pending，5s confirm 才被拒
+    //   与 handleShopPurchase line 9865-9878 校验对齐
+    if (this.seasonMgr && this.globalClock) {
+      const _seasonDay = this.seasonMgr.seasonDay || 1;
+      const _phase = this.globalClock._phase;
+      if (_seasonDay === 7 && _phase === 'night') {
+        let _remainingSec = 600;
+        try {
+          _remainingSec = typeof this.globalClock.getPhaseRemainingSec === 'function'
+            ? this.globalClock.getPhaseRemainingSec() : 600;
+        } catch (_) { _remainingSec = 600; }
+        if (_remainingSec <= 300) {
+          return this._shopFailPurchase('season_locked', itemId, null, playerId);
+        }
+      }
+    }
+
     // audit-r6 P1-E3：§39.8 赛季限定 SKU（B9/B10）双守门
     //   1. seasonDay < minSeasonDay → not_unlocked_yet { unlockDay }
     //   2. _lifetimeContrib[playerId] < lifetimeContribMin → not_unlocked_yet { minLifetimeContrib }
@@ -9781,7 +9839,7 @@ class SurvivalGameEngine {
    *  7. B 类 → owned.push(itemId)
    *  8. 广播 shop_purchase_confirm（房间广播，带 remainingContrib / remainingBalance）
    */
-  handleShopPurchase(playerId, playerName, itemId, pendingId) {
+  handleShopPurchase(playerId, playerName, itemId, pendingId, source = 'hud') {
     if (!playerId) return;
 
     // 1) itemId 存在性
@@ -9804,6 +9862,10 @@ class SurvivalGameEngine {
       }
     }
     if (!cfg) return this._shopFailPurchase('item_not_found', itemId, null, playerId);
+
+    if (source !== 'barrage' && cfg.category === 'B' && cfg.price >= 1000 && !pendingId) {
+      return this._shopFailPurchase('pending_required', itemId, null, playerId);
+    }
 
     // 2) phase 校验
     if (!this._shopIsPhaseAllowed(itemId)) {

@@ -268,7 +268,17 @@ namespace DrscfZ.UI
         /// </summary>
         private void HandleRoomStateForExpeditionCount(RoomStateData data)
         {
-            if (data == null || data.expeditions == null) return;
+            if (data == null) return;
+            string newTribeWarState = data.tribeWar != null && !string.IsNullOrEmpty(data.tribeWar.state)
+                ? data.tribeWar.state
+                : "idle";
+            if (newTribeWarState != _tribeWarState)
+            {
+                Debug.Log($"[BroadcasterDecisionHUD] room_state sync tribeWar: {_tribeWarState} -> {newTribeWarState}");
+                _tribeWarState = newTribeWarState;
+                RefreshCards();
+            }
+            if (data.expeditions == null) return;
             int newCount = data.expeditions.Length;
             if (newCount != _activeExpeditionsCount)
             {

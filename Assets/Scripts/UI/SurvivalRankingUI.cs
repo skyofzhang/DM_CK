@@ -39,6 +39,10 @@ namespace DrscfZ.UI
     /// </summary>
     public class SurvivalRankingUI : MonoBehaviour
     {
+        // 🔴 audit-r46 GAP-m-06：加 Instance 单例供 SurvivalSettlementUI:690 调用
+        //   原 FindObjectOfType<SurvivalRankingUI>(true) 每次点击全场扫描所有 inactive GO
+        public static SurvivalRankingUI Instance { get; private set; }
+
         [Header("面板")]
         [SerializeField] private GameObject _panel;
         [SerializeField] private GameObject _overlay;
@@ -88,6 +92,10 @@ namespace DrscfZ.UI
 
         private void Awake()
         {
+            // 🔴 audit-r46 GAP-m-06：单例守门（避免 Instantiate 多份）
+            if (Instance != null && Instance != this) { Destroy(gameObject); return; }
+            Instance = this;
+
             CollectRows();
 
             // 使用 Inspector 引用的页签素材
@@ -135,7 +143,11 @@ namespace DrscfZ.UI
 
         private void OnEnable()  { TrySubscribe(); }
         private void OnDisable() { Unsubscribe(); }
-        private void OnDestroy() { Unsubscribe(); }
+        private void OnDestroy()
+        {
+            Unsubscribe();
+            if (Instance == this) Instance = null;
+        }
 
         private void TrySubscribe()
         {

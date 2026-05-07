@@ -111,7 +111,13 @@ namespace DrscfZ.UI
         private void HandleWaitingPhaseStarted(WaitingPhaseStartedData data)
         {
             if (data == null) return;
-            int durationSec = data.durationSec > 0 ? data.durationSec : 30;
+            // 🔴 audit-r46 GAP-M-01：服务端两路径字段不同，必须双 fallback
+            //   season_prepare_started 路径：发 durationSec=30（SeasonManager.js:201）
+            //   waiting_phase_started 路径：发 countdownSec=waitSec（SurvivalGameEngine.js:4999，通常 15s）
+            //   原 `data.durationSec > 0 ? data.durationSec : 30` 让 boss 波前永远 fallback 到 30s（与服务端实际不符）
+            int durationSec = data.durationSec  > 0 ? data.durationSec
+                            : data.countdownSec > 0 ? data.countdownSec
+                            : 30;
 
             // r15 GAP-B-MAJOR-04 / GAP-D-MAJOR-02：消费 waveIdx + nightModifier 区分两种触发源
             //   waveIdx > 0 → audit-r6 §36.10 夜晚 Boss 波前窗口（显示倒计时 + nightModifier 氛围信息）

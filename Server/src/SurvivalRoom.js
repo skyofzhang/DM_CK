@@ -900,9 +900,11 @@ class SurvivalRoom {
         // §36.12 shop 门槛
         const itemIdP = (data && data.itemId) || '';
         if (!this._checkFeatureOrFail('shop', 'shop_purchase_failed', { itemId: itemIdP }, ws)) break;
-        // ⚠️ audit-r24 GAP-E24-20：补 _requireBroadcaster 守门（与策划案 §39.7 line 7175 对齐）
-        // r24 之前任何观众都可发起 prepare，恶意脚本可占用 pending 池（虽有"同主播 ≤1 pending"清理但攻击者可绕过）。
-        // 现限制只有主播能 prepare，与 §24 主播专属操作链路一致。
+        // ⚠️ audit-r24 GAP-E24-20 / 🔴 audit-r46 GAP-M-04（codex 路线 B）：
+        //   shop_purchase_prepare 走 _requireBroadcaster，与 §24.3 主播专属动作统一；
+        //   非主播单播 broadcaster_action_failed/not_broadcaster，且不会创建 pending（§17.16 modal 安全意图保留）。
+        //   §39.7 旧版"否则静默忽略不回错"已废弃 — 现策略：服务端返失败用于审计/调试，
+        //   客户端对 reason==='not_broadcaster' 静默不弹红 toast（B' 优化，详见 SurvivalGameManager.HandleBroadcasterActionFailed）。
         if (!this._requireBroadcaster(ws, 'shop_purchase_prepare')) break;
         // { itemId } — 仅主播 HUD B 类 ≥1000 时客户端调用
         const pid    = ws._playerId || (data && data.playerId) || '';
@@ -919,7 +921,7 @@ class SurvivalRoom {
                           || (this.survivalEngine.playerNames && this.survivalEngine.playerNames[pid])
                           || pid;
         const pendingId = (data && data.pendingId) || null;
-        this.survivalEngine.handleShopPurchase(pid, pname, itemIdPr, pendingId);
+        this.survivalEngine.handleShopPurchase(pid, pname, itemIdPr, pendingId, 'hud');
         break;
       }
       case 'shop_equip': {
@@ -1066,6 +1068,30 @@ class SurvivalRoom {
         }
         break;
       }
+      // 🔴 audit-r46 GAP-M-02 codex 方案 D：远征怪命中事件 C→S
+      //   客户端 MonsterController 命中目标动画时上报，服务端 TribeWarSession.handleExpeditionHit 校验 + 结算
+      //   不需要 _requireBroadcaster 守门：观众客户端的 MonsterController 也会上报命中（每只怪一次，幂等）
+      //   防伪造由 sessionId + monsterId + earliestHitAt 三层校验保证
+      case 'tribe_war_expedition_hit': {
+        if (!this.tribeWarMgr) break;
+        const sid       = (data && data.sessionId)  || '';
+        const mid       = (data && data.monsterId)  || '';
+        const tgtType   = (data && data.targetType) || '';
+        if (!sid || !mid) break;
+        const session = this.tribeWarMgr._sessions.get(sid);
+        if (!session) {
+          console.log(`[SurvivalRoom:${this.roomId}] tribe_war_expedition_hit reject: session ${sid} not found`);
+          break;
+        }
+        // 仅防守方房间转发（防止攻击方观众端伪造命中）
+        if (session.defender !== this) {
+          console.log(`[SurvivalRoom:${this.roomId}] tribe_war_expedition_hit reject: not defender of session ${sid}`);
+          break;
+        }
+        session.handleExpeditionHit(mid, tgtType);
+        break;
+      }
+
       case 'tribe_war_retaliate': {
         if (!this._requireBroadcaster(ws, 'tribe_war_retaliate')) break;
         // §36.12 tribe_war 门槛（反击也走同一锁）

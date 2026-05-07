@@ -1107,7 +1107,9 @@ namespace DrscfZ.Survival
         public string itemId;
         public string category;         // 'A' | 'B'
         public int    remainingContrib; // 本局剩余贡献（A 类扣费后）
-        public int    remainingBalance; // 终身余额（B 类扣费后）
+        // 🔴 audit-r46 GAP-m-03：与 ShopInventoryData.lifetimeContrib (long) + 策划案 §39.10 行 6544 _contribBalance:int64 对齐
+        //   原 int 与服务端 _contribBalance（无上限累加 finalAmount × catchUpMult）类型不一致
+        public long   remainingBalance; // 终身余额（B 类扣费后）
     }
 
     /// <summary>购买失败，仅回发起方（type=shop_purchase_failed，§39.11）</summary>
@@ -1280,6 +1282,22 @@ namespace DrscfZ.Survival
         public string monsterId;
         public int    hp;
         public int    atk;
+        // 🔴 audit-r46 GAP-M-02 codex 方案 D：服务端 TribeWarSession.releaseExpedition emit
+        //   每只远征怪 spawn 后 EXPEDITION_TRAVEL_TIME_MS（默认 5000ms）+ i*200ms 错峰起可命中目标
+        //   客户端 MonsterController.DoAttack 命中动画前需校验 DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() >= earliestHitAt
+        //   服务端再校验一次防伪造；fallback 30s 兜底（详见 TribeWarSession._expeditionMonsters）
+        public long   earliestHitAt;  // Unix ms；0 表示旧协议不带该字段（兼容）
+    }
+
+    /// <summary>🔴 audit-r46 GAP-M-02 codex 方案 D：远征怪命中事件 C→S
+    ///   客户端 MonsterController.DoAttack 命中目标动画时上报，服务端 TribeWarSession.handleExpeditionHit 校验 + 结算
+    ///   每只 monsterId 仅结算 1 次（服务端防重放）；早于 earliestHitAt 的事件被拒绝</summary>
+    [Serializable]
+    public class TribeWarExpeditionHitData
+    {
+        public string sessionId;
+        public string monsterId;
+        public string targetType;   // 'worker' | 'gate' | 'building_skeleton'（MVP 服务端不区分）
     }
 
     /// <summary>战报条目（type=tribe_war_combat_report / tribe_war_combat_report_defense，双方视角各自广播）。
@@ -1854,7 +1872,7 @@ namespace DrscfZ.Survival
 
     // ==================== §36.10 WaitingPhase（🆕 v1.27+ audit-r3/P1） ====================
 
-    /// <summary>WaitingPhase 窗口开始（type=waiting_phase_started，S→C）。
+    /// <summary>WaitingPhase 窗口开始（type=waiting_phase_started 或 season_prepare_started，S→C）。
     /// 两种触发源共用同一消息类型：
     ///   1) SeasonManager 赛季切换时广播（durationSec/newSeasonId/newThemeId 三字段）
     ///   2) audit-r6 §36.10：SurvivalGameEngine 夜晚 Boss 波前广播（waveIdx/countdownSec/allowVoteTypes）
@@ -1877,7 +1895,7 @@ namespace DrscfZ.Survival
         public NightModifierData nightModifier;
     }
 
-    /// <summary>准备窗口结束（type=waiting_phase_ended，S→C）。
+    /// <summary>准备窗口结束（type=waiting_phase_ended 或 season_prepare_ended，S→C）。
     /// 无字段（空 data 对象即可）；客户端用于兜底关闭 WaitingPhaseUI。</summary>
     [Serializable]
     public class WaitingPhaseEndedData

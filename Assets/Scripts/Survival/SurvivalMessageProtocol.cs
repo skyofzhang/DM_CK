@@ -195,8 +195,10 @@ namespace DrscfZ.Survival
         public const string FirstBarrage  = "first_barrage";  // S→C：本局首次发送 1-6 弹幕 → 全房广播庆祝
 
         // ----- §36.10 WaitingPhase（🆕 v1.27+ audit-r3/P1） -----
-        public const string WaitingPhaseStarted = "waiting_phase_started"; // S→C：新赛季 30s 准备窗口开始
-        public const string WaitingPhaseEnded   = "waiting_phase_ended";   // S→C：准备窗口结束（兜底 UI 隐藏）
+        public const string WaitingPhaseStarted = "waiting_phase_started"; // S→C：波次等待窗口开始
+        public const string WaitingPhaseEnded   = "waiting_phase_ended";   // S→C：波次等待窗口结束
+        public const string SeasonPrepareStarted = "season_prepare_started"; // S→C：新赛季 30s 准备窗口开始
+        public const string SeasonPrepareEnded   = "season_prepare_ended";   // S→C：新赛季准备窗口结束
 
         // ----- audit-r5 客户端补齐（🆕 v1.27+） -----
         // v1.27 §14 / §19 / §34.4 E9 废止：DifficultyChanged 常量已删除

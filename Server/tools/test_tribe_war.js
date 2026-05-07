@@ -62,6 +62,7 @@ function makeSession(damageMultiplier = 1.0) {
     defenderEngine._activeMonsters.set(`m${i}`, { id: `m${i}` });
   }
   session.energy = 100;
+  const beforeRelease = Date.now();
   session.releaseExpedition(5);
 
   assert.strictEqual(defenderEngine._activeMonsters.size, 15, 'remote monsters should respect defender cap');
@@ -73,6 +74,7 @@ function makeSession(damageMultiplier = 1.0) {
   assert.ok(incoming, 'defender should receive expedition incoming payload');
   assert.deepStrictEqual(incoming.data.monsterIds, [remote.id], 'incoming payload should carry the authoritative monster id');
   assert.strictEqual(incoming.data.monsters[0].monsterId, remote.id, 'incoming monster detail should match spawned id');
+  assert.ok(incoming.data.monsters[0].earliestHitAt - beforeRelease >= 12000, 'earliestHitAt should use a travel-time ETA, not the old 5s shortcut');
   session.end('test');
 }
 
@@ -124,6 +126,31 @@ function makeSession(damageMultiplier = 1.0) {
   session._damageBuildingSkeleton('tw_build_kill');
   assert.ok(!defenderEngine._buildingInProgress.has('market'), 'low-progress skeleton should be demolished');
   assert.ok(defenderEngine.broadcasts.find(m => m.type === 'build_demolished' && m.data.reason === 'attacked'), 'demolition should broadcast attacked reason');
+  session.end('test');
+}
+
+{
+  const { session, defenderEngine } = makeSession(1.0);
+  const now = Date.now();
+  defenderEngine._buildingInProgress.set('watchtower', {
+    startedAt: now - 50000,
+    completesAt: now + 50000,
+    totalMs: 100000,
+    timer: null,
+    progressTimer: null,
+  });
+  session.energy = 20;
+  const originalRandom = Math.random;
+  Math.random = () => 0.0;
+  try {
+    session.releaseExpedition(1);
+  } finally {
+    Math.random = originalRandom;
+  }
+  assert.strictEqual(session.stolenFood + session.stolenCoal + session.stolenOre, 0, 'expedition should not steal at spawn time');
+  const mid = defenderEngine._activeMonsters.keys().next().value;
+  assert.strictEqual(session.handleExpeditionHit(mid, 'worker'), false, 'hit before earliestHitAt should be rejected');
+  assert.strictEqual(defenderEngine._buildingInProgress.get('watchtower').completesAt, now + 50000, 'expedition should not damage building at spawn time');
   session.end('test');
 }
 

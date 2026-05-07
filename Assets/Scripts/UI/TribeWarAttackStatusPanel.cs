@@ -69,11 +69,45 @@ namespace DrscfZ.UI
         private void Start()
         {
             if (_btnStop != null) _btnStop.onClick.AddListener(OnStopClicked);
+
+            // 🔴 audit-r46 GAP-M-05：订阅 room_state 重连恢复事件
+            //   原 SGM case "room_state" 完全跳过 tribeWar 字段 → 攻击方面板重连后永久消失
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm != null) sgm.OnTribeWarRestore += HandleTribeWarRestore;
         }
 
         private void OnDestroy()
         {
+            // 🔴 audit-r46 GAP-M-05：解除订阅
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm != null) sgm.OnTribeWarRestore -= HandleTribeWarRestore;
+
             if (Instance == this) Instance = null;
+        }
+
+        // 🔴 audit-r46 GAP-M-05：断线重连时从 room_state.tribeWar 恢复攻击方面板
+        //   仅当 role=='attacker' 时显示；InProgressData 缺 defenderStreamerName，
+        //   显示 targetRoomId 占位（服务端后续可补字段）
+        private void HandleTribeWarRestore(TribeWarInProgressData data)
+        {
+            if (data == null || data.role != "attacker") return;
+            _sessionId       = data.sessionId;
+            _defenderName    = !string.IsNullOrEmpty(data.targetRoomId) ? data.targetRoomId : "—";
+            _expeditionCount = data.stats != null ? data.stats.expeditionsSent : 0;
+            _energy          = data.energyAccumulated;
+            _stolenFood      = data.stolenResources != null ? data.stolenResources.food : 0;
+            _stolenCoal      = data.stolenResources != null ? data.stolenResources.coal : 0;
+            _stolenOre       = data.stolenResources != null ? data.stolenResources.ore  : 0;
+            _reportLines.Clear();
+            _reportLines.Enqueue("[重连恢复] 攻防战进行中…");
+
+            if (_panel == null) return;
+            _panel.SetActive(true);
+            if (_titleText != null) _titleText.text = $"攻击目标：{_defenderName}";
+            UpdateEnergyUI();
+            UpdateExpeditionCountUI();
+            UpdateStolenUI();
+            UpdateReportUI();
         }
 
         // ==================== 对外接口 ====================

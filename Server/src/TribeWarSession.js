@@ -12,14 +12,28 @@
  *   damageMultiplier   — §37 beacon 反击 ×1.5 预留（MVP 默认 1.0）
  *   _noEnergyTimer     — 每 10s 检查 lastEnergyAt 是否超 180s
  *
- * MVP 口径：
- *   - 远征怪"伤害/偷取/保底"不走独立战斗循环，而是在 releaseExpedition() 时
- *     立即对防守方 `_activeMonsters` 追加远征怪实例；后续由 defender 自身的 _spawnWave 兜底结算。
- *     偷取事件由 session 调用 `onExpeditionHitWorker()` 触发（当前从 releaseExpedition 发起，
- *     按远征怪只数依次 roll；严格遵守策划案 §35.5 30% 概率）。
- *   - 保底机制：防守方资源全 0 时，给予城门伤害 ×1.5 加成（通过广播 bobao 提示；实际城门 HP 扣除
- *     走 defender 的 `_spawnWave(gate damage)` 流水线——MVP 直接在 session 内扣）
+ * MVP 口径（🔴 audit-r46 GAP-M-02 codex 方案 D 重构后）：
+ *   - 远征怪 spawn 后立即追加到 defender._activeMonsters（占 maxAliveMonsters 名额）；
+ *     服务端给每只远征怪 emit `earliestHitAt`（spawn + 按距离/速度估算的 travel ETA）字段。
+ *   - 客户端 MonsterController 命中目标动画时上报 `tribe_war_expedition_hit { sessionId, monsterId, targetType }`，
+ *     服务端 handleExpeditionHit() 校验 earliestHitAt + monsterId 后调真正结算（_damageBuildingSkeleton + onExpeditionHitWorker）。
+ *   - Fallback 定时器：spawn 后 EXPEDITION_FALLBACK_MS（30s）仍未收到 hit 事件 → 强制 instant-settle 1 次保底。
+ *   - 防重放：每只 monsterId 仅结算 1 次（_resolvedHitMonsters Set 跟踪）；客户端伪造的早于 earliestHitAt 命中事件被拒绝。
+ *   - 历史背景：r1-r45 长期使用「spawn 后 3-4.6s 立即 instant-settle」MVP 简化（_scheduleExpeditionHit），
+ *     违反策划案 §35.5「命中目标」/ §37.4「近身攻击骨架」明文。codex 评估后改为本节方案 D 混合模式。
  */
+
+// 🔴 audit-r46 GAP-M-02 codex 方案 D 常量
+//   远征怪 ETA：按 Unity 刷怪点 SpawnTop z≈28 → 城门 z≈-4、MonsterWaveSpawner 速度公式估算。
+//   EXPEDITION_FALLBACK_MS：spawn 后该时长仍未收到客户端 hit 事件 → 服务端强制 instant-settle 1 次保底（防丢包）
+const EXPEDITION_SPAWN_TOP_Z        = 28;
+const EXPEDITION_GATE_Z             = -4;
+const EXPEDITION_BASE_SPEED         = 1.8;
+const EXPEDITION_DAY_SPEED_BONUS    = 0.1;
+const EXPEDITION_ATTACK_WINDUP_MS   = 1000;
+const EXPEDITION_TIMING_BUFFER_MS   = 1000;
+const EXPEDITION_MIN_TRAVEL_TIME_MS = 12000;
+const EXPEDITION_FALLBACK_MS        = 30000;
 
 class TribeWarSession {
   /**
@@ -47,6 +61,11 @@ class TribeWarSession {
     this.damageMultiplier = (typeof damageMultiplier === 'number') ? damageMultiplier : 1.0;
 
     this._ended = false;
+    this._expeditionHitTimers = new Set();
+    // 🔴 audit-r46 GAP-M-02 codex 方案 D：
+    //   _expeditionMonsters: monsterId → { earliestHitAt, fallbackTimer, resolved }
+    //   防重放 + earliestHitAt 校验 + fallback 定时器跟踪
+    this._expeditionMonsters = new Map();
 
     // P2：3 分钟无能量自动断开检测（每 10s 扫描一次）
     this._noEnergyTimer = setInterval(() => {
@@ -58,6 +77,16 @@ class TribeWarSession {
         this._mgr.stopAttack(this.id, 'no_energy');
       }
     }, 10 * 1000);
+  }
+
+  _estimateExpeditionTravelMs(defEngine) {
+    const day = Math.max(1, (defEngine && defEngine.currentDay) || 1);
+    const speed = Math.max(0.1, EXPEDITION_BASE_SPEED + day * EXPEDITION_DAY_SPEED_BONUS);
+    const distance = Math.abs(EXPEDITION_SPAWN_TOP_Z - EXPEDITION_GATE_Z);
+    const travelMs = Math.ceil((distance / speed) * 1000)
+      + EXPEDITION_ATTACK_WINDUP_MS
+      + EXPEDITION_TIMING_BUFFER_MS;
+    return Math.max(EXPEDITION_MIN_TRAVEL_TIME_MS, travelMs);
   }
 
   // ==================== 能量 ====================
@@ -155,6 +184,8 @@ class TribeWarSession {
     // ── 追加到 defender._activeMonsters（占 maxAliveMonsters 名额）──
     const monsterIds = [];
     const monsterPayloads = [];
+    const _spawnNow = Date.now();
+    const travelMs = this._estimateExpeditionTravelMs(defEngine);
     for (let i = 0; i < spawnCount; i++) {
       defEngine._monsterIdCounter = (defEngine._monsterIdCounter || 0) + 1;
       const mid = `tw_${this.id}_${defEngine._monsterIdCounter}`;
@@ -167,7 +198,11 @@ class TribeWarSession {
         tribeWarSessionId: this.id,
       });
       monsterIds.push(mid);
-      monsterPayloads.push({ monsterId: mid, hp, atk });
+      // 🔴 audit-r46 GAP-M-02 codex 方案 D：
+      //   每只远征怪轻微错峰（i × 200ms）模拟出怪间隔 + 服务端估算旅行时间 = earliestHitAt
+      //   客户端 MonsterController.DoAttack 命中目标动画时若 now < earliestHitAt → 拒发 hit 事件（防伪造命中）
+      const earliestHitAt = _spawnNow + travelMs + i * 200;
+      monsterPayloads.push({ monsterId: mid, hp, atk, earliestHitAt });
     }
 
     const attackerName = this.attacker.streamerName || this.attacker.roomId;
@@ -208,23 +243,101 @@ class TribeWarSession {
       console.warn(`[TribeWarSession:${this.id}] expedition protocol error: ${e.message}`);
     }
 
-    // ── 每只远征怪独立 roll 偷取（策划案 §35.5）──
-    for (const mid of monsterIds) {
-      this._damageBuildingSkeleton(mid);
-      this.onExpeditionHitWorker(mid);
+    // 🔴 audit-r46 GAP-M-02 codex 方案 D：
+    //   原 r1-r45 每只远征怪 spawn 后 3-4.6s 立即 instant-settle（_scheduleExpeditionHit），违反策划案
+    //   §35.5「命中目标」/ §37.4「近身攻击骨架」明文。改为客户端命中事件驱动 + 服务端 fallback 兜底。
+    //   每只怪注册 fallback 定时器：spawn 后 EXPEDITION_FALLBACK_MS（30s）仍未收到 hit → 强制 instant-settle 1 次。
+    for (let i = 0; i < monsterIds.length; i++) {
+      const mid = monsterIds[i];
+      const earliestHitAt = monsterPayloads[i].earliestHitAt;
+      const fallbackTimer = setTimeout(() => {
+        this._expeditionHitTimers.delete(fallbackTimer);
+        if (this._ended) return;
+        const meta = this._expeditionMonsters.get(mid);
+        if (!meta || meta.resolved) return;
+        meta.resolved = true;
+        console.log(`[TribeWarSession:${this.id}] expedition fallback fire: monsterId=${mid} (客户端 hit 事件丢失，强制结算)`);
+        this._resolveExpeditionHit(mid, 'fallback');
+      }, EXPEDITION_FALLBACK_MS);
+      this._expeditionHitTimers.add(fallbackTimer);
+      this._expeditionMonsters.set(mid, { earliestHitAt, fallbackTimer, resolved: false });
     }
 
-    console.log(`[TribeWarSession:${this.id}] releaseExpedition: count=${spawnCount}/${count}, energy→${this.energy}, expeditions=${this.expeditionsSent}, atk=${atk}, dm=${this.damageMultiplier || 1.0}`);
+    console.log(`[TribeWarSession:${this.id}] releaseExpedition: count=${spawnCount}/${count}, energy→${this.energy}, expeditions=${this.expeditionsSent}, atk=${atk}, dm=${this.damageMultiplier || 1.0}, earliestHitAt(first)=${monsterPayloads[0] && monsterPayloads[0].earliestHitAt}`);
   }
 
   /**
-   * 远征怪"命中"事件：30% 偷资源；全 0 时对城门造成 ×1.5 额外伤害。
-   *
-   * MVP 简化：由 releaseExpedition 立即 roll（而非在 _spawnWave 实际打到矿工时）；
-   * 这样保证能量 → 资源偷取的事件链完整，即使守方矿工全死也能结算。
+   * 🔴 audit-r46 GAP-M-02 codex 方案 D：处理 C→S 远征怪命中事件
+   *   客户端 MonsterController.DoAttack 命中目标时 emit `tribe_war_expedition_hit { sessionId, monsterId, targetType }`
+   *   - 防伪造：sessionId 必须匹配本 session
+   *   - 防重放：每只 monsterId 仅结算 1 次（_expeditionMonsters[mid].resolved 标记）
+   *   - 防早发：当前时间必须 ≥ earliestHitAt（防客户端篡改时序立刻命中）
+   *   - 防鬼魂：monsterId 必须仍在 defender._activeMonsters 且 currentHp > 0
    *
    * @param {string} monsterId
+   * @param {string} targetType  'worker' | 'gate' | 'building_skeleton'（MVP 不区分实际目标，统一调结算）
+   * @returns {boolean} 是否成功结算
    */
+  handleExpeditionHit(monsterId, targetType) {
+    if (this._ended) return false;
+    const meta = this._expeditionMonsters.get(monsterId);
+    if (!meta) {
+      console.log(`[TribeWarSession:${this.id}] handleExpeditionHit reject: monsterId=${monsterId} 不属于本 session`);
+      return false;
+    }
+    if (meta.resolved) {
+      console.log(`[TribeWarSession:${this.id}] handleExpeditionHit reject: monsterId=${monsterId} 已结算（防重放）`);
+      return false;
+    }
+    const now = Date.now();
+    if (now < meta.earliestHitAt) {
+      console.log(`[TribeWarSession:${this.id}] handleExpeditionHit reject: monsterId=${monsterId} now(${now}) < earliestHitAt(${meta.earliestHitAt})`);
+      return false;
+    }
+    const defEngine = this.defender && this.defender.survivalEngine;
+    const monster = defEngine && defEngine._activeMonsters && defEngine._activeMonsters.get(monsterId);
+    if (!monster || monster.currentHp <= 0) {
+      console.log(`[TribeWarSession:${this.id}] handleExpeditionHit reject: monsterId=${monsterId} 已不存在或已死亡`);
+      return false;
+    }
+
+    meta.resolved = true;
+    if (meta.fallbackTimer) {
+      clearTimeout(meta.fallbackTimer);
+      this._expeditionHitTimers.delete(meta.fallbackTimer);
+      meta.fallbackTimer = null;
+    }
+    return this._resolveExpeditionHit(monsterId, targetType || 'unknown');
+  }
+
+  /**
+   * 🔴 audit-r46 GAP-M-02：原 _scheduleExpeditionHit setTimeout 回调内联结算逻辑抽出来复用：
+   *   1) handleExpeditionHit 客户端命中事件路径
+   *   2) fallback 定时器 30s 兜底路径
+   * @private
+   */
+  _resolveExpeditionHit(monsterId, source) {
+    const defEngine = this.defender && this.defender.survivalEngine;
+    if (!defEngine) return false;
+    const monster = defEngine._activeMonsters && defEngine._activeMonsters.get(monsterId);
+    if (!monster || monster.currentHp <= 0) return false;
+    this._damageBuildingSkeleton(monsterId);
+    this.onExpeditionHitWorker(monsterId);
+    console.log(`[TribeWarSession:${this.id}] _resolveExpeditionHit: monsterId=${monsterId} source=${source}`);
+    return true;
+  }
+
+  /**
+   * @deprecated 🔴 audit-r46 GAP-M-02：原 r1-r45 「spawn 后 3-4.6s 立即 instant-settle」
+   *   MVP 简化路径，违反策划案 §35.5「命中目标」/ §37.4「近身攻击骨架」明文。已被 codex 方案 D 替换为：
+   *     1) 客户端 MonsterController 命中目标动画时上报 → handleExpeditionHit()
+   *     2) 服务端 fallback 定时器 30s 兜底（在 releaseExpedition 内联注册）
+   *   保留方法签名作历史向后兼容（确认无外部调用方后可删除）。
+   */
+  _scheduleExpeditionHit(monsterId, delayMs) {
+    console.warn(`[TribeWarSession:${this.id}] _scheduleExpeditionHit deprecated: monsterId=${monsterId} delay=${delayMs} — 应改用 handleExpeditionHit (codex 方案 D)`);
+  }
+
   onExpeditionHitWorker(monsterId) {
     if (this._ended) return;
     const defEngine = this.defender && this.defender.survivalEngine;
@@ -381,6 +494,10 @@ class TribeWarSession {
       clearInterval(this._noEnergyTimer);
       this._noEnergyTimer = null;
     }
+    for (const timer of this._expeditionHitTimers) clearTimeout(timer);
+    this._expeditionHitTimers.clear();
+    // 🔴 audit-r46 GAP-M-02：清理 expedition monster 状态（防重放追踪表）
+    if (this._expeditionMonsters) this._expeditionMonsters.clear();
     console.log(`[TribeWarSession:${this.id}] end(${reason})`);
   }
 

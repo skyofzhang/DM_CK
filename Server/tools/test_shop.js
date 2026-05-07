@@ -151,6 +151,21 @@ test('T2: B 类 ≥1000 prepare 生成 pendingId + 应答 shop_purchase_confirm_
   assert.strictEqual(eng._shopPendingPurchases.size, 0, '<1000 不进 pending');
   // 无任何广播（prepare 静默忽略 <1000）
   const silentPrompt = findBroadcast(eng, 'shop_purchase_confirm_prompt');
+
+  clearBroadcasts(eng);
+  const pid3 = 'p2_direct_hud';
+  eng._contribBalance[pid3] = 10000;
+  eng._lifetimeContrib[pid3] = 10000;
+  eng.handleShopPurchase(pid3, 'Direct HUD', 'frame_silver', null, 'hud');
+  assert.ok(findBroadcast(eng, 'shop_purchase_failed', d => d.reason === 'pending_required'), 'HUD B>=1000 must require pendingId');
+  assert.strictEqual(eng._contribBalance[pid3], 10000, 'pending_required should not charge balance');
+
+  clearBroadcasts(eng);
+  const pid4 = 'p2_direct_barrage';
+  eng._contribBalance[pid4] = 10000;
+  eng._lifetimeContrib[pid4] = 10000;
+  eng.handleShopPurchase(pid4, 'Direct Barrage', 'frame_silver', null, 'barrage');
+  assert.ok(findBroadcast(eng, 'shop_purchase_confirm', d => d.category === 'B' && d.itemId === 'frame_silver'), 'barrage path may buy B>=1000 without HUD pending');
   assert.ok(!silentPrompt, '<1000 prepare 不应推 prompt');
 });
 
