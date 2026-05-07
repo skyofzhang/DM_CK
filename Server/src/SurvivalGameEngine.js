@@ -498,6 +498,7 @@ class BroadcasterRoulette {
     // 调度到对应 _applyXxx（若返回 endsAt，则记录 effectActive；返回 -1 表示被阻挡，恢复 _pending）
     const endsAt = this._dispatch(cardId, nowMs);
     if (endsAt === -1) {
+      savedPending.autoApplyAt = nowMs + ROULETTE_AUTO_APPLY_MS;
       this._pending = savedPending; // 恢复让主播可重新触发 apply
       console.log(`[Roulette] apply blocked: ${cardId} (pending restored)`);
       return false;
@@ -734,6 +735,7 @@ class SurvivalGameEngine {
     // 持久化已落地：RoomPersistence.js v1→v2 迁移序列化（r14 GAP-E stale 注释清理）
     this._contribBalance              = {};  // {playerId: number} 可消费余额
     this._playerShopInventory         = {};  // {playerId: string[]} 已购 B 类 itemId
+    this._playerShopInventoryMeta     = {};  // {playerId: {itemId: ShopItemPayload}} 历史限定 SKU 元数据
     this._playerShopEquipped          = {};  // {playerId: {title?, frame?, entrance?, barrage?}} 当前装备
     this._shopLastEquipAt             = {};  // {playerId: ts} 2s 冷却时间戳
     this._shopSpotlightActive         = {};  // {playerId: {endsAt}} spotlight 激活状态
@@ -745,6 +747,7 @@ class SurvivalGameEngine {
     this._shopPendingIdCounter        = 0;
     // §39.8 赛季限定 SKU 池（B9/B10）：MVP 未上架，保持空数组；loadSeason() 可注入
     this._seasonShopPool              = [];
+    this._seasonShopArchive           = null;
 
     // F8: 无效指令提示去重 (策划案 §34 F8) —— {`${playerId}:cmd5`|`${playerId}:cmd6day`: true}
     // 每位玩家每种提示类型每局最多显示一次；reset() 清空
@@ -1131,6 +1134,7 @@ class SurvivalGameEngine {
 
     // §39 商店
     if (snap._playerShopInventory && typeof snap._playerShopInventory === 'object') this._playerShopInventory = { ...snap._playerShopInventory };
+    if (snap._playerShopInventoryMeta && typeof snap._playerShopInventoryMeta === 'object') this._playerShopInventoryMeta = { ...snap._playerShopInventoryMeta };
     if (snap._playerShopEquipped  && typeof snap._playerShopEquipped  === 'object') this._playerShopEquipped  = { ...snap._playerShopEquipped };
     if (snap._contribBalance      && typeof snap._contribBalance      === 'object') this._contribBalance      = { ...snap._contribBalance };
 
@@ -2459,6 +2463,7 @@ class SurvivalGameEngine {
       data: {
         playerId,
         owned: Array.isArray(owned) ? owned.slice() : [],
+        ownedItems: this._shopOwnedItemPayloads(playerId),
         equipped: {
           title:    equipped.title    || '',
           frame:    equipped.frame    || '',
@@ -8707,6 +8712,7 @@ class SurvivalGameEngine {
         timestamp: nowMs,
         data: {
           cardId: 'elite_raid',
+          reason: 'elite_overflow',
           preventReason: 'elite_overflow',
           message: '上一只精英怪未击杀',
         },
@@ -9587,6 +9593,106 @@ class SurvivalGameEngine {
   //   - 弹幕 `买A<n>` / `买B<n>` / `装XY`（handleComment 内集成）
   // PM 决策（MVP）见 SHOP_CATALOG 注释。
 
+  _shopSeasonItemToConfig(seasonItem) {
+    if (!seasonItem || !seasonItem.id) return null;
+    return {
+      category: seasonItem.category || 'B',
+      price: Number(seasonItem.price) || 0,
+      slot: seasonItem.slot || null,
+      effect: seasonItem.effect || '',
+      name: seasonItem.name || seasonItem.id,
+      minSeasonDay: Number(seasonItem.minSeasonDay) || 0,
+      lifetimeContribMin: Number(seasonItem.lifetimeContribMin || seasonItem.minLifetimeContrib) || 0,
+      limitedSeasonId: seasonItem.limitedSeasonId || ((this.seasonMgr && this.seasonMgr.seasonId) || ''),
+      _fromSeasonPool: true,
+    };
+  }
+
+  _shopFindArchivedSeasonConfig(itemId, playerId = '') {
+    if (!itemId || !playerId) return null;
+    const owned = this._playerShopInventory[playerId] || [];
+    if (!Array.isArray(owned) || !owned.includes(itemId)) return null;
+
+    if (!this._seasonShopArchive) {
+      const archive = {};
+      try {
+        const path = require('path');
+        const fs = require('fs');
+        const dir = path.join(__dirname, 'season_shop');
+        if (fs.existsSync(dir)) {
+          for (const fileName of fs.readdirSync(dir)) {
+            if (!/^season_\d+\.json$/i.test(fileName)) continue;
+            const file = path.join(dir, fileName);
+            const obj = JSON.parse(fs.readFileSync(file, 'utf8'));
+            const seasonId = obj.season || fileName.replace(/\.json$/i, '');
+            const items = Array.isArray(obj.items) ? obj.items : [];
+            for (const it of items) {
+              if (!it || !it.id) continue;
+              const cfg = this._shopSeasonItemToConfig({ ...it, limitedSeasonId: seasonId });
+              if (cfg) archive[it.id] = cfg;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn(`[Shop] season archive load failed: ${e.message}`);
+      }
+      this._seasonShopArchive = archive;
+    }
+
+    return this._seasonShopArchive[itemId] || null;
+  }
+
+  _shopItemPayload(itemId, cfg) {
+    if (!itemId || !cfg) return null;
+    return {
+      itemId,
+      name: cfg.name || itemId,
+      price: Number(cfg.price) || 0,
+      slot: cfg.slot || null,
+      category: cfg.category || 'B',
+      effect: cfg.effect || '',
+      minLifetimeContrib: Number(cfg.lifetimeContribMin || cfg.minLifetimeContrib) || 0,
+      limitedSeasonId: cfg.limitedSeasonId || '',
+    };
+  }
+
+  _shopFindConfig(itemId, playerId = '') {
+    if (!itemId) return null;
+    const fixed = SHOP_CATALOG[itemId];
+    if (fixed) return fixed;
+    if (Array.isArray(this._seasonShopPool)) {
+      const seasonItem = this._seasonShopPool.find(it => it && it.id === itemId);
+      const cfg = this._shopSeasonItemToConfig(seasonItem);
+      if (cfg) return cfg;
+    }
+    const archived = this._shopFindArchivedSeasonConfig(itemId, playerId);
+    if (archived) return archived;
+    const meta = playerId && this._playerShopInventoryMeta && this._playerShopInventoryMeta[playerId]
+      ? this._playerShopInventoryMeta[playerId][itemId]
+      : null;
+    if (meta) {
+      return {
+        category: meta.category || 'B',
+        price: Number(meta.price) || 0,
+        slot: meta.slot || null,
+        effect: meta.effect || '',
+        name: meta.name || itemId,
+        lifetimeContribMin: Number(meta.minLifetimeContrib || meta.lifetimeContribMin) || 0,
+        limitedSeasonId: meta.limitedSeasonId || '',
+        _fromOwnedMeta: true,
+      };
+    }
+    return null;
+  }
+
+  _shopOwnedItemPayloads(playerId) {
+    const owned = this._playerShopInventory[playerId] || [];
+    if (!Array.isArray(owned)) return [];
+    return owned
+      .map(itemId => this._shopItemPayload(itemId, this._shopFindConfig(itemId, playerId)))
+      .filter(Boolean);
+  }
+
   /**
    * §39 工具：校验 itemId 是否允许在当前 phase 购买（§39.6 购买窗口）
    * state 合法值：idle | loading | day | night | settlement | recovery
@@ -9596,7 +9702,7 @@ class SurvivalGameEngine {
    *   3) doc 注释 "MVP 无独立 recovery variant" 删除（与 _enterRecovery 路径 state='recovery' 矛盾，r19 已实装）
    */
   _shopIsPhaseAllowed(itemId) {
-    let cfg = SHOP_CATALOG[itemId];
+    let cfg = this._shopFindConfig(itemId);
     // §39.8 season shop pool fallback：未在 SHOP_CATALOG 则查 _seasonShopPool（B 类限定 SKU）
     if (!cfg && Array.isArray(this._seasonShopPool)) {
       const seasonItem = this._seasonShopPool.find(it => it && it.id === itemId);
@@ -9711,6 +9817,18 @@ class SurvivalGameEngine {
           });
         }
       }
+      const listedIds = new Set(items.map(it => it.itemId));
+      const ownedMeta = (playerId && this._playerShopInventoryMeta && this._playerShopInventoryMeta[playerId])
+        ? this._playerShopInventoryMeta[playerId]
+        : {};
+      for (const ownedId of Object.keys(ownedMeta)) {
+        if (listedIds.has(ownedId)) continue;
+        const payload = this._shopItemPayload(ownedId, this._shopFindConfig(ownedId, playerId));
+        if (payload) {
+          items.push(payload);
+          listedIds.add(ownedId);
+        }
+      }
     }
     // 应答：按策划案 §39.9，S→C shop_list_data { category, items }
     // audit-r18 GAP-E18-39-01：unicast 同形态延伸（与 r15 player_joined / r16 handleShopInventory / r17 SurvivalRoom locked 三个 emit 点对齐）
@@ -9733,7 +9851,7 @@ class SurvivalGameEngine {
   handleShopPurchasePrepare(playerId, itemId) {
     if (!playerId) return;
     // §39.8 SHOP_CATALOG + _seasonShopPool 合并查找
-    let cfg = SHOP_CATALOG[itemId];
+    let cfg = this._shopFindConfig(itemId, playerId);
     if (!cfg && Array.isArray(this._seasonShopPool)) {
       const seasonItem = this._seasonShopPool.find(it => it && it.id === itemId);
       if (seasonItem) {
@@ -9845,7 +9963,7 @@ class SurvivalGameEngine {
     // 1) itemId 存在性
     // P0-A8：所有 _shopFailPurchase 增加 playerId 参数以单播给发起方
     // §39.8 先查 SHOP_CATALOG；若未找到，再查 _seasonShopPool（B9/B10 赛季限定 SKU）
-    let cfg = SHOP_CATALOG[itemId];
+    let cfg = this._shopFindConfig(itemId, playerId);
     if (!cfg && Array.isArray(this._seasonShopPool)) {
       const seasonItem = this._seasonShopPool.find(it => it && it.id === itemId);
       if (seasonItem) {
@@ -9991,6 +10109,9 @@ class SurvivalGameEngine {
       // 扣费 + 入库存
       this._contribBalance[playerId] = balance - cfg.price;
       owned.push(itemId);
+      if (!this._playerShopInventoryMeta[playerId]) this._playerShopInventoryMeta[playerId] = {};
+      const metaPayload = this._shopItemPayload(itemId, cfg);
+      if (metaPayload) this._playerShopInventoryMeta[playerId][itemId] = metaPayload;
 
       // B 类广播购买成功（带 remainingBalance，不带 remainingContrib）
       this._broadcast({
@@ -10166,7 +10287,7 @@ class SurvivalGameEngine {
     }
 
     // 装上：owned 校验 + slot 匹配（r14 GAP-B-MAJOR-01：失败 unicast / r15 GAP-E15-1：fallback _seasonShopPool）
-    let cfg = SHOP_CATALOG[itemId];
+    let cfg = this._shopFindConfig(itemId, playerId);
     if (!cfg && Array.isArray(this._seasonShopPool)) {
       // r15 GAP-E15-1：跨赛季限定 SKU（b9_*/b10_*）装备时 fallback _seasonShopPool 查询
       const seasonItem = this._seasonShopPool.find(it => it && it.id === itemId);
@@ -10240,6 +10361,7 @@ class SurvivalGameEngine {
       data: {
         playerId,
         owned: Array.isArray(owned) ? owned.slice() : [],
+        ownedItems: this._shopOwnedItemPayloads(playerId),
         equipped: {
           title:    equipped.title    || '',
           frame:    equipped.frame    || '',

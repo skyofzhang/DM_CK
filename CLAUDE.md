@@ -25,6 +25,10 @@
   scp -i "D:/共享/AI项目资料/id_rsa_transfer" -o StrictHostKeyChecking=no "E:/AIProject/DM_CK/Server/src/SurvivalGameEngine.js" root@101.34.30.65:/opt/drscfz/src/
   ssh -i "D:/共享/AI项目资料/id_rsa_transfer" -o StrictHostKeyChecking=no root@101.34.30.65 "pm2 restart drscfz-server"
   ```
+- **抖音管理接口鉴权**:
+  - `/api/douyin/task/start`、`/api/douyin/task/stop`、`/api/douyin/tasks` 默认需要 `/opt/drscfz/.env` 内配置 `DRSCFZ_ADMIN_TOKEN=<随机强密钥>`（兼容 `ADMIN_API_TOKEN`）。
+  - 运维 curl 必须带 `Authorization: Bearer <token>` 或 `X-Admin-Token: <token>`；仅本地开发/临时调试可设置 `ALLOW_UNAUTH_ADMIN_API=1` 绕过。
+  - `ALLOW_DOUYIN_ROOM_FALLBACK=1` 仅用于切换期 roomId 漂移回退；正式上线前应永久关闭。
 
 ---
 

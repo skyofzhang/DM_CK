@@ -92,6 +92,12 @@ namespace DrscfZ.UI
         private void HandlePhaseChanged(PhaseChangedData data)
         {
             if (data == null) return;
+            if (SurvivalGameManager.Instance == null ||
+                SurvivalGameManager.Instance.State != SurvivalGameManager.SurvivalState.Running)
+            {
+                HideImmediately();
+                return;
+            }
 
             // 仅 phase=night 且 nightModifier != null 时显示；切换到白天立即隐藏残留
             if (data.phase != "night")

@@ -33,9 +33,15 @@ namespace DrscfZ.UI
         private const string ChineseFontPath = "Fonts/ChineseFont SDF";
 
         private Coroutine _currentAnnouncement;
+        private bool _subscribed;
 
         private void Awake()
         {
+            if (Instance != null && Instance != this)
+            {
+                Destroy(gameObject);
+                return;
+            }
             Instance = this;
             EnsureComponents();
             HideVisual();
@@ -50,7 +56,23 @@ namespace DrscfZ.UI
             {
                 sgm.OnStateChanged += HandleSurvivalStateChanged;
                 sgm.OnGameEnded    += HandleSurvivalGameEnded;
+                _subscribed = true;
             }
+        }
+
+        private void Start()
+        {
+            TrySubscribe();
+        }
+
+        private void TrySubscribe()
+        {
+            if (_subscribed) return;
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm == null) return;
+            sgm.OnStateChanged += HandleSurvivalStateChanged;
+            sgm.OnGameEnded    += HandleSurvivalGameEnded;
+            _subscribed = true;
         }
 
         private TMP_FontAsset LoadBestFont()
@@ -123,6 +145,7 @@ namespace DrscfZ.UI
                 sgm.OnStateChanged  -= HandleSurvivalStateChanged;
                 sgm.OnGameEnded     -= HandleSurvivalGameEnded;
             }
+            _subscribed = false;
         }
 
         /// <summary>P0-B9：SurvivalGameManager 状态切换 → 公告（替代旧的 GameManager 订阅）</summary>

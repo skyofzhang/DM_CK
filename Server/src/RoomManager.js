@@ -31,6 +31,7 @@ class RoomManager {
 
     // roomId → Room
     this.rooms = new Map();
+    this.allowDouyinRoomFallback = process.env.ALLOW_DOUYIN_ROOM_FALLBACK === '1';
 
     // 清理定时器（每5分钟检查超时房间）
     this.cleanupInterval = setInterval(() => {
@@ -185,7 +186,7 @@ class RoomManager {
     }
 
     // 2. default房间有在线客户端时也转发
-    if (roomId !== 'default') {
+    if (this.allowDouyinRoomFallback && roomId !== 'default') {
       const defaultRoom = this.rooms.get('default');
       if (defaultRoom && defaultRoom.status !== 'destroyed' && defaultRoom.clients.size > 0) {
         rooms.push(defaultRoom);
@@ -196,7 +197,7 @@ class RoomManager {
     //    找有在线客户端的房间转发推送数据
     //    场景：直播中途关播重开→新roomId，但客户端仍连着旧roomId的房间
     const hasClientRoom = rooms.some(r => r.clients.size > 0);
-    if (!hasClientRoom) {
+    if (this.allowDouyinRoomFallback && !hasClientRoom) {
       for (const [rid, room] of this.rooms.entries()) {
         if (rid === roomId || rid === 'default') continue;
         if (room.status !== 'destroyed' && room.clients.size > 0) {

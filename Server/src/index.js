@@ -20,7 +20,8 @@
 
 const WebSocket = require('ws');
 const express = require('express');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const RoomManager = require('./RoomManager');
 const DouyinAPI = require('./DouyinAPI');
@@ -43,6 +44,21 @@ app.use(express.json({
 }));
 
 const server = http.createServer(app);
+
+const ADMIN_API_TOKEN = process.env.DRSCFZ_ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || '';
+function requireAdminToken(req, res, next) {
+  if (process.env.ALLOW_UNAUTH_ADMIN_API === '1') return next();
+  const auth = req.headers.authorization || '';
+  const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  const supplied = req.headers['x-admin-token'] || bearer;
+  if (!ADMIN_API_TOKEN) {
+    return res.status(403).json({ error: 'admin token not configured' });
+  }
+  if (supplied !== ADMIN_API_TOKEN) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  return next();
+}
 
 // ==================== WebSocket ====================
 const wss = new WebSocket.Server({ server });
@@ -274,7 +290,7 @@ app.post('/api/douyin/init', async (req, res) => {
  * POST /api/douyin/task/start  { roomId, msgTypes?: [...] }
  * POST /api/douyin/task/stop   { roomId }
  */
-app.post('/api/douyin/task/start', async (req, res) => {
+app.post('/api/douyin/task/start', requireAdminToken, async (req, res) => {
   try {
     const { roomId, msgTypes, maxRetries, retryDelay } = req.body;
     if (!roomId) return res.status(400).json({ error: 'roomId required' });
@@ -291,7 +307,7 @@ app.post('/api/douyin/task/start', async (req, res) => {
 });
 
 // 查看活跃推送任务状态
-app.get('/api/douyin/tasks', (req, res) => {
+app.get('/api/douyin/tasks', requireAdminToken, (req, res) => {
   const tasks = {};
   for (const [roomId, info] of douyinAPI.activeTasks.entries()) {
     tasks[roomId] = {
@@ -304,7 +320,7 @@ app.get('/api/douyin/tasks', (req, res) => {
   res.json({ activeTasks: tasks, douyinStats: douyinAPI.getStats() });
 });
 
-app.post('/api/douyin/task/stop', async (req, res) => {
+app.post('/api/douyin/task/stop', requireAdminToken, async (req, res) => {
   try {
     const { roomId } = req.body;
     if (!roomId) return res.status(400).json({ error: 'roomId required' });

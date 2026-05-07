@@ -123,6 +123,7 @@ class RoomPersistence {
 
       // §39 商店（跨局永续）
       _playerShopInventory: engine._playerShopInventory || {},
+      _playerShopInventoryMeta: engine._playerShopInventoryMeta || {},
       _playerShopEquipped: engine._playerShopEquipped || {},
       _contribBalance: engine._contribBalance || {},
 
@@ -257,6 +258,9 @@ class RoomPersistence {
       if (!obj._playerShopInventory || typeof obj._playerShopInventory !== 'object') {
         obj._playerShopInventory = {};
       }
+      if (!obj._playerShopInventoryMeta || typeof obj._playerShopInventoryMeta !== 'object') {
+        obj._playerShopInventoryMeta = {};
+      }
       if (!obj._playerShopEquipped || typeof obj._playerShopEquipped !== 'object') {
         obj._playerShopEquipped = {};
       }
@@ -282,6 +286,9 @@ class RoomPersistence {
     if (typeof obj._dailyFortressDayGained !== 'number') obj._dailyFortressDayGained = 0;
     if (typeof obj._dailyResetKey !== 'number') obj._dailyResetKey = 0;
     if (typeof obj._dailyCapBlocked !== 'boolean') obj._dailyCapBlocked = false;
+    if (!obj._playerShopInventoryMeta || typeof obj._playerShopInventoryMeta !== 'object') {
+      obj._playerShopInventoryMeta = {};
+    }
 
     // v3 → v4（audit-r7 §30.4）：补齐衰减元数据
     if (fromVersion < 4) {

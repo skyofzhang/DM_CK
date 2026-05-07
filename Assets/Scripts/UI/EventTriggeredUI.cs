@@ -166,12 +166,21 @@ namespace DrscfZ.UI
 
             // ModalRegistry B 类排队（非阻塞；不同 eventId 独立 id，不去重覆盖）
             string modalId = MODAL_B_ID_PREFIX + data.eventId;
+            if (_toastRun != null)
+            {
+                StopCoroutine(_toastRun);
+                _toastRun = null;
+                if (!string.IsNullOrEmpty(_activeModalId))
+                {
+                    ModalRegistry.ReleaseB(_activeModalId);
+                    _activeModalId = null;
+                }
+            }
             // 先 release 旧的同 id 避免残留
             ModalRegistry.ReleaseB(modalId);
             ModalRegistry.RequestB(modalId, () => { /* 被抢占时无需额外动作；协程结束自会 release */ });
             _activeModalId = modalId;
 
-            if (_toastRun != null) StopCoroutine(_toastRun);
             _toastRun = StartCoroutine(ToastHoldAndFade(modalId));
         }
 

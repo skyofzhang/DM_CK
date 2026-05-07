@@ -25,9 +25,13 @@ except Exception:
 SERVER = "root@101.34.30.65"
 REMOTE_PATH = "/opt/drscfz"
 LOCAL_SERVER = os.path.join(os.path.dirname(__file__), "Server")
+PUBLIC_BASE_URL = "http://101.34.30.65:8081"
 
 # 需要同步的目录（相对于 Server/）
 SYNC_DIRS = ["src", "config"]
+
+def shell_quote(s):
+    return "'" + str(s).replace("'", "'\"'\"'") + "'"
 
 def run(cmd, check=True):
     print(f"$ {cmd}")
@@ -62,7 +66,14 @@ def main():
     print("\n[检查] 服务健康状态...")
     import time
     time.sleep(3)
-    run(f'curl -s http://101.34.30.65:8081/health | python3 -m json.tool', check=False)
+    run(f'curl -s {PUBLIC_BASE_URL}/health | python3 -m json.tool', check=False)
+
+    admin_token = os.environ.get("DRSCFZ_ADMIN_TOKEN") or os.environ.get("ADMIN_API_TOKEN") or ""
+    if admin_token:
+        header = shell_quote(f"Authorization: Bearer {admin_token}")
+        run(f'curl -s -H {header} {PUBLIC_BASE_URL}/api/douyin/tasks | python3 -m json.tool', check=False)
+    else:
+        print("[提示] 跳过 /api/douyin/tasks 鉴权检查：本机未设置 DRSCFZ_ADMIN_TOKEN 或 ADMIN_API_TOKEN")
 
     print("\n[OK] 部署完成！")
 

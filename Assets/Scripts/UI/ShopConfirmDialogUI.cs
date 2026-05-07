@@ -44,6 +44,7 @@ namespace DrscfZ.UI
         private string    _itemId;
         private long      _expiresAtUnixMs;
         private Coroutine _timerCoroutine;
+        private bool      _netSubscribed;
 
         // ==================== 生命周期 ====================
 
@@ -51,7 +52,8 @@ namespace DrscfZ.UI
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
-            if (_panel != null) _panel.SetActive(false);
+            if (_panel != null && _panel != gameObject) _panel.SetActive(false);
+            TrySubscribeNetworkManager();
         }
 
         private void Start()
@@ -64,8 +66,8 @@ namespace DrscfZ.UI
             //   若用户在重连后点确认 → ShopUI.SendShopPurchase(itemId, oldPendingId) 发到新会话
             //   → 服务端 _pendingShopPurchase 已自动清理 → 返 pending_invalid
             //   修复：断网即关闭，重连后由服务端补发新 prompt 决定是否再开
-            var net = NetworkManager.Instance;
-            if (net != null) net.OnDisconnected += HandleDisconnected;
+            TrySubscribeNetworkManager();
+            if (_panel != null) _panel.SetActive(false);
         }
 
         private void OnDestroy()
@@ -73,10 +75,31 @@ namespace DrscfZ.UI
             ModalRegistry.ReleaseB(MODAL_B_ID);  // audit-r12 GAP-B02 兜底释放
 
             // 🔴 audit-r46 GAP-M-08：解除订阅
-            var net = NetworkManager.Instance;
-            if (net != null) net.OnDisconnected -= HandleDisconnected;
+            UnsubscribeNetworkManager();
 
             if (Instance == this) Instance = null;
+        }
+
+        private void Update()
+        {
+            if (!_netSubscribed) TrySubscribeNetworkManager();
+        }
+
+        private void TrySubscribeNetworkManager()
+        {
+            if (_netSubscribed) return;
+            var net = NetworkManager.Instance;
+            if (net == null) return;
+            net.OnDisconnected += HandleDisconnected;
+            _netSubscribed = true;
+        }
+
+        private void UnsubscribeNetworkManager()
+        {
+            if (!_netSubscribed) return;
+            var net = NetworkManager.Instance;
+            if (net != null) net.OnDisconnected -= HandleDisconnected;
+            _netSubscribed = false;
         }
 
         // 🔴 audit-r46 GAP-M-08
@@ -153,7 +176,7 @@ namespace DrscfZ.UI
         {
             while (_panel != null && _panel.activeSelf)
             {
-                long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                long nowMs = NetworkManager.SyncedNowMs;
                 if (nowMs >= _expiresAtUnixMs)
                 {
                     Debug.Log($"[ShopConfirmDialogUI] 倒计时到期，自动关闭 pendingId={_pendingId}（服务端自动清理 pending）");
@@ -167,7 +190,7 @@ namespace DrscfZ.UI
 
         private string ComputeRemainSecText()
         {
-            long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            long nowMs = NetworkManager.SyncedNowMs;
             long remainMs = _expiresAtUnixMs - nowMs;
             if (remainMs < 0) remainMs = 0;
             int sec = Mathf.CeilToInt(remainMs / 1000f);

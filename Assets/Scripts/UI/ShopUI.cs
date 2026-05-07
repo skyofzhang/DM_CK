@@ -57,6 +57,8 @@ namespace DrscfZ.UI
         private string _currentTab = "A"; // 'A' | 'B' | 'I'（Inventory）
         private ShopInventoryData _lastInventory;
         private readonly List<GameObject> _spawnedItems = new List<GameObject>();
+        private readonly Dictionary<string, ShopItem> _itemMetadata = new Dictionary<string, ShopItem>();
+        private bool _sgmSubscribed;
 
         // ==================== 生命周期 ====================
 
@@ -64,7 +66,8 @@ namespace DrscfZ.UI
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
-            if (_panel != null) _panel.SetActive(false);
+            if (_panel != null && _panel != gameObject) _panel.SetActive(false);
+            TrySubscribeSurvivalGameManager();
         }
 
         private void Start()
@@ -73,26 +76,44 @@ namespace DrscfZ.UI
             if (_tabB != null)         _tabB.onClick.AddListener(() => SwitchTab("B"));
             if (_tabInventory != null) _tabInventory.onClick.AddListener(() => SwitchTab("I"));
             if (_btnClose != null)     _btnClose.onClick.AddListener(ClosePanel);
+            if (_panel != null) _panel.SetActive(false);
 
             // Batch I 补齐：订阅失败/购买事件做最小 toast + 库存刷新
-            var sgm = SurvivalGameManager.Instance;
-            if (sgm != null)
-            {
-                sgm.OnShopPurchaseFailed  += HandleShopPurchaseFailedToast;
-                sgm.OnShopPurchaseConfirm += HandleShopPurchaseConfirmRefresh;
-            }
+            TrySubscribeSurvivalGameManager();
         }
 
         private void OnDestroy()
         {
+            UnsubscribeSurvivalGameManager();
+            ModalRegistry.Release(MODAL_A_ID);  // audit-r12 GAP-B02 兜底释放
+            if (Instance == this) Instance = null;
+        }
+
+        private void Update()
+        {
+            if (!_sgmSubscribed) TrySubscribeSurvivalGameManager();
+        }
+
+        private void TrySubscribeSurvivalGameManager()
+        {
+            if (_sgmSubscribed) return;
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm == null) return;
+            sgm.OnShopPurchaseFailed  += HandleShopPurchaseFailedToast;
+            sgm.OnShopPurchaseConfirm += HandleShopPurchaseConfirmRefresh;
+            _sgmSubscribed = true;
+        }
+
+        private void UnsubscribeSurvivalGameManager()
+        {
+            if (!_sgmSubscribed) return;
             var sgm = SurvivalGameManager.Instance;
             if (sgm != null)
             {
                 sgm.OnShopPurchaseFailed  -= HandleShopPurchaseFailedToast;
                 sgm.OnShopPurchaseConfirm -= HandleShopPurchaseConfirmRefresh;
             }
-            ModalRegistry.Release(MODAL_A_ID);  // audit-r12 GAP-B02 兜底释放
-            if (Instance == this) Instance = null;
+            _sgmSubscribed = false;
         }
 
         /// <summary>Batch I：购买失败 → toast（主面板可见时显示），复用 FailureToastLocale</summary>
@@ -148,6 +169,7 @@ namespace DrscfZ.UI
         public void PopulateList(ShopListData data)
         {
             if (data == null) return;
+            CacheShopItems(data.items);
 
             // 更新标题 / 状态
             if (_titleText != null)
@@ -166,6 +188,7 @@ namespace DrscfZ.UI
         public void UpdateInventory(ShopInventoryData data)
         {
             _lastInventory = data;
+            CacheShopItems(data?.ownedItems);
             if (_currentTab == "I")
                 RenderInventory();
         }
@@ -237,11 +260,21 @@ namespace DrscfZ.UI
                 return;
             }
 
+            if (_lastInventory.ownedItems != null && _lastInventory.ownedItems.Length > 0)
+            {
+                foreach (var item in _lastInventory.ownedItems)
+                {
+                    if (item == null || string.IsNullOrEmpty(item.itemId)) continue;
+                    SpawnInventoryButton(item);
+                }
+                return;
+            }
+
             foreach (var ownedId in _lastInventory.owned)
             {
                 if (string.IsNullOrEmpty(ownedId)) continue;
-                // 背包项用伪 ShopItem 结构（仅 itemId + 名称），slot 由 itemId 前缀推断
-                var pseudo = new ShopItem
+                _itemMetadata.TryGetValue(ownedId, out var cached);
+                var pseudo = cached ?? new ShopItem
                 {
                     itemId   = ownedId,
                     name     = SurvivalGameManager.GetShopItemDisplayName(ownedId),
@@ -251,6 +284,16 @@ namespace DrscfZ.UI
                     effect   = "点击装备 / 卸下",
                 };
                 SpawnInventoryButton(pseudo);
+            }
+        }
+
+        private void CacheShopItems(ShopItem[] items)
+        {
+            if (items == null) return;
+            foreach (var item in items)
+            {
+                if (item == null || string.IsNullOrEmpty(item.itemId)) continue;
+                _itemMetadata[item.itemId] = item;
             }
         }
 

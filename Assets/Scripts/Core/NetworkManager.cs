@@ -78,6 +78,12 @@ namespace DrscfZ.Core
         public bool IsConnected { get; private set; }
         public string CurrentRoomId => string.IsNullOrEmpty(roomId) ? "default" : roomId;
 
+        private long _serverClockOffsetMs = 0L;
+        public long ServerNowMs => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + _serverClockOffsetMs;
+        public static long SyncedNowMs => Instance != null
+            ? Instance.ServerNowMs
+            : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
         /// <summary>是否已通过抖音token初始化获取到roomId</summary>
         public bool IsDouyinInitialized { get; private set; }
 
@@ -457,6 +463,11 @@ namespace DrscfZ.Core
                 if (!string.IsNullOrEmpty(priStr) && int.TryParse(priStr, out var p)) priority = p;
                 string tickStr = ExtractNumberField(json, "tick");
                 if (!string.IsNullOrEmpty(tickStr) && long.TryParse(tickStr, out var t)) tick = t;
+                string serverTimeStr = ExtractNumberField(json, "serverTime");
+                if (!string.IsNullOrEmpty(serverTimeStr) && long.TryParse(serverTimeStr, out var serverTime))
+                {
+                    _serverClockOffsetMs = serverTime - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                }
 
                 // 提取 data 子对象
                 string dataJson = ExtractDataJson(json);

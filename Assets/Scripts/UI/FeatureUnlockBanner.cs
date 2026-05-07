@@ -57,7 +57,11 @@ namespace DrscfZ.UI
 
         private void Awake()
         {
-            if (Instance != null && Instance != this) { return; }
+            if (Instance != null && Instance != this)
+            {
+                Destroy(gameObject);
+                return;
+            }
             Instance = this;
             // ✅ 合法：对子节点 _panelRoot 执行 SetActive
             if (_panelRoot != null) _panelRoot.SetActive(false);
@@ -89,6 +93,7 @@ namespace DrscfZ.UI
 
         private void TrySubscribe()
         {
+            if (Instance != this) return;
             if (_subscribed) return;
             var sgm = SurvivalGameManager.Instance;
             if (sgm == null) return;

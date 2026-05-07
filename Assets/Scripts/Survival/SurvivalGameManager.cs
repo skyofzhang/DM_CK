@@ -1218,14 +1218,17 @@ namespace DrscfZ.Survival
                     var rep = JsonUtility.FromJson<RouletteEffectPreventedData>(dataJson);
                     if (rep != null)
                     {
-                        Debug.Log($"[SGM] roulette_effect_prevented: {rep.cardId} reason={rep.preventReason}");
-                        string zh = rep.preventReason switch
+                        string reason = string.IsNullOrEmpty(rep.reason) ? rep.preventReason : rep.reason;
+                        Debug.Log($"[SGM] roulette_effect_prevented: {rep.cardId} reason={reason}");
+                        string zh = reason switch
                         {
                             "duplicate"               => "同类效果已生效",
                             "conflict_with_other_buff" => "与其他 Buff 冲突",
                             "game_not_running"        => "当前不在游戏中",
                             _                         => "效果被阻止"
                         };
+                        if (reason == "elite_overflow")
+                            zh = string.IsNullOrEmpty(rep.message) ? "Elite raid overflow" : rep.message;
                         OnPlayerActivityMessage?.Invoke($"【轮盘】{rep.cardId} · {zh}");
                         OnRouletteEffectPrevented?.Invoke(rep);
                     }

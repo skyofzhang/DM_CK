@@ -97,6 +97,8 @@ class SurvivalRoom {
 
     // 主播专用：效率加速乘数（broadcaster_action触发）
     this.broadcasterEfficiencyMultiplier = 1.0;
+    this._efficiencyBoostTimer = null;
+    this._efficiencyBoostExpireAt = 0;
 
     // 生存游戏引擎（替代旧 GameEngine + PlayerManager）
     this.survivalEngine = new SurvivalGameEngine(
@@ -378,15 +380,19 @@ class SurvivalRoom {
       this._simNightTimer = null;
     }
 
-    if (this._simWorkInterval)      clearInterval(this._simWorkInterval);
-    if (this._simNightInterval)     clearInterval(this._simNightInterval);
-    if (this._simDayGiftInterval)   clearInterval(this._simDayGiftInterval);
-    if (this._simNightGiftInterval) clearInterval(this._simNightGiftInterval);
+    if (this._simWorkInterval)      { clearInterval(this._simWorkInterval); this._simWorkInterval = null; }
+    if (this._simNightInterval)     { clearInterval(this._simNightInterval); this._simNightInterval = null; }
+    if (this._simDayGiftInterval)   { clearInterval(this._simDayGiftInterval); this._simDayGiftInterval = null; }
+    if (this._simNightGiftInterval) { clearInterval(this._simNightGiftInterval); this._simNightGiftInterval = null; }
   }
 
   destroy() {
     this._cancelPauseTimer();
     this._stopSimulation();
+    if (this._efficiencyBoostTimer) {
+      clearTimeout(this._efficiencyBoostTimer);
+      this._efficiencyBoostTimer = null;
+    }
     this.survivalEngine.pause();
 
     // §36 销毁前保存一次快照
@@ -1421,6 +1427,11 @@ class SurvivalRoom {
    * @param {number} durationMs - 持续时间（毫秒）
    */
   _applyEfficiencyBoost(multiplier, durationMs) {
+    if (this._efficiencyBoostTimer) {
+      clearTimeout(this._efficiencyBoostTimer);
+      this._efficiencyBoostTimer = null;
+    }
+    this._efficiencyBoostExpireAt = Date.now() + durationMs;
     this.broadcasterEfficiencyMultiplier = multiplier;
 
     // 同步给引擎（若引擎支持此属性）
@@ -1429,11 +1440,14 @@ class SurvivalRoom {
     }
 
     // 定时恢复
-    setTimeout(() => {
+    this._efficiencyBoostTimer = setTimeout(() => {
+      if (Date.now() < this._efficiencyBoostExpireAt) return;
       this.broadcasterEfficiencyMultiplier = 1.0;
       if (this.survivalEngine) {
         this.survivalEngine.broadcasterEfficiencyMultiplier = 1.0;
       }
+      this._efficiencyBoostTimer = null;
+      this._efficiencyBoostExpireAt = 0;
       console.log(`[SurvivalRoom:${this.roomId}] broadcaster efficiency_boost expired`);
     }, durationMs);
   }
@@ -1448,9 +1462,11 @@ class SurvivalRoom {
    * 每轮4名玩家各发不同指令(1/2/3/4)，持续多轮 → Worker持续有任务
    */
   _runSimulation() {
+    this._stopSimulation();
     if (this.survivalEngine.state === 'idle') {
       this.survivalEngine.startGame();
     }
+    this._simRunning = true;
 
     // ── 8名玩家分批加入 ─────────────────────────────────────────────
     const players = [
@@ -1463,17 +1479,20 @@ class SurvivalRoom {
       { id: 'sim_6', name: '守门将庚',   avatar: '' },
       { id: 'sim_7', name: '夜枭战士',   avatar: '' },
     ];
+    this._simPlayerTimers = new Map();
     players.forEach((p, i) => {
-      setTimeout(() => {
+      const joinTimer = setTimeout(() => {
+        if (!this._simRunning) return;
         this.survivalEngine.handlePlayerJoined(p.id, p.name, '');
       }, i * 400);
+      this._simPlayerTimers.set(`join_${p.id}`, joinTimer);
     });
 
     // ── 礼物演示序列已移除（改为日夜动态触发，见下方两个interval）──
 
     // ── 白天：每玩家独立随机工作循环（6~14秒，错开启动）──────────────
     const cmdCycle = [1, 2, 3, 4];
-    const simPlayerTimers = new Map();  // playerId → timerId
+    const simPlayerTimers = this._simPlayerTimers;  // playerId → timerId
 
     const schedulePlayerWork = (player, idx, delay) => {
       const timer = setTimeout(() => {
@@ -1498,9 +1517,6 @@ class SurvivalRoom {
       const stagger = i * 600 + Math.floor(Math.random() * 1000);
       schedulePlayerWork(p, i, stagger);
     });
-
-    this._simRunning = true;
-    this._simPlayerTimers = simPlayerTimers;
 
     // ── 夜晚：随机攻击循环（25~45秒随机间隔，防止Boss被秒杀）──────────────────────────
     const scheduleNightAttack = () => {

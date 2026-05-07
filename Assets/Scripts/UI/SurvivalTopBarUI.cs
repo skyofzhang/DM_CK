@@ -74,6 +74,11 @@ namespace DrscfZ.UI
 
         private void Awake()
         {
+            if (Instance != null && Instance != this)
+            {
+                Destroy(gameObject);
+                return;
+            }
             if (Instance != null && Instance != this) { /* 保留先进入的实例 */ return; }
             Instance = this;
         }
@@ -102,6 +107,7 @@ namespace DrscfZ.UI
 
         private void TrySubscribe()
         {
+            if (Instance != this) return;
             var res  = ResourceSystem.Instance;
             var gate = CityGateSystem.Instance;
             var dn   = DayNightCycleManager.Instance;

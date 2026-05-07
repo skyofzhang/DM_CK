@@ -1160,6 +1160,7 @@ namespace DrscfZ.Survival
     {
         public string       playerId;
         public string[]     owned;
+        public ShopItem[]   ownedItems;       // §39.8：历史赛季限定 SKU 的名称/slot/effect 元数据
         public ShopEquipped equipped;
         public int          contribBalance;    // 🔴 audit-r37 GAP-C37-01：当前可消费余额（A 类货币）
         public long         lifetimeContrib;   // 🔴 audit-r37 GAP-C37-01：终身累计贡献（B 类货币 / 装备购买基线）
@@ -1829,7 +1830,9 @@ namespace DrscfZ.Survival
     public class RouletteEffectPreventedData
     {
         public string cardId;
-        public string preventReason;  // duplicate / conflict_with_other_buff / game_not_running
+        public string reason;         // duplicate / conflict_with_other_buff / game_not_running / elite_overflow
+        public string preventReason;  // backward compatibility with pre-r47 server payloads
+        public string message;
     }
 
     // ---- A12. §35 P2 反击/攻击扩展 ----

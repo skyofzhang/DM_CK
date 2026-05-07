@@ -69,6 +69,8 @@ namespace DrscfZ.Monster
         private string _tribeWarSessionId;
         private long   _earliestHitAtUnixMs;
         private bool   _tribeWarHitReported;
+        private bool   _tribeWarTintApplied;
+        private bool   _miniScaleApplied;
 
         // 事件
         public event Action<MonsterController> OnDead;  // 死亡通知 WaveSpawner
@@ -114,6 +116,7 @@ namespace DrscfZ.Monster
             _moveSpeed = speed;
             _gateTarget = gateTarget;
             _variant    = variant;
+            _miniScaleApplied = false;
             _animator   = GetComponentInChildren<Animator>();
             _state      = MonsterState.Moving;
 
@@ -237,15 +240,17 @@ namespace DrscfZ.Monster
         private void UpdateFrostAuraTint()
         {
             // 只有光环激活时检查；否则清除 tint
-            bool shouldTint = false;
-            if (FrostAuraActive && FrostAuraRadius > 0f)
-            {
-                float dist = Vector3.Distance(transform.position, FrostAuraCenter);
-                shouldTint = dist <= FrostAuraRadius;
-            }
+            bool shouldTint = IsInsideFrostAura();
             if (shouldTint == _frostAuraTintApplied) return;
             _frostAuraTintApplied = shouldTint;
             ApplyFrostAuraTintNow(shouldTint);
+        }
+
+        private bool IsInsideFrostAura()
+        {
+            if (!FrostAuraActive || FrostAuraRadius <= 0f) return false;
+            float dist = Vector3.Distance(transform.position, FrostAuraCenter);
+            return dist <= FrostAuraRadius;
         }
 
         /// <summary>P0-B6 光环范围内怪物染浅蓝 tint（original × 0.7 + cyan × 0.3）。
@@ -272,14 +277,7 @@ namespace DrscfZ.Monster
             }
             else
             {
-                // 退出光环：清 PropertyBlock → 恢复 variant tint 或 shared material 原色
-                foreach (var r in renderers)
-                {
-                    if (r == null) continue;
-                    r.SetPropertyBlock(null);
-                }
-                // 重新应用 variant tint（因为清了 PropertyBlock）
-                ApplyVariantTint();
+                RestorePersistentTint();
             }
         }
 
@@ -305,14 +303,9 @@ namespace DrscfZ.Monster
             }
             else
             {
-                foreach (var r in renderers)
-                {
-                    if (r == null) continue;
-                    r.SetPropertyBlock(null);
-                }
-                // 退出冻结：重新应用 variant tint + 若还在光环内重新应用 aura tint
+                RestorePersistentTint();
                 _frostAuraTintApplied = false;
-                ApplyVariantTint();
+                UpdateFrostAuraTint();
             }
         }
 
@@ -635,6 +628,7 @@ namespace DrscfZ.Monster
         // #2 静态 PropertyID 避免每次字符串哈希
         private static readonly int PropBaseColor = Shader.PropertyToID("_BaseColor");
         private static readonly int PropColor     = Shader.PropertyToID("_Color");
+        private static readonly Color TribeWarTint = new Color(1f, 0.35f, 0.35f, 1f);
 
         // 🆕 §31 变种染色表（与 MonsterVariant 枚举同顺序；Normal 不染色）
         // Mini 不染色仅缩放 scale；因此颜色数组长度 = 枚举数 - 2（排除 Normal 和 Mini）
@@ -660,7 +654,11 @@ namespace DrscfZ.Monster
             // Mini：仅缩放（不改颜色）——由 spawner 创建时或此处统一处理均可；此处兜底防 spawner 遗漏
             if (_variant == MonsterVariant.Mini)
             {
-                transform.localScale *= 0.6f;
+                if (!_miniScaleApplied)
+                {
+                    transform.localScale *= 0.6f;
+                    _miniScaleApplied = true;
+                }
                 return;
             }
 
@@ -682,6 +680,54 @@ namespace DrscfZ.Monster
             }
         }
 
+        private void ClearRendererPropertyBlocks()
+        {
+            var renderers = GetComponentsInChildren<Renderer>(true);
+            if (renderers == null) return;
+            foreach (var r in renderers)
+            {
+                if (r == null) continue;
+                r.SetPropertyBlock(null);
+            }
+        }
+
+        private void ApplyTribeWarTint()
+        {
+            if (!_tribeWarTintApplied) return;
+            var renderers = GetComponentsInChildren<Renderer>(true);
+            if (renderers == null || renderers.Length == 0) return;
+
+            var block = new MaterialPropertyBlock();
+            foreach (var r in renderers)
+            {
+                if (r == null) continue;
+                r.GetPropertyBlock(block);
+                block.SetColor(PropBaseColor, TribeWarTint);
+                block.SetColor(PropColor,     TribeWarTint);
+                r.SetPropertyBlock(block);
+            }
+        }
+
+        private void RestorePersistentTint()
+        {
+            ClearRendererPropertyBlocks();
+            ApplyVariantTint();
+            ApplyTribeWarTint();
+
+            if (Time.time < FrozenUntil)
+            {
+                _frozenTintApplied = false;
+                ApplyFrozenTint(true);
+                return;
+            }
+
+            if (IsInsideFrostAura())
+            {
+                _frostAuraTintApplied = false;
+                UpdateFrostAuraTint();
+            }
+        }
+
         private IEnumerator HitFlash()
         {
             var renderers = GetComponentsInChildren<Renderer>();
@@ -695,12 +741,7 @@ namespace DrscfZ.Monster
                 renderers[i].SetPropertyBlock(block);
             }
             yield return new WaitForSeconds(0.1f);
-            // 清除 PropertyBlock → 自动恢复共享材质原色，无实例残留
-            for (int i = 0; i < renderers.Length; i++)
-            {
-                if (renderers[i] != null)
-                    renderers[i].SetPropertyBlock(null);
-            }
+            RestorePersistentTint();
         }
 
         /// <summary>设置怪物ID和类型（不重新初始化）</summary>
@@ -720,6 +761,8 @@ namespace DrscfZ.Monster
             _tribeWarSessionId    = sessionId;
             _earliestHitAtUnixMs  = earliestHitAtUnixMs;
             _tribeWarHitReported  = false;
+            _tribeWarTintApplied  = !string.IsNullOrEmpty(sessionId);
+            RestorePersistentTint();
         }
 
         /// <summary>设置城门目标（用于InitializeWithType后补充注入）</summary>

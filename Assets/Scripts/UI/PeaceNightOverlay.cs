@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using System.Collections;
+using DrscfZ.Core;
 using DrscfZ.Survival;
 
 namespace DrscfZ.UI
@@ -110,6 +111,12 @@ namespace DrscfZ.UI
         private void HandlePhaseChanged(PhaseChangedData data)
         {
             if (data == null) return;
+            if (SurvivalGameManager.Instance == null ||
+                SurvivalGameManager.Instance.State != SurvivalGameManager.SurvivalState.Running)
+            {
+                HideOverlay();
+                return;
+            }
 
             string variant = string.IsNullOrEmpty(data.variant)
                 ? SurvivalMessageProtocol.PhaseVariantNormal
@@ -203,7 +210,7 @@ namespace DrscfZ.UI
         {
             while (_preludeEndsAtMs > 0)
             {
-                long nowMs = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                long nowMs = NetworkManager.SyncedNowMs;
                 long remainingMs = _preludeEndsAtMs - nowMs;
                 if (remainingMs <= 0)
                 {

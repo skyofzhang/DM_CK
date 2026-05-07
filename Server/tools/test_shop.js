@@ -411,6 +411,72 @@ test('T8: loadSeason(season_1) 加载 B9/B10 赛季限定到 _seasonShopPool', (
   assert.ok(first.lifetimeContribMin >= 1000, 'lifetimeContribMin >= 1000（策划案 §39.8 守门）');
 });
 
+test('T8a: archived ownedItems use persisted metadata when SKU is no longer listed', () => {
+  const eng = makeEngine();
+  const pid = 'p8a_owner_meta';
+  eng._playerShopInventory[pid] = ['b9_meta_only'];
+  eng._playerShopInventoryMeta[pid] = {
+    b9_meta_only: {
+      itemId: 'b9_meta_only',
+      name: 'Meta Archive Crown',
+      price: 1777,
+      slot: 'title',
+      category: 'B',
+      effect: 'metadata fallback effect',
+      minLifetimeContrib: 1234,
+      limitedSeasonId: 'season_meta',
+    },
+  };
+  clearBroadcasts(eng);
+
+  eng.handleShopInventory(pid);
+
+  const inv = findBroadcast(eng, 'shop_inventory_data', d => d.playerId === pid);
+  assert.ok(inv, 'should emit shop_inventory_data');
+  assert.ok(Array.isArray(inv.data.ownedItems), 'ownedItems should be present');
+  const item = inv.data.ownedItems.find(it => it.itemId === 'b9_meta_only');
+  assert.ok(item, 'ownedItems should include archived SKU');
+  assert.strictEqual(item.name, 'Meta Archive Crown');
+  assert.strictEqual(item.slot, 'title');
+  assert.strictEqual(item.effect, 'metadata fallback effect');
+});
+
+test('T8b: non-owner cannot buy archived season SKU', () => {
+  const eng = makeEngine();
+  const pid = 'p8b_non_owner';
+  eng._contribBalance[pid] = 5000;
+  eng._lifetimeContrib[pid] = 5000;
+  eng._seasonShopArchive = null;
+  clearBroadcasts(eng);
+
+  eng.handleShopPurchase(pid, 'NonOwner', 'b9_frost_crown', null, 'barrage');
+
+  const fail = findBroadcast(eng, 'shop_purchase_failed', d => d.reason === 'item_not_found' && d.itemId === 'b9_frost_crown');
+  assert.ok(fail, 'non-owner archived SKU purchase should be item_not_found');
+  assert.ok(!(eng._playerShopInventory[pid] || []).includes('b9_frost_crown'), 'non-owner should not receive archived SKU');
+});
+
+test('T8c: owner can resolve and re-equip archived season SKU from season_shop files', () => {
+  const eng = makeEngine();
+  const pid = 'p8c_owner_archive';
+  eng._seasonShopPool = [];
+  eng._seasonShopArchive = null;
+  eng._playerShopInventory[pid] = ['b9_frost_crown'];
+  eng._shopLastEquipAt[pid] = 0;
+
+  const cfg = eng._shopFindConfig('b9_frost_crown', pid);
+  assert.ok(cfg, 'owned archived SKU should resolve from Server/src/season_shop/season_1.json');
+  assert.strictEqual(cfg.slot, 'title');
+  assert.ok(cfg.name, 'archived config should keep name');
+  assert.ok(cfg.effect, 'archived config should keep effect');
+
+  clearBroadcasts(eng);
+  eng.handleShopEquip(pid, 'title', 'b9_frost_crown');
+  const changed = findBroadcast(eng, 'shop_equip_changed', d => d.itemId === 'b9_frost_crown');
+  assert.ok(changed, 'owner should be able to re-equip archived SKU');
+  assert.strictEqual(eng._playerShopEquipped[pid].title, 'b9_frost_crown');
+});
+
 // ============================================================
 // T9（补充）：A4 spotlight per-game 限 1 次
 // ============================================================

@@ -27,28 +27,52 @@ namespace DrscfZ.UI
         [SerializeField] private TextMeshProUGUI _lblTopList;        // 跨房 Top10 贡献（多行）
         [SerializeField] private Button _btnClose;
 
+        private bool _seasonSubscribed;
+
         private void Awake()
         {
             if (_panel == null) _panel = gameObject;
-            if (_panel != null) _panel.SetActive(false);
+            if (_panel != null && _panel != gameObject) _panel.SetActive(false);
             TryLoadFont(_lblTitle);
             TryLoadFont(_lblSurvivingRooms);
             TryLoadFont(_lblTopList);
             if (_btnClose != null) _btnClose.onClick.AddListener(HideAndRelease);
+
+            TrySubscribe();
         }
 
-        private void OnEnable()
+        private void Start()
         {
+            TrySubscribe();
+            if (_panel != null) _panel.SetActive(false);
+        }
+
+        private void OnDestroy()
+        {
+            Unsubscribe();
+            ModalRegistry.Release(MODAL_A_ID);
+        }
+
+        private void Update()
+        {
+            if (!_seasonSubscribed) TrySubscribe();
+        }
+
+        private void TrySubscribe()
+        {
+            if (_seasonSubscribed) return;
             var sgm = SurvivalGameManager.Instance;
             if (sgm == null) return;
             sgm.OnSeasonSettlement += HandleSeasonSettlement;
+            _seasonSubscribed = true;
         }
 
-        private void OnDisable()
+        private void Unsubscribe()
         {
+            if (!_seasonSubscribed) return;
             var sgm = SurvivalGameManager.Instance;
-            if (sgm == null) return;
-            sgm.OnSeasonSettlement -= HandleSeasonSettlement;
+            if (sgm != null) sgm.OnSeasonSettlement -= HandleSeasonSettlement;
+            _seasonSubscribed = false;
         }
 
         private void HandleSeasonSettlement(SeasonSettlementData data)

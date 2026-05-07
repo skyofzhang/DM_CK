@@ -73,6 +73,7 @@ namespace DrscfZ.UI
 
         // 当前抽卡结果 / 定格倒计时
         private RouletteResultData _currentResult;
+        private RouletteResultData _pendingApplyResult;
         private Coroutine          _rollCoroutine;
         private Coroutine          _autoApplyCoroutine;
 
@@ -122,7 +123,7 @@ namespace DrscfZ.UI
 
         private void Awake()
         {
-            if (Instance != null && Instance != this) { Destroy(this); return; }
+            if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
 
             if (_panel != null) _panel.SetActive(false);
@@ -149,7 +150,7 @@ namespace DrscfZ.UI
             // 充能倒计时显示
             if (_state == State.Charging && _readyAtUnixMs > 0 && btnSpinText != null)
             {
-                long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                long nowMs = NetworkManager.SyncedNowMs;
                 long remainMs = _readyAtUnixMs - nowMs;
                 if (remainMs <= 0)
                 {
@@ -173,6 +174,7 @@ namespace DrscfZ.UI
             sgm.OnRouletteReady        += OnRouletteReady;
             sgm.OnRouletteResult       += OnRouletteResult;
             sgm.OnRouletteEffectEnded  += OnRouletteEffectEnded;
+            sgm.OnRouletteEffectPrevented += OnRouletteEffectPrevented;
             _subscribed = true;
         }
 
@@ -185,6 +187,7 @@ namespace DrscfZ.UI
                 sgm.OnRouletteReady       -= OnRouletteReady;
                 sgm.OnRouletteResult      -= OnRouletteResult;
                 sgm.OnRouletteEffectEnded -= OnRouletteEffectEnded;
+                sgm.OnRouletteEffectPrevented -= OnRouletteEffectPrevented;
             }
             _subscribed = false;
         }
@@ -220,7 +223,7 @@ namespace DrscfZ.UI
             }
             else
             {
-                long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                long nowMs = NetworkManager.SyncedNowMs;
                 if (data.readyAt <= nowMs) SetSpinButtonState(State.Ready);
                 else                        SetSpinButtonState(State.Charging);
             }
@@ -231,6 +234,7 @@ namespace DrscfZ.UI
         {
             if (data == null) return;
             _currentResult = data;
+            _pendingApplyResult = null;
 
             // 兜底：displayedCards 长度异常时仍能播
             if (data.displayedCards == null || data.displayedCards.Length < 3)
@@ -271,10 +275,53 @@ namespace DrscfZ.UI
 
             // 回到 Charging（服务端清零重新计时，readyAt 随后会推 RouletteReady）
             _currentResult = null;
+            _pendingApplyResult = null;
             if (_state == State.Locked || _state == State.Spinning)
                 SetSpinButtonState(State.Charging);
 
             Debug.Log($"[RouletteUI] effect_ended: {data.cardId}");
+        }
+
+        private void OnRouletteEffectPrevented(RouletteEffectPreventedData data)
+        {
+            if (data == null) return;
+            string reason = string.IsNullOrEmpty(data.reason) ? data.preventReason : data.reason;
+            if (reason != "elite_overflow") return;
+            var retryResult = _currentResult ?? _pendingApplyResult;
+            if (retryResult == null || retryResult.cardId != data.cardId) return;
+            _currentResult = retryResult;
+            ReopenForRetry();
+        }
+
+        public void ReopenForRetry()
+        {
+            if (_currentResult == null) return;
+
+            if (_panel != null)
+            {
+                if (!ModalRegistry.Request(MODAL_A_ID, 70, () =>
+                {
+                    if (_panel != null) _panel.SetActive(false);
+                }))
+                {
+                    Debug.LogWarning("[RouletteUI] retry reopen blocked by higher-priority modal.");
+                    return;
+                }
+                _panel.SetActive(true);
+            }
+
+            if (_descText != null)
+            {
+                _descText.text = CardDescription(_currentResult.cardId);
+                _descText.gameObject.SetActive(true);
+            }
+            if (btnConfirm != null) btnConfirm.gameObject.SetActive(true);
+
+            SetSpinButtonState(State.Locked);
+            if (_autoApplyCoroutine != null) StopCoroutine(_autoApplyCoroutine);
+            _autoApplyCoroutine = null;
+            if (_countdownText != null) _countdownText.text = "";
+            Debug.Log($"[RouletteUI] reopen pending roulette for retry: {_currentResult.cardId}");
         }
 
         // ==================== 转轴动画（EaseOutQuint）====================
@@ -402,6 +449,7 @@ namespace DrscfZ.UI
             }
 
             if (_autoApplyCoroutine != null) { StopCoroutine(_autoApplyCoroutine); _autoApplyCoroutine = null; }
+            _pendingApplyResult = _currentResult;
 
             var net = NetworkManager.Instance;
             if (net != null && net.IsConnected)
@@ -428,8 +476,6 @@ namespace DrscfZ.UI
                 WorkerManager.Instance?.ActivateAllWorkersGlow(60f);
             }
             // time_freeze / 其他效果由服务端后续推送（frozen_all / survival_gift / monster_*）触发视觉
-
-            _currentResult = null;
         }
 
         // ==================== UI 状态切换 ====================

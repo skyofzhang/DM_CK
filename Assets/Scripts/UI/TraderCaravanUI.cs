@@ -57,15 +57,16 @@ namespace DrscfZ.UI
 
         private void Awake()
         {
-            if (Instance != null && Instance != this) { Destroy(this); return; }
+            if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
-            if (_panel != null) _panel.SetActive(false);
+            if (_panel != null && _panel != gameObject) _panel.SetActive(false);
         }
 
         private void Start()
         {
             if (btnAccept != null) btnAccept.onClick.AddListener(() => OnChoiceClicked("accept"));
             if (btnCancel != null) btnCancel.onClick.AddListener(() => OnChoiceClicked("cancel"));
+            if (_panel != null) _panel.SetActive(false);
         }
 
         private void OnDestroy()
@@ -79,7 +80,7 @@ namespace DrscfZ.UI
             // 实时刷新倒计时（基于 eventEndsAt）
             if (_panel != null && _panel.activeSelf && _expiresAtUnixMs > 0 && _countdownText != null)
             {
-                long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                long nowMs = NetworkManager.SyncedNowMs;
                 long remainMs = _expiresAtUnixMs - nowMs;
                 int sec = remainMs <= 0 ? 0 : Mathf.CeilToInt(remainMs / 1000f);
                 _countdownText.text = $"{sec}s";
@@ -165,7 +166,7 @@ namespace DrscfZ.UI
         {
             while (true)
             {
-                long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                long nowMs = NetworkManager.SyncedNowMs;
                 if (nowMs >= _expiresAtUnixMs) break;
                 yield return new WaitForSeconds(0.2f);
             }

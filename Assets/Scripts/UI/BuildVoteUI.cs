@@ -45,7 +45,7 @@ namespace DrscfZ.UI
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
-            if (_panel != null) _panel.SetActive(false);
+            if (_panel != null && _panel != gameObject) _panel.SetActive(false);
 
             // 🔴 audit-r46 GAP-M-07：订阅 phase 切换兜底关闭面板
             //   原行为：投票仅靠 build_vote_ended 消息或 votingEndsAt 倒计时关闭。
@@ -58,6 +58,7 @@ namespace DrscfZ.UI
         private void Start()
         {
             TrySubscribePhaseChanged();
+            if (_panel != null) _panel.SetActive(false);
         }
 
         private void OnDestroy()
@@ -219,12 +220,21 @@ namespace DrscfZ.UI
         {
             while (_current != null)
             {
-                long nowMs = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                long nowMs = NetworkManager.SyncedNowMs;
                 long remainMs = _current.votingEndsAt - nowMs;
                 if (remainMs < 0) remainMs = 0;
                 int sec = Mathf.FloorToInt(remainMs / 1000f);
                 if (_timerText != null) _timerText.text = $"{sec} 秒";
-                if (remainMs <= 0) yield break;
+                if (remainMs <= 0)
+                {
+                    CloseVote(new BuildVoteEndedData
+                    {
+                        proposalId  = _current.proposalId,
+                        winnerId    = null,
+                        totalVoters = 0
+                    });
+                    yield break;
+                }
                 yield return new WaitForSeconds(0.5f);
             }
         }

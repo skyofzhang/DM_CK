@@ -98,6 +98,9 @@ WebSocket 广播 → Unity 客户端渲染
 DOUYIN_APP_ID=你的appId
 DOUYIN_APP_SECRET=你的appSecret
 DOUYIN_PUSH_SECRET=你的推送密钥    # ⚠️ 必须配置！用于签名验证，优先于appSecret
+DRSCFZ_ADMIN_TOKEN=随机强密钥      # 管理接口 /api/douyin/task/* 与 /api/douyin/tasks 鉴权
+# ALLOW_UNAUTH_ADMIN_API=1        # 仅本地开发/临时联调使用，生产不要开启
+# ALLOW_DOUYIN_ROOM_FALLBACK=1    # 仅 transition 期 roomId 漂移回退使用，正式上线前永久关闭
 ```
 
 > **⚠️ 三个密钥的区别**:
@@ -176,7 +179,7 @@ Unity客户端用roomId连接WebSocket: wss://域名?roomId=xxx
 
 ### 3.0.2 无Token降级（开发测试用）
 
-Unity客户端没有token时，自动加入 `default` 房间。服务器 `_getTargetRooms()` 会将抖音推送数据同时转发到对应roomId房间 + default房间（如果有在线客户端）。
+Unity客户端没有token时，自动加入 `default` 房间。生产默认不再把抖音推送自动转发到 `default` 或其他活跃房间；如切换期出现新旧 roomId 漂移，可临时设置 `ALLOW_DOUYIN_ROOM_FALLBACK=1` 回退，确认链路稳定后必须关闭。
 
 ### 3.0.3 task/start 自动重试机制
 
@@ -217,16 +220,26 @@ Unity客户端没有token时，自动加入 `default` 房间。服务器 `_getTa
 
 ### 3.3 我们的管理接口
 
-也可以通过我们自己的 HTTP 接口管理任务：
+也可以通过我们自己的 HTTP 接口管理任务。首次部署前需在服务器 `/opt/drscfz/.env` 配置 `DRSCFZ_ADMIN_TOKEN=<随机强密钥>`（或导出同名环境变量），调用时带 `Authorization: Bearer <token>` 或 `X-Admin-Token: <token>`；仅开发期可临时设置 `ALLOW_UNAUTH_ADMIN_API=1` 绕过。
 
 ```bash
+export DRSCFZ_ADMIN_TOKEN=你的管理密钥
+
 # 启动（默认订阅评论+礼物+点赞）
-POST http://212.64.26.65:8081/api/douyin/task/start
-{ "roomId": "直播间ID", "msgTypes": ["live_comment", "live_gift", "live_like"] }
+curl -X POST http://101.34.30.65:8081/api/douyin/task/start \
+  -H "Authorization: Bearer $DRSCFZ_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{ "roomId": "直播间ID", "msgTypes": ["live_comment", "live_gift", "live_like"] }'
 
 # 停止
-POST http://212.64.26.65:8081/api/douyin/task/stop
-{ "roomId": "直播间ID" }
+curl -X POST http://101.34.30.65:8081/api/douyin/task/stop \
+  -H "X-Admin-Token: $DRSCFZ_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{ "roomId": "直播间ID" }'
+
+# 查看活跃任务
+curl http://101.34.30.65:8081/api/douyin/tasks \
+  -H "Authorization: Bearer $DRSCFZ_ADMIN_TOKEN"
 ```
 
 ### 3.4 性能限制（来自抖音）
@@ -903,7 +916,7 @@ pm2 save  # 保存进程列表，开机自启
 
 ### 阶段1: 服务器基础
 - [ ] 服务器能正常访问: `curl https://域名/health` 返回 `{status: "ok"}`
-- [ ] `.env` 已配置 DOUYIN_APP_ID、DOUYIN_APP_SECRET、DOUYIN_PUSH_SECRET
+- [ ] `.env` 已配置 DOUYIN_APP_ID、DOUYIN_APP_SECRET、DOUYIN_PUSH_SECRET、DRSCFZ_ADMIN_TOKEN
 - [ ] PM2 进程正常运行: `pm2 status` 状态为 online
 - [ ] `/stats` 接口 `douyin.tokenValid=true`
 
@@ -922,7 +935,7 @@ pm2 save  # 保存进程列表，开机自启
 ### 阶段4: task/start 推送任务
 - [ ] 3种task/start(comment/gift/like)全部返回 `err_no=0`
 - [ ] 如果 `err_no=5003019`: 检查直播间在播 + 小玩法已挂载 + 能力已开通 + roomId正确
-- [ ] `GET /api/douyin/tasks` 可看到活跃任务列表
+- [ ] 带 `Authorization: Bearer <DRSCFZ_ADMIN_TOKEN>` 调 `GET /api/douyin/tasks` 可看到活跃任务列表
 
 ### 阶段5: 数据推送接收
 - [ ] 发评论"1"，PM2日志出现 `Push received`
