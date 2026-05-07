@@ -157,8 +157,9 @@ test('T2: B 类 ≥1000 prepare 生成 pendingId + 应答 shop_purchase_confirm_
   eng._contribBalance[pid3] = 10000;
   eng._lifetimeContrib[pid3] = 10000;
   eng.handleShopPurchase(pid3, 'Direct HUD', 'frame_silver', null, 'hud');
-  assert.ok(findBroadcast(eng, 'shop_purchase_failed', d => d.reason === 'pending_required'), 'HUD B>=1000 must require pendingId');
-  assert.strictEqual(eng._contribBalance[pid3], 10000, 'pending_required should not charge balance');
+  assert.ok(findBroadcast(eng, 'shop_purchase_failed', d => d.reason === 'pending_required' && d.itemId === 'frame_silver'), 'HUD path must require pendingId for B>=1000');
+  assert.strictEqual(eng._contribBalance[pid3], 10000, 'HUD purchase without pending should not charge balance');
+  assert.ok(!(eng._playerShopInventory[pid3] || []).includes('frame_silver'), 'HUD purchase without pending should not add inventory');
 
   clearBroadcasts(eng);
   const pid4 = 'p2_direct_barrage';
@@ -167,6 +168,27 @@ test('T2: B 类 ≥1000 prepare 生成 pendingId + 应答 shop_purchase_confirm_
   eng.handleShopPurchase(pid4, 'Direct Barrage', 'frame_silver', null, 'barrage');
   assert.ok(findBroadcast(eng, 'shop_purchase_confirm', d => d.category === 'B' && d.itemId === 'frame_silver'), 'barrage path may buy B>=1000 without HUD pending');
   assert.ok(!silentPrompt, '<1000 prepare 不应推 prompt');
+});
+
+test('T2b: B >=1000 pending expires without charging or adding inventory', () => {
+  const eng = makeEngine();
+  const pid = 'p2_expired_pending';
+  eng._contribBalance[pid] = 10000;
+  eng._lifetimeContrib[pid] = 10000;
+
+  eng.handleShopPurchasePrepare(pid, 'frame_silver');
+  const [[pendingId, pending]] = Array.from(eng._shopPendingPurchases.entries());
+  assert.ok(pendingId, 'prepare should create pendingId');
+  pending.expiresAt = Date.now() - 1;
+
+  clearBroadcasts(eng);
+  eng.handleShopPurchase(pid, 'Expired HUD', 'frame_silver', pendingId, 'hud');
+
+  assert.ok(findBroadcast(eng, 'shop_purchase_failed', d => d.reason === 'pending_expired' && d.itemId === 'frame_silver'),
+    'expired pending should return pending_expired');
+  assert.strictEqual(eng._contribBalance[pid], 10000, 'expired pending should not charge balance');
+  assert.ok(!(eng._playerShopInventory[pid] || []).includes('frame_silver'), 'expired pending should not add inventory');
+  assert.strictEqual(eng._shopPendingPurchases.size, 0, 'expired pending should be deleted');
 });
 
 // ============================================================
@@ -379,8 +401,8 @@ test('T7: handleShopInventory 返回完整快照（owned/equipped/contribBalance
   const pid = 'p7_gina';
   eng._playerShopInventory[pid] = ['title_veteran', 'frame_bronze'];
   eng._playerShopEquipped[pid] = { title: 'title_veteran', frame: 'frame_bronze' };
-  eng._contribBalance[pid] = 1234;
-  eng._lifetimeContrib[pid] = 5678;
+  eng._contribBalance[pid] = 3000000000;
+  eng._lifetimeContrib[pid] = 4000000000;
   clearBroadcasts(eng);
 
   eng.handleShopInventory(pid);
@@ -392,8 +414,8 @@ test('T7: handleShopInventory 返回完整快照（owned/equipped/contribBalance
   assert.strictEqual(inv.data.equipped.frame, 'frame_bronze');
   assert.strictEqual(inv.data.equipped.entrance, '');
   assert.strictEqual(inv.data.equipped.barrage, '');
-  assert.strictEqual(inv.data.contribBalance, 1234);
-  assert.strictEqual(inv.data.lifetimeContrib, 5678);
+  assert.strictEqual(inv.data.contribBalance, 3000000000);
+  assert.strictEqual(inv.data.lifetimeContrib, 4000000000);
 });
 
 // ============================================================
@@ -409,6 +431,17 @@ test('T8: loadSeason(season_1) 加载 B9/B10 赛季限定到 _seasonShopPool', (
   const first = eng._seasonShopPool[0];
   assert.ok(first && first.id && first.slot, 'SKU 字段完整');
   assert.ok(first.lifetimeContribMin >= 1000, 'lifetimeContribMin >= 1000（策划案 §39.8 守门）');
+  assert.ok(first.minSeasonDay >= 3, 'minSeasonDay >= 3（策划案 §39.8 D3 守门）');
+
+  clearBroadcasts(eng);
+  eng.seasonMgr = { seasonId: 1, seasonDay: 2 };
+  eng.handleShopList('p8_catalog', 'B');
+  const list = findBroadcast(eng, 'shop_list_data', d => d.category === 'B');
+  assert.ok(list, 'B 类 shop_list 应返回目录');
+  const b9 = list.data.items.find(it => it.itemId === 'b9_frost_crown');
+  assert.ok(b9, 'D2 目录应包含 B9 供客户端灰化预览');
+  assert.strictEqual(b9.minSeasonDay, 3, 'B9 payload 应携带 minSeasonDay=3');
+  assert.strictEqual(b9.minLifetimeContrib, 1000, 'B9 payload 应携带 minLifetimeContrib=1000');
 });
 
 test('T8a: archived ownedItems use persisted metadata when SKU is no longer listed', () => {

@@ -86,4 +86,14 @@ assert.ok(
 );
 finalizeInsufficient._clearAllTimers();
 
+captures = [];
+const ghostVote = makeEngine(captures, 1, 3);
+ghostVote.handleBuildPropose('p1', 'Builder', 'watchtower');
+assert.ok(ghostVote._buildVote, 'proposal should start before ghost vote guard');
+captures.length = 0;
+ghostVote.handleBuildVote('ghost', ghostVote._buildVote.proposalId, ghostVote._buildVote.options[0]);
+assert.ok(!ghostVote._buildVote.votes.has('ghost'), 'D3 overflow ghost should not be counted as a build voter before supporter unlock');
+assert.ok(!findMsg(captures, 'build_vote_update'), 'ghost vote should not broadcast build_vote_update');
+ghostVote._clearAllTimers();
+
 console.log('PASS  §37 daily build vote persistence and season isolation');

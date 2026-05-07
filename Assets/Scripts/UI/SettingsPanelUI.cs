@@ -3,6 +3,7 @@ using UnityEngine.UI;
 using TMPro;
 using DrscfZ.Core;
 using DrscfZ.Systems;
+using DrscfZ.Survival;
 
 namespace DrscfZ.UI
 {
@@ -162,9 +163,11 @@ namespace DrscfZ.UI
             endBtnRT.anchoredPosition = new Vector2(0, yPos - 10f);
             endBtnRT.sizeDelta = new Vector2(300, 58);
             var endBtnImg = endBtnGo.AddComponent<Image>();
-            endBtnImg.color = new Color(0.72f, 0.18f, 0.18f);
+            bool canEndGame = CanEndGameNow();
+            endBtnImg.color = canEndGame ? new Color(0.72f, 0.18f, 0.18f) : new Color(0.32f, 0.32f, 0.35f);
             var endBtn = endBtnGo.AddComponent<Button>();
             endBtn.targetGraphic = endBtnImg;
+            endBtn.interactable = canEndGame;
             endBtn.onClick.AddListener(ShowConfirmDialog);
             CreateTMP(endBtnGo.transform, "Text", "结束本次守护", 28,
                 Vector2.zero, Vector2.zero,
@@ -341,6 +344,7 @@ namespace DrscfZ.UI
 
         private void ShowConfirmDialog()
         {
+            if (!CanEndGameNow()) return;
             if (_confirmDialog != null) return;
 
             _confirmDialog = new GameObject("ConfirmDialog");
@@ -379,6 +383,11 @@ namespace DrscfZ.UI
 
         private void OnConfirmEnd()
         {
+            if (!CanEndGameNow())
+            {
+                DismissConfirmDialog();
+                return;
+            }
             Debug.Log("[SettingsPanelUI] 用户确认结束本次守护 → end_game（§28.8 / §16.4）");
             // 🆕 P0-B8：§28.8 规则改为发 end_game 而非 reset_game
             //   - end_game：进入 recovery，不降级堡垒日（主播主动休息）
@@ -386,6 +395,14 @@ namespace DrscfZ.UI
             //   服务端校验：仅 state ∈ {day, night} 时受理；其他态推 end_game_failed，由 SurvivalGameManager 兜底提示
             DrscfZ.Core.NetworkManager.Instance?.SendMessage("end_game");
             Close();
+        }
+
+        private bool CanEndGameNow()
+        {
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm == null) return false;
+            if (sgm.State != SurvivalGameManager.SurvivalState.Running) return false;
+            return sgm.CurrentPhaseVariant != "recovery";
         }
 
         private void DismissConfirmDialog()

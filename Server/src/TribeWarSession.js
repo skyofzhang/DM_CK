@@ -321,10 +321,25 @@ class TribeWarSession {
     if (!defEngine) return false;
     const monster = defEngine._activeMonsters && defEngine._activeMonsters.get(monsterId);
     if (!monster || monster.currentHp <= 0) return false;
-    this._damageBuildingSkeleton(monsterId);
-    this.onExpeditionHitWorker(monsterId);
-    console.log(`[TribeWarSession:${this.id}] _resolveExpeditionHit: monsterId=${monsterId} source=${source}`);
+    const requestedTargetType = typeof source === 'string' ? source : 'unknown';
+    const targetType = (requestedTargetType === 'building_skeleton' || requestedTargetType === 'fallback')
+      && this._hasDamageableBuildingSkeleton(defEngine)
+      ? 'building_skeleton'
+      : 'worker';
+    if (targetType === 'building_skeleton') {
+      if (!this._damageBuildingSkeleton(monsterId)) this.onExpeditionHitWorker(monsterId);
+    } else {
+      this.onExpeditionHitWorker(monsterId);
+    }
+    console.log(`[TribeWarSession:${this.id}] _resolveExpeditionHit: monsterId=${monsterId} target=${targetType}`);
     return true;
+  }
+
+  _hasDamageableBuildingSkeleton(defEngine) {
+    return !!(defEngine
+      && defEngine._buildingInProgress
+      && typeof defEngine._buildingInProgress.size === 'number'
+      && defEngine._buildingInProgress.size > 0);
   }
 
   /**

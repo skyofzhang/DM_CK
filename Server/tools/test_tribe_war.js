@@ -154,4 +154,81 @@ function makeSession(damageMultiplier = 1.0) {
   session.end('test');
 }
 
+{
+  const { session, defenderEngine } = makeSession(1.0);
+  const now = Date.now();
+  defenderEngine._buildingInProgress.set('watchtower', {
+    startedAt: now - 50000,
+    completesAt: now + 50000,
+    totalMs: 100000,
+    timer: null,
+    progressTimer: null,
+  });
+  session.energy = 20;
+  session.releaseExpedition(1);
+  const mid = defenderEngine._activeMonsters.keys().next().value;
+  const meta = session._expeditionMonsters.get(mid);
+  meta.earliestHitAt = Date.now() - 1;
+  assert.strictEqual(session.handleExpeditionHit(mid, 'worker'), true, 'worker hit after earliestHitAt should resolve');
+  assert.strictEqual(defenderEngine._buildingInProgress.get('watchtower').completesAt, now + 50000, 'worker hit should not damage building skeleton');
+  session.end('test');
+}
+
+{
+  const { session, defenderEngine } = makeSession(1.0);
+  const now = Date.now();
+  defenderEngine._buildingInProgress.set('watchtower', {
+    startedAt: now - 50000,
+    completesAt: now + 50000,
+    totalMs: 100000,
+    timer: null,
+    progressTimer: null,
+  });
+  session.energy = 20;
+  session.releaseExpedition(1);
+  const mid = defenderEngine._activeMonsters.keys().next().value;
+  const meta = session._expeditionMonsters.get(mid);
+  meta.earliestHitAt = Date.now() - 1;
+  assert.strictEqual(session.handleExpeditionHit(mid, 'building_skeleton'), true, 'building skeleton hit after earliestHitAt should resolve');
+  const info = defenderEngine._buildingInProgress.get('watchtower');
+  assert.ok(info.completesAt > now + 50000, 'building skeleton hit should delay construction');
+  if (info.timer) clearTimeout(info.timer);
+  session.end('test');
+}
+
+{
+  const { session, defenderEngine } = makeSession(1.0);
+  const now = Date.now();
+  defenderEngine._activeMonsters.set('tw_fallback_build', { id: 'tw_fallback_build', currentHp: 10 });
+  defenderEngine._buildingInProgress.set('watchtower', {
+    startedAt: now - 50000,
+    completesAt: now + 50000,
+    totalMs: 100000,
+    timer: null,
+    progressTimer: null,
+  });
+  assert.strictEqual(session._resolveExpeditionHit('tw_fallback_build', 'fallback'), true, 'fallback should resolve');
+  const info = defenderEngine._buildingInProgress.get('watchtower');
+  assert.ok(info.completesAt > now + 50000, 'fallback should still damage an active building skeleton');
+  if (info.timer) clearTimeout(info.timer);
+  session.end('test');
+}
+
+{
+  const { session, defenderEngine } = makeSession(1.0);
+  defenderEngine.food = 0;
+  defenderEngine.coal = 0;
+  defenderEngine.ore = 0;
+  defenderEngine.gateHp = 100;
+  session.energy = 20;
+  session.releaseExpedition(1);
+  const mid = defenderEngine._activeMonsters.keys().next().value;
+  const meta = session._expeditionMonsters.get(mid);
+  meta.earliestHitAt = Date.now() - 1;
+  assert.strictEqual(session.handleExpeditionHit(mid, 'building_skeleton'), true, 'spoofed skeleton target should still resolve');
+  assert.strictEqual(defenderEngine.broadcasts.find(m => m.type === 'build_demolished'), undefined, 'spoofed skeleton target must not demolish a missing building');
+  assert.ok(defenderEngine.gateHp < 100, 'spoofed skeleton target should fall back to normal worker/gate resolution');
+  session.end('test');
+}
+
 console.log('PASS  tribe war expedition cap, damage, fallback, and building attack behavior');

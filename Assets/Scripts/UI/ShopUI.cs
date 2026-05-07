@@ -312,9 +312,13 @@ namespace DrscfZ.UI
             // 尝试填充文字（Prefab 至少 1~3 个 TMP_Text）
             var texts = go.GetComponentsInChildren<TMP_Text>(true);
             bool owned = ownedSet != null && !string.IsNullOrEmpty(item.itemId) && ownedSet.Contains(item.itemId);
+            string lockReason = GetItemLockReason(item);
+            bool locked = !string.IsNullOrEmpty(lockReason);
             string nameLine  = owned ? $"{item.name}（已购）" : item.name;
             string priceLine = item.price > 0 ? $"{item.price}" : "免费";
-            string effectLine = string.IsNullOrEmpty(item.effect) ? "" : item.effect;
+            string effectLine = locked
+                ? (string.IsNullOrEmpty(item.effect) ? lockReason : $"{item.effect} / {lockReason}")
+                : (string.IsNullOrEmpty(item.effect) ? "" : item.effect);
 
             if (texts.Length >= 3)
             {
@@ -337,7 +341,7 @@ namespace DrscfZ.UI
             if (btn != null)
             {
                 btn.onClick.RemoveAllListeners();
-                if (owned && item.category == "B")
+                if ((owned && item.category == "B") || locked)
                 {
                     btn.interactable = false;
                 }
@@ -508,6 +512,21 @@ namespace DrscfZ.UI
                 case "barrage":  return "弹幕装饰";
                 default:         return "—";
             }
+        }
+
+        private string GetItemLockReason(ShopItem item)
+        {
+            if (item == null || item.category != "B") return "";
+
+            int seasonDay = SurvivalGameManager.Instance?.CurrentSeasonState?.seasonDay ?? 1;
+            if (item.minSeasonDay > 0 && seasonDay < item.minSeasonDay)
+                return $"D{item.minSeasonDay} 解锁";
+
+            long lifetime = _lastInventory != null ? _lastInventory.lifetimeContrib : 0L;
+            if (item.minLifetimeContrib > 0 && lifetime < item.minLifetimeContrib)
+                return $"需累计 {item.minLifetimeContrib} 贡献";
+
+            return "";
         }
 
         private static string EscapeJson(string s)

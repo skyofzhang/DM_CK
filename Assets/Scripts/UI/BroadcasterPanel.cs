@@ -359,7 +359,8 @@ namespace DrscfZ.UI
         /// </summary>
         private void OnShopClicked()
         {
-            if (IsKnownLocked(SurvivalMessageProtocol.FeatureShop, "商店系统")) return;
+            // §39.12: locked shop may still open as a preview shell; server returns an
+            // empty list / feature_locked for purchases until D2.
             if (ShopUI.Instance != null)
             {
                 ShopUI.Instance.OpenPanel("A");
@@ -419,7 +420,14 @@ namespace DrscfZ.UI
                 }
                 catch { /* fall through to placeholder */ }
             }
-            Debug.LogWarning("[BroadcasterPanel] OnBuildingClicked：BroadcasterDecisionHUD 未就绪（或无 OpenBuildPropose），D3 解锁后请 Setup 脚本补齐");
+            var buildVote = BuildVoteUI.Instance ?? FindObjectOfType<BuildVoteUI>(true);
+            if (buildVote != null)
+            {
+                buildVote.OpenProposeMenu();
+                Debug.Log("[BroadcasterPanel] 🏗️ OnBuildingClicked → BuildVoteUI fallback");
+                return;
+            }
+            Debug.LogWarning("[BroadcasterPanel] OnBuildingClicked：BroadcasterDecisionHUD/BuildVoteUI 均未就绪，D3 解锁后请 Setup 脚本补齐");
             AnnouncementUI.Instance?.ShowAnnouncement("建造系统", "请稍候，建造菜单加载中...", new Color(0.6f, 0.9f, 0.6f), 2f);
         }
 

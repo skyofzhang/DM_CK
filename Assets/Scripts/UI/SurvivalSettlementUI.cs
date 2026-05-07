@@ -162,6 +162,12 @@ namespace DrscfZ.UI
             _netSubscribed = false;
         }
 
+        private void SyncRoomCreatorFromManager()
+        {
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm != null) _isRoomCreator = sgm.IsRoomCreator;
+        }
+
         private void HandleNetMessage(string type, string dataJson)
         {
             if (type != "join_room_confirm") return;
@@ -192,6 +198,7 @@ namespace DrscfZ.UI
         public void ShowSettlement(SettlementData data)
         {
             // 保险：显示时再订阅一次（Awake 顺序若早于 NetworkManager 初始化时会跳过，此处兜底）
+            SyncRoomCreatorFromManager();
 
             // audit-r10 §29：结算面板出现 SFX（翻页声）
 
@@ -241,6 +248,7 @@ namespace DrscfZ.UI
 
         private IEnumerator PlaySettlementSequence(SettlementData data)
         {
+            SyncRoomCreatorFromManager();
             // 序列开始时隐藏重新开始按钮，防止误触
             if (_restartButton != null) _restartButton.gameObject.SetActive(false);
             // 主播跳过按钮按身份显示
@@ -671,6 +679,7 @@ namespace DrscfZ.UI
 
         private void OnSkipClicked()
         {
+            SyncRoomCreatorFromManager();
             if (!_isRoomCreator)
             {
                 Debug.LogWarning("[SurvivalSettlementUI] 非主播点击了跳过按钮（按钮本不应可见）");

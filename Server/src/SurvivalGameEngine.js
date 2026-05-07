@@ -2320,6 +2320,7 @@ class SurvivalGameEngine {
           }
           if (m.currentHp <= 0) killed.push(mid);
         }
+        let killedBoss = false;
         for (const mid of killed) {
           const m = this._activeMonsters.get(mid);
           this._activeMonsters.delete(mid);
@@ -2330,11 +2331,13 @@ class SurvivalGameEngine {
           this._postMonsterDeathHooks(mid, m.type, m.variant);
           // audit-r8 §34 F4 WARNING 防御：Boss 被 T5 AOE 击杀时清零弱点字段（避免 _tick 残留 started/ended 广播）
           if (m && m.type === 'boss') {
+            killedBoss = true;
             this._bossWeaknessNextAt = 0;
             this._bossWeaknessEndAt = 0;
             this._bossWeaknessBroadcastedEnd = true;
           }
         }
+        if (killedBoss) this._completeNightAfterBossKill('boss_killed');
         effects.aoeDamage     = aoeDmg;
         effects.monstersKilled = killed.length;
 
@@ -2744,6 +2747,7 @@ class SurvivalGameEngine {
       }
       if (m.currentHp <= 0) killed.push(mid);
     }
+    let killedBoss = false;
     for (const mid of killed) {
       const m = this._activeMonsters.get(mid);
       this._activeMonsters.delete(mid);
@@ -2755,7 +2759,9 @@ class SurvivalGameEngine {
       });
       // §31 guard/summoner 死亡后置钩子
       this._postMonsterDeathHooks(mid, m.type, m.variant);
+      if (m && m.type === 'boss') killedBoss = true;
     }
+    if (killedBoss) this._completeNightAfterBossKill('boss_killed');
     effects.aoeDamage      = aoeDmg;
     effects.monstersKilled = killed.length;
 
@@ -3041,6 +3047,9 @@ class SurvivalGameEngine {
     this._nextEventTimer = RANDOM_EVENT_INTERVAL_MIN_SEC + Math.random() * (RANDOM_EVENT_INTERVAL_MAX_SEC - RANDOM_EVENT_INTERVAL_MIN_SEC);
     // 城门每日升级标志：新一天重置（broadcaster/expedition_trader 路径可再次升级）
     this._gateUpgradedToday = false;
+    if (this.gateLevel === GATE_MAX_HP_BY_LEVEL.length) {
+      this._startFrostPulseTimer();
+    }
 
     // §37 建造系统：按当前 seasonId:seasonDay 同步"每日 1 次"持久化限额。
     this._syncBuildVoteUsedFlagForCurrentDay();
@@ -3247,6 +3256,9 @@ class SurvivalGameEngine {
     if (this.gateLevel >= 5) {
       this._broadcastFrostAuraState(true);
     }
+    if (this.gateLevel === GATE_MAX_HP_BY_LEVEL.length) {
+      this._startFrostPulseTimer();
+    }
 
     // §16 v1.27 tick 幂等重启：从 recovery 过来时 tick 仍是轻量分支（recovery），需切换到完整分支；
     //   从 _enterDay 过来时 tick 已在跑（_startTick 内部 _clearTick 保证幂等，无副作用）。
@@ -3380,7 +3392,8 @@ class SurvivalGameEngine {
     // §16.6 fortressDayBefore：_onRoomFail 会修改 this.fortressDay，必须先缓存
     const fortressDayBefore = this.fortressDay || 1;
 
-    const rankings = this._buildRankings();
+    const rankings = this._buildRankings(10);
+    const weeklyRankings = this._buildRankings(0);
 
     // ===== 积分池分配（§12.3 / §16.6 / audit-r8 §34 F6）=====
     // 🆕 v1.26 固定 0.3（无胜利分支）；剩余流入下一周期（上限=本局积分池 50%）
@@ -3465,6 +3478,7 @@ class SurvivalGameEngine {
       newbieProtected,
       totalScore:        Object.values(this.contributions).reduce((a, b) => a + b, 0),
       rankings,
+      weeklyRankings,
       // 积分池字段
       scorePool:         Math.round(this.scorePool),
       distributed:       payoutTotal,
@@ -3529,8 +3543,11 @@ class SurvivalGameEngine {
     // 2) weekly_ranking.addGameResult(contributions)：由 SurvivalRoom.broadcast 拦截
     //    survival_game_ended 消息时已同步执行（见 SurvivalRoom.js:240），此处无需重复调用
 
-    // 3) contributions 清零：新周期从 0 累计
+    // 3) contributions 清零：新周期从 0 累计，但保留守护者身份键。
+    // 同一张表也用于 worker/slot 绑定；整表替换会让恢复期后的矿工丢失。
+    const guardianIds = Object.keys(this.contributions || {});
     this.contributions = {};
+    for (const pid of guardianIds) this.contributions[pid] = 0;
 
     // 4) §33 助威者 totalContrib 清零（Map 本身保留，身份位延续）
     if (this._supporters && typeof this._supporters.forEach === 'function') {
@@ -3541,6 +3558,8 @@ class SurvivalGameEngine {
     // ⚠️ _lifetimeContrib / _contribBalance 绝不清零（§30 / §39 跨周期永续）
 
     this.state = 'recovery';
+    const recoveryDay = this._getCombatDay();
+    this.currentDay = recoveryDay;
     // §4.2 recovery 阶段时长 120s → remainingTime 供客户端倒计时（_tick 每秒递减）
     this.remainingTime = 120;
     // §3.1 流程：recovery 替代"失败周期那个白天"，currentDay 不推进（由 120s 结束后 _enterNight(currentDay+1) 推进）
@@ -3549,6 +3568,8 @@ class SurvivalGameEngine {
     this.food = Math.min(2000, this.food + 100);
     this.coal = Math.min(1500, this.coal + 50);
     this.ore  = Math.min(800,  this.ore  + 20);
+    const recoveryTemp = this.config.initFurnaceTemp ?? 20;
+    this.furnaceTemp = Math.min(this.maxTemp, Math.max(this.furnaceTemp, recoveryTemp));
 
     // ===== 城门 HP 重置到当前等级上限 =====
     const gateMax = GATE_MAX_HP_BY_LEVEL[Math.max(0, (this.gateLevel || 1) - 1)]
@@ -3569,7 +3590,7 @@ class SurvivalGameEngine {
       timestamp: Date.now(),
       data: {
         phase:         'day',
-        day:           this.currentDay,
+        day:           recoveryDay,
         phaseDuration: 120,
         variant:       'recovery',
         act_tag:       this._currentActTag || 'prologue',
@@ -3583,7 +3604,7 @@ class SurvivalGameEngine {
     // P0-A5 room_state：recovery phase_changed 后也推一次（与 _enterDay / _enterNight 一致）
     try { this._broadcastRoomState('phase_changed:recovery'); } catch (e) { /* ignore */ }
 
-    console.log(`[SurvivalEngine] ===== Recovery Start (120s, day=${this.currentDay}) =====`);
+    console.log(`[SurvivalEngine] ===== Recovery Start (120s, day=${recoveryDay}) =====`);
 
     // ===== §16 v1.27 恢复期 tick 重启 =====
     //   _enterSettlement → _clearAllTimers 已清 tick；此处重启让 remainingTime 倒计时生效，
@@ -4167,7 +4188,21 @@ class SurvivalGameEngine {
 
   // ==================== 矿工HP系统 ====================
 
-  /** 夜晚开始时初始化所有已加入玩家的矿工HP（满血，按等级动态值）*/
+  /** Completes the current night when a boss dies through any damage path. */
+  _completeNightAfterBossKill(reason = 'boss_killed') {
+    this._bossWeaknessNextAt         = 0;
+    this._bossWeaknessEndAt          = 0;
+    this._bossWeaknessBroadcastedEnd = true;
+
+    if (this.state !== 'night') return false;
+    this._broadcast({
+      type: 'night_cleared',
+      data: { reason: 'boss_killed' }
+    });
+    return this._completeNightSuccess(reason);
+  }
+
+  /** Night start initializes worker HP for all joined guardians. */
   _initWorkerHp() {
     this._workerHp = {};
     for (const pid of Object.keys(this.contributions)) {
@@ -4600,15 +4635,7 @@ class SurvivalGameEngine {
       // Boss 击杀 → 提前结束当夜
       if (target.type === 'boss') {
         // audit-r8 §34 F4: Boss 死亡 → 清零弱点调度，避免 _tick 在 Boss 已死后继续触发 started
-        this._bossWeaknessNextAt         = 0;
-        this._bossWeaknessEndAt          = 0;
-        this._bossWeaknessBroadcastedEnd = true;
-
-        this._broadcast({
-          type: 'night_cleared',
-          data: { reason: 'boss_killed' }
-        });
-        this._completeNightSuccess('boss_killed');
+        this._completeNightAfterBossKill('boss_killed');
       }
     }
   }
@@ -4797,6 +4824,10 @@ class SurvivalGameEngine {
     });
   }
 
+  _getFrostAuraSlowMult() {
+    return (this.gateLevel || 1) >= 5 ? 0.7 : 1.0;
+  }
+
   _withMonsterSpawnMeta(monster, spawnSide = 'all', nowMs = Date.now(), startDistance = SERVER_MONSTER_APPROACH_DISTANCE) {
     if (!monster || typeof monster !== 'object') return monster;
     monster.spawnedAt = nowMs;
@@ -4883,6 +4914,7 @@ class SurvivalGameEngine {
     console.log(`[SurvivalEngine] Night ${day} waves: ${cfg.baseCount}-${cfg.maxCount} per wave, every ${cfg.refreshTime}s (mult=${intervalMult})`);
 
     let waveIndex = 0;
+    let waitingPhaseActive = false;
 
     // §37.2 watchtower 10s 预告：若建有瞭望塔，每个 wave 在实际 spawn 前 10s 广播 monster_wave_incoming
     //   firstAttackAt ≈ spawnsAt + 3500（怪物走路 3s + _attackCooldown 0.5s，与 §8.4 对齐）
@@ -4965,6 +4997,8 @@ class SurvivalGameEngine {
         return;
       }
 
+      waitingPhaseActive = true;
+
       // audit-r11 GAP-D01：从房间状态派生 allowVoteTypes（替代 r9-r10 的空数组占位）
       //   - support：仅当本房有助威者（_supporters 非空，§33 D6 已解锁）才允许投票
       //   - experience：仅当本房有 altar 建筑（§37 体验加成）才允许
@@ -5010,6 +5044,7 @@ class SurvivalGameEngine {
       });
       console.log(`[SurvivalEngine] waiting_phase_started: day=${day} waveIdx=${wIdx} countdown=${waitSec}s (boss=${!!isBossWave}) allowVoteTypes=[${allowVoteTypes.join(',')}] nightModifier=${nightModifierForWaiting ? nightModifierForWaiting.id : 'null'}`);
       const waitTimer = setTimeout(() => {
+        waitingPhaseActive = false;
         _engineRef.broadcast({
           type: 'waiting_phase_ended',
           timestamp: Date.now(),
@@ -5041,6 +5076,7 @@ class SurvivalGameEngine {
           clearInterval(repeatTimer);
           return;
         }
+        if (waitingPhaseActive) return;
         if (waveIndex >= cfg.maxCount) {
           clearInterval(repeatTimer);
           return;
@@ -5365,7 +5401,8 @@ class SurvivalGameEngine {
     //    为对齐玩家体感（rush 才是主要城门压力），rush 伤害不享受减伤。
     // 2) assassin 份额：assassin 每只独立攻击 HP 最低存活矿工（block 成功则该份归零，不顺延）
     // 3) 其余（normal/ice/summoner/guard/mini）：走原有均摊逻辑
-    const perMonsterDmg = Math.max(1, Math.floor(this.monsterGateDamage * this._workerDamageMult));
+    const frostAuraSlowMult = this._getFrostAuraSlowMult();
+    const perMonsterDmg = Math.max(1, Math.floor(this.monsterGateDamage * this._workerDamageMult * frostAuraSlowMult));
     const aliveWorkersInitial = Object.entries(this._workerHp).filter(([, w]) => !w.isDead);
 
     // —— 子路 1：rush 直打城门（跳过减伤）——
@@ -6500,6 +6537,7 @@ class SurvivalGameEngine {
     if (!playerId || !this._buildVote) return;
     if (this._buildVote.proposalId !== proposalId) return;
     if (!this._buildVote.options.includes(buildId)) return;
+    if (this.contributions[playerId] === undefined && !(this._supporters && this._supporters.has(playerId))) return;
 
     this._buildVote.votes.set(playerId, buildId);
 
@@ -8586,10 +8624,11 @@ class SurvivalGameEngine {
     this._trackContribution(playerId, amount, 'combat');
   }
 
-  _buildRankings() {
-    return Object.entries(this._getMergedContributionTotals())
-      .sort(([, a], [, b]) => b - a)
-      .slice(0, 10)
+  _buildRankings(limit = 10) {
+    const sorted = Object.entries(this._getMergedContributionTotals())
+      .sort(([, a], [, b]) => b - a);
+    const rows = (limit && limit > 0) ? sorted.slice(0, limit) : sorted;
+    return rows
       .map(([id, score], i) => ({
         rank:         i + 1,
         playerId:     id,
@@ -9652,6 +9691,7 @@ class SurvivalGameEngine {
       category: cfg.category || 'B',
       effect: cfg.effect || '',
       minLifetimeContrib: Number(cfg.lifetimeContribMin || cfg.minLifetimeContrib) || 0,
+      minSeasonDay: Number(cfg.minSeasonDay) || 0,
       limitedSeasonId: cfg.limitedSeasonId || '',
     };
   }
@@ -9779,6 +9819,7 @@ class SurvivalGameEngine {
           category: cfg.category,
           effect: cfg.effect || '',
           minLifetimeContrib: 0,
+          minSeasonDay: 0,
           limitedSeasonId: '',
         });
       }
@@ -9794,6 +9835,7 @@ class SurvivalGameEngine {
           category: cfg.category,
           effect: cfg.effect || '',
           minLifetimeContrib: 0,
+          minSeasonDay: 0,
           limitedSeasonId: '',
         });
       }
@@ -9813,6 +9855,7 @@ class SurvivalGameEngine {
             category: it.category || 'B',
             effect: it.effect || '',
             minLifetimeContrib: it.lifetimeContribMin || 0,
+            minSeasonDay: it.minSeasonDay || 0,
             limitedSeasonId: seasonId,
           });
         }
@@ -10458,9 +10501,17 @@ class SurvivalGameEngine {
     // 清除 per-player 临时 boost 定时器（能量电池）
     for (const t of Object.values(this._playerTempBoostTimers || {})) clearTimeout(t);
     this._playerTempBoostTimers = {};
+    this._playerTempBoost = {};
     // 清除随机事件超时
     for (const t of this._randomEventTimers) clearTimeout(t);
     this._randomEventTimers = [];
+    this.tempDecayMultiplier = 1.0;
+    this.foodBonus = 1.0;
+    this.oreBonus = 1.0;
+    this._iceGroundEndAt = 0;
+    this._heavyFogEndAt = 0;
+    this._hotSpringEndAt = 0;
+    this._hotSpringLastTick = 0;
     // 清除实时榜防抖定时器
     if (this._liveRankingTimer) { clearTimeout(this._liveRankingTimer); this._liveRankingTimer = null; }
 

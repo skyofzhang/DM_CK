@@ -56,6 +56,7 @@ namespace DrscfZ.Survival
         // 🔴 audit-r44 GAP-PRE44-01：r37 GAP-E37-21 双层守门 streamer_prompt 需 _isRoomCreator 字段，但漏声明导致 main 编译断（CS0103）。
         // 设值点：HandleJoinRoomConfirm 收到 join_room_confirm 时按 data.isRoomCreator 同步。
         private bool _isRoomCreator = false;
+        public bool IsRoomCreator => _isRoomCreator;
 
         // 事件（UI订阅）
         public event Action<SurvivalState> OnStateChanged;

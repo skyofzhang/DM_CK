@@ -437,9 +437,10 @@ class SurvivalRoom {
     if (message && message.type === 'survival_game_ended' && message.data) {
       const d = message.data;
       // 更新本周贡献榜
-      if (d.rankings) {
+      const weeklyRankings = d.weeklyRankings || d.rankings;
+      if (weeklyRankings) {
         try {
-          this.weeklyRanking.addGameResult(d.rankings);
+          this.weeklyRanking.addGameResult(weeklyRankings);
           setTimeout(() => this._broadcastWeeklyRanking(), 500);
         } catch (e) {
           console.error(`[SurvivalRoom:${this.roomId}] WeeklyRanking update error: ${e.message}`);
@@ -892,7 +893,7 @@ class SurvivalRoom {
         const catL = (data && data.category) || '';
         this._refreshVeteranStatus();
         if (!isFeatureUnlocked(this, 'shop')) {
-          this.broadcast({
+          this._sendToClient(ws, {
             type: 'shop_list_data',
             timestamp: Date.now(),
             data: { playerId: pidL, category: catL, items: [] },
@@ -921,6 +922,7 @@ class SurvivalRoom {
         // §36.12 shop 门槛
         const itemIdPr = (data && data.itemId) || '';
         if (!this._checkFeatureOrFail('shop', 'shop_purchase_failed', { itemId: itemIdPr }, ws)) break;
+        if (!this._requireBroadcaster(ws, 'shop_purchase')) break;
         // { itemId, pendingId? }
         const pid       = ws._playerId || (data && data.playerId) || '';
         const pname     = (data && data.playerName)

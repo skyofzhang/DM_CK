@@ -81,6 +81,7 @@ namespace DrscfZ.UI
             }
             if (Instance != null && Instance != this) { /* 保留先进入的实例 */ return; }
             Instance = this;
+            EnsurePlayerCountText();
         }
 
         private void OnDestroy()
@@ -101,8 +102,32 @@ namespace DrscfZ.UI
 
         private void Start()
         {
+            EnsurePlayerCountText();
             // Start()で再度試みる（Awake順序によりOnEnableでInstanceがnullだった場合の補完）
+            EnsurePlayerCountText();
             TrySubscribe();
+        }
+
+        private void EnsurePlayerCountText()
+        {
+            if (playerCountText != null) return;
+
+            var go = new GameObject("PlayerCountText_Auto");
+            go.transform.SetParent(transform, false);
+            var rt = go.AddComponent<RectTransform>();
+            rt.anchorMin = new Vector2(1f, 1f);
+            rt.anchorMax = new Vector2(1f, 1f);
+            rt.pivot = new Vector2(1f, 0.5f);
+            rt.anchoredPosition = new Vector2(-24f, -26f);
+            rt.sizeDelta = new Vector2(260f, 30f);
+
+            var tmp = go.AddComponent<TextMeshProUGUI>();
+            tmp.fontSize = 20f;
+            tmp.alignment = TextAlignmentOptions.Right;
+            tmp.color = Color.white;
+            tmp.raycastTarget = false;
+            if (scorePoolText != null && scorePoolText.font != null) tmp.font = scorePoolText.font;
+            playerCountText = tmp;
         }
 
         private void TrySubscribe()
@@ -405,6 +430,7 @@ namespace DrscfZ.UI
         private void UpdatePlayerCount()
         {
             var sgm = SurvivalGameManager.Instance;
+            EnsurePlayerCountText();
             if (sgm == null || playerCountText == null) return;
 
             // 助威模式 §33：有助威者时分开显示守护者/助威人数

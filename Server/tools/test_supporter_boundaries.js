@@ -105,4 +105,69 @@ const SurvivalGameEngine = require('../src/SurvivalGameEngine');
   engine._clearAllTimers();
 }
 
-console.log('PASS  supporter boundaries, first_barrage workerId, rush counts, and overflow ghost T4/T5 redirects');
+{
+  const captures = [];
+  const engine = new SurvivalGameEngine({}, (msg) => captures.push(msg));
+  try {
+    engine.room = { seasonMgr: { seasonDay: 6 }, roomId: 't5_boss_kill' };
+    engine.state = 'night';
+    engine.currentDay = 6;
+    engine.fortressDay = 6;
+    engine.maxFortressDay = 6;
+    engine.contributions.p1 = 1;
+    engine.playerNames.p1 = 'P1';
+    engine._workerHp.p1 = { hp: 100, maxHp: 100, isDead: false, respawnAt: 0 };
+    engine._activeMonsters.set('boss_t5', {
+      id: 'boss_t5',
+      type: 'boss',
+      variant: 'normal',
+      maxHp: 150,
+      currentHp: 150,
+      atk: 10,
+      spd: 1,
+    });
+
+    engine.handleGift('p1', 'P1', '', 'love_explosion', 1990);
+
+    assert.strictEqual(engine.state, 'day', 'T5 boss kill should immediately enter the next day');
+    assert.ok(captures.find(m => m.type === 'night_cleared'), 'T5 boss kill should broadcast night_cleared');
+    assert.strictEqual(engine.fortressDay, 7, 'T5 boss kill should count as a fortress day success');
+  } finally {
+    engine._clearAllTimers();
+  }
+}
+
+{
+  const captures = [];
+  const engine = new SurvivalGameEngine({}, (msg) => captures.push(msg));
+  try {
+    engine.room = { seasonMgr: { seasonDay: 6 }, roomId: 'supporter_t5_boss_kill' };
+    engine.state = 'night';
+    engine.currentDay = 6;
+    engine.fortressDay = 6;
+    engine.maxFortressDay = 6;
+    engine._supporters.set('s1', { playerId: 's1', playerName: 'Supporter', totalContrib: 0 });
+    engine.contributions.p1 = 1;
+    engine.playerNames.p1 = 'P1';
+    engine._workerHp.p1 = { hp: 100, maxHp: 100, isDead: false, respawnAt: 0 };
+    engine._activeMonsters.set('boss_supporter_t5', {
+      id: 'boss_supporter_t5',
+      type: 'boss',
+      variant: 'normal',
+      maxHp: 150,
+      currentHp: 150,
+      atk: 10,
+      spd: 1,
+    });
+
+    engine.handleGift('s1', 'Supporter', '', 'love_explosion', 1990);
+
+    assert.strictEqual(engine.state, 'day', 'supporter T5 boss kill should immediately enter the next day');
+    assert.ok(captures.find(m => m.type === 'night_cleared'), 'supporter T5 boss kill should broadcast night_cleared');
+    assert.strictEqual(engine.fortressDay, 7, 'supporter T5 boss kill should count as a fortress day success');
+  } finally {
+    engine._clearAllTimers();
+  }
+}
+
+console.log('PASS  supporter boundaries, first_barrage workerId, rush counts, overflow ghost redirects, and T5 boss clears');

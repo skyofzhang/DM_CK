@@ -1074,6 +1074,7 @@ namespace DrscfZ.Survival
         public string category;           // 'A' | 'B'
         public string effect;             // 效果描述（前端直接显示）
         public int    minLifetimeContrib; // 赛季限定 SKU 才有，默认 0
+        public int    minSeasonDay;       // 赛季限定 SKU 才有，默认 0（如 B9/B10 D3 解锁）
         public string limitedSeasonId;    // 赛季限定 SKU 才有；非限定为 null
     }
 
@@ -1162,7 +1163,7 @@ namespace DrscfZ.Survival
         public string[]     owned;
         public ShopItem[]   ownedItems;       // §39.8：历史赛季限定 SKU 的名称/slot/effect 元数据
         public ShopEquipped equipped;
-        public int          contribBalance;    // 🔴 audit-r37 GAP-C37-01：当前可消费余额（A 类货币）
+        public long         contribBalance;    // 🔴 audit-r37 GAP-C37-01：当前可消费余额（B 类货币）
         public long         lifetimeContrib;   // 🔴 audit-r37 GAP-C37-01：终身累计贡献（B 类货币 / 装备购买基线）
     }
 

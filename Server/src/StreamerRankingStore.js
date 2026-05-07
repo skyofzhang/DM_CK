@@ -149,11 +149,44 @@ class StreamerRankingStore {
   }
 
   /**
-   * v1.26 语义别名：仅在 maxFortressDay 变大时才更新（updateFortressDay 已内置此逻辑，
-   * 但 totalCycles 仍会递增；updateIfBetter 供调用方按语义理解"fortress_day_changed 后最佳值写入"用）
+   * v1.26 语义别名：fortress_day_changed 只刷新最佳堡垒日，不累计周期次数。
+   * totalCycles/totalGames 由 survival_game_ended -> addGameResult 代表完整周期结算。
    */
   updateIfBetter(streamerId, streamerName, fortressDay, wonCycle) {
-    this.updateFortressDay(streamerId, streamerName, fortressDay, !!wonCycle);
+    if (!streamerId) return;
+    const fd = Math.max(0, Number(fortressDay) || 0);
+    let entry = this._data.streamers[streamerId];
+    if (!entry) {
+      entry = {
+        streamerName:      streamerName || streamerId,
+        maxFortressDay:    fd,
+        totalCycles:       0,
+        streamerKingTitle: null,
+        maxDifficulty:     'normal',
+        maxDays:           fd,
+        totalWins:         0,
+        totalGames:        0,
+        score:             fd,
+      };
+      this._data.streamers[streamerId] = entry;
+    } else {
+      if (streamerName) entry.streamerName = streamerName;
+      if (fd > (Number(entry.maxFortressDay) || 0)) {
+        entry.maxFortressDay = fd;
+      }
+      if (fd > (Number(entry.maxDays) || 0)) {
+        entry.maxDays = fd;
+        entry.score = fd;
+      }
+      if (typeof entry.totalCycles !== 'number') entry.totalCycles = Number(entry.totalGames) || 0;
+      if (typeof entry.totalGames !== 'number') entry.totalGames = Number(entry.totalCycles) || 0;
+      if (typeof entry.totalWins !== 'number') entry.totalWins = 0;
+      if (!entry.maxDifficulty) entry.maxDifficulty = 'normal';
+    }
+
+    this._recomputeKingTitle();
+    this._save();
+    console.log(`[StreamerRanking v1.26-best] ${entry.streamerName}: fortressDay=${fd} maxFD=${entry.maxFortressDay} totalCycles=${entry.totalCycles} king=${entry.streamerKingTitle || '-'}`);
   }
 
   /**
