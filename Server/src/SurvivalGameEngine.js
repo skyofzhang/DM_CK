@@ -597,6 +597,8 @@ class SurvivalGameEngine {
 
     // §16 恢复期 120s 定时器（_enterRecovery 启动，_clearAllTimers 清理）
     this._recoveryTimer = null;
+    this._settleEndsAt = 0;
+    this._pausedSettlementRemainingMs = 0;
 
     // §16.1 all_dead 失败路径：夜晚最近一次有矿工存活的时刻（Unix ms）
     // 更新时机：_initWorkerHp / _reviveWorker / _reviveAllWorkers / 夜晚伤害结算时任一矿工仍存活
@@ -628,11 +630,16 @@ class SurvivalGameEngine {
     this._waveTimers   = [];     // 夜晚波次定时器列表
     this._tickCounter  = 0;
     this._liveRankingTimer = null; // 贡献变化后防抖推送实时榜（1.5s）
+    this._roomPaused   = false;  // 房间无人时冻结主循环，重连后由 resume() 恢复
+    this._pausedAt     = 0;
 
     // 礼物效果状态（策划案 §5.1 / §4.4）
     this._playerEfficiencyBonus  = {};  // playerId → 累计加成值（仙女棒 +0.05/个，上限 1.0 = +100%）
     this._playerTempBoost        = {};  // playerId → 倍率（能量电池 1.3，持续180s，per-player）
     this._playerTempBoostTimers  = {};  // playerId → setTimeout handle
+    this._playerTempBoostEndsAt  = {};  // playerId → Unix ms, used to freeze boosts while the room is paused
+    this._pausedPlayerTempBoostRemainingMs = {};
+    this._giftPauseUntil         = 0;   // T6 神秘空投 3s 暂停关键战斗事件
 
     // audit-r6 P1-E6：§30.7 T4/T5/T6 限时皮肤（G01/G02/G03）过期时间戳
     //   playerId → { skinId: 'G01'|'G02'|'G03', expireAt: ms }
@@ -694,13 +701,20 @@ class SurvivalGameEngine {
     this._roulette              = new BroadcasterRoulette(this);
     this._contribMult           = 1.0;   // double_contrib：全员贡献 ×2，60s
     this._contribMultTimer      = null;  // 60s 后归 1.0 的 setTimeout 句柄
+    this._contribMultEndsAt     = 0;
+    this._pausedContribMultRemainingMs = 0;
     this._auroraEffMult         = 1.0;   // aurora：全员效率 ×1.5，60s
     this._auroraTimer           = null;  // 60s 后归 1.0 的 setTimeout 句柄
+    this._auroraEndsAt          = 0;
+    this._pausedAuroraRemainingMs = 0;
     this._freezeUntilMs         = 0;     // time_freeze：所有怪物冻结截止 Unix ms
+    this._pausedFreezeRemainingMs = 0;
     this._eliteRaidEndsAt       = 0;     // elite_raid：精英怪 30s 未击杀则攻击城门
     this._eliteRaidMonsterId    = null;  // elite_raid：精英怪 monsterId
+    this._pausedEliteRaidRemainingMs = 0;
     this._traderOffer           = null;  // mystery_trader：{ expiresAt, cardA, cardB }
     this._traderTimer           = null;  // 30s 超时弃权句柄
+    this._pausedTraderRemainingMs = 0;
     this._meteorTimers          = [];    // meteor_shower：15 次 setTimeout 句柄
     this._rouletteRunningInited = false; // Running 首次进入 onReadyAtRunningStart 防止重复触发
 
@@ -1310,11 +1324,11 @@ class SurvivalGameEngine {
     this.dayDuration    = 120;
     this.nightDuration  = 120;
 
-    // ⚠️ 默认值必须与构造函数保持一致（foodDecayDay=1.0, foodDecayNight=1.0；F7 夜=白）
-    this.foodDecayDay   = (this.config.foodDecayDay   ?? 1.0);
-    this.foodDecayNight = (this.config.foodDecayNight ?? 1.0);
-    this.tempDecayDay   = (this.config.tempDecayDay   ?? 0.15);
-    this.tempDecayNight = (this.config.tempDecayNight ?? 0.40);
+    // v1.27 单一基线：不再让旧 default.json 难度残值覆盖压力曲线。
+    this.foodDecayDay   = 1.0;
+    this.foodDecayNight = 1.0;
+    this.tempDecayDay   = 0.15;
+    this.tempDecayNight = 0.40;
     this.coalBurnTicks  = 7;  // 自动烧煤间隔（tick=200ms；7tick=1.4s/煤）
 
     this.food      = 200;
@@ -1401,6 +1415,8 @@ class SurvivalGameEngine {
     // 清除所有临时 boost 定时器
     for (const t of Object.values(this._playerTempBoostTimers || {})) clearTimeout(t);
     this._playerTempBoostTimers = {};
+    this._playerTempBoostEndsAt = {};
+    this._pausedPlayerTempBoostRemainingMs = {};
 
     // audit-r6 P1-E6 §30.7：reset 清空限时皮肤状态（不广播 expired，client 自然在新局重置 UI）
     this._giftSkinExpiryMs = {};
@@ -1418,7 +1434,7 @@ class SurvivalGameEngine {
     this.tempDecayMultiplier = 1.0;
     this.foodBonus           = 1.0;
     this.oreBonus            = 1.0;
-    for (const t of this._randomEventTimers) clearTimeout(t);
+    for (const t of this._randomEventTimers) this._clearTimerLike(t);
     this._randomEventTimers  = [];
 
     // §33 助威模式清理
@@ -1441,14 +1457,21 @@ class SurvivalGameEngine {
     // _clearAllTimers 已清定时器句柄，这里再次清理确保字段归 1.0/0（reset 可能在定时器触发前调用）
     this._contribMult        = 1.0;
     if (this._contribMultTimer) { clearTimeout(this._contribMultTimer); this._contribMultTimer = null; }
+    this._contribMultEndsAt  = 0;
+    this._pausedContribMultRemainingMs = 0;
     this._auroraEffMult      = 1.0;
     if (this._auroraTimer)      { clearTimeout(this._auroraTimer);      this._auroraTimer      = null; }
+    this._auroraEndsAt       = 0;
+    this._pausedAuroraRemainingMs = 0;
     this._freezeUntilMs      = 0;
+    this._pausedFreezeRemainingMs = 0;
     this._eliteRaidEndsAt    = 0;
     this._eliteRaidMonsterId = null;
+    this._pausedEliteRaidRemainingMs = 0;
     this._traderOffer        = null;
     if (this._traderTimer)      { clearTimeout(this._traderTimer);      this._traderTimer      = null; }
-    for (const t of (this._meteorTimers || [])) clearTimeout(t);
+    this._pausedTraderRemainingMs = 0;
+    for (const t of (this._meteorTimers || [])) this._clearTimerLike(t);
     this._meteorTimers       = [];
     this._roulette.reset();
     this._rouletteRunningInited = false;
@@ -1640,12 +1663,492 @@ class SurvivalGameEngine {
     }
   }
 
-  /** 停止游戏引擎（房间被销毁时调用） */
+  /** 房间无人时冻结主循环，保留可恢复状态。 */
+  _setRouletteEffectEndsAt(cardId, endsAt) {
+    const effect = this._roulette && this._roulette._effectActive;
+    if (effect && effect.cardId === cardId) {
+      effect.endsAt = endsAt;
+      delete effect.pausedRemainingMs;
+    }
+  }
+
+  _scheduleContribMultExpiry(endsAt) {
+    if (this._contribMultTimer) clearTimeout(this._contribMultTimer);
+    this._contribMultEndsAt = endsAt || 0;
+    if (!endsAt || endsAt <= Date.now()) {
+      this._contribMult = 1.0;
+      this._contribMultTimer = null;
+      this._contribMultEndsAt = 0;
+      this._setRouletteEffectEndsAt('double_contrib', 0);
+      return;
+    }
+    this._setRouletteEffectEndsAt('double_contrib', endsAt);
+    this._contribMultTimer = setTimeout(() => {
+      this._contribMult = 1.0;
+      this._contribMultTimer = null;
+      this._contribMultEndsAt = 0;
+      console.log('[SurvivalEngine] double_contrib expired');
+    }, Math.max(1, endsAt - Date.now()));
+  }
+
+  _scheduleAuroraExpiry(endsAt) {
+    if (this._auroraTimer) clearTimeout(this._auroraTimer);
+    this._auroraEndsAt = endsAt || 0;
+    if (!endsAt || endsAt <= Date.now()) {
+      this._auroraEffMult = 1.0;
+      this._auroraTimer = null;
+      this._auroraEndsAt = 0;
+      this._setRouletteEffectEndsAt('aurora', 0);
+      return;
+    }
+    this._setRouletteEffectEndsAt('aurora', endsAt);
+    this._auroraTimer = setTimeout(() => {
+      this._auroraEffMult = 1.0;
+      this._auroraTimer = null;
+      this._auroraEndsAt = 0;
+      console.log('[SurvivalEngine] aurora expired');
+    }, Math.max(1, endsAt - Date.now()));
+  }
+
+  _scheduleTraderExpiry(expiresAt) {
+    if (this._traderTimer) clearTimeout(this._traderTimer);
+    if (!this._traderOffer || !expiresAt || expiresAt <= Date.now()) {
+      this._traderTimer = null;
+      return;
+    }
+    this._traderOffer.expiresAt = expiresAt;
+    this._setRouletteEffectEndsAt('mystery_trader', expiresAt);
+    this._traderTimer = setTimeout(() => {
+      if (!this._traderOffer) return;
+      this._traderOffer = null;
+      this._traderTimer = null;
+      this._broadcast({
+        type: 'broadcaster_trader_result',
+        data: { success: false, reason: 'timeout' },
+      });
+      console.log('[SurvivalEngine] mystery_trader expired without choice');
+    }, Math.max(1, expiresAt - Date.now()));
+  }
+
+  _schedulePlayerTempBoostExpiry(playerId, endsAt) {
+    if (!playerId || !endsAt) return;
+    if (this._playerTempBoostTimers[playerId]) clearTimeout(this._playerTempBoostTimers[playerId]);
+    this._playerTempBoostEndsAt[playerId] = endsAt;
+    this._playerTempBoostTimers[playerId] = setTimeout(() => {
+      this._playerTempBoost[playerId] = 1.0;
+      delete this._playerTempBoostTimers[playerId];
+      delete this._playerTempBoostEndsAt[playerId];
+    }, Math.max(1, endsAt - Date.now()));
+  }
+
+  _scheduleShopSpotlightExpiry(playerId, endsAt) {
+    if (!playerId || !endsAt) return;
+    if (this._shopSpotlightTimers[playerId]) clearTimeout(this._shopSpotlightTimers[playerId]);
+    this._shopSpotlightActive[playerId] = { ...(this._shopSpotlightActive[playerId] || {}), endsAt };
+    this._shopSpotlightTimers[playerId] = setTimeout(() => {
+      delete this._shopSpotlightActive[playerId];
+      delete this._shopSpotlightTimers[playerId];
+      this._shopSpotlightUsedThisGame[playerId] = true;
+    }, Math.max(1, endsAt - Date.now()));
+  }
+
+  _removeRandomEventTimer(entry) {
+    const idx = this._randomEventTimers.indexOf(entry);
+    if (idx >= 0) this._randomEventTimers.splice(idx, 1);
+  }
+
+  _scheduleRandomEventTimer(kind, delayMs, onExpire) {
+    const ms = Math.max(1, Number(delayMs) || 1);
+    const entry = {
+      kind,
+      expiresAt: Date.now() + ms,
+      remainingMs: 0,
+      onExpire,
+      timer: null,
+    };
+    entry.timer = setTimeout(() => {
+      entry.timer = null;
+      this._removeRandomEventTimer(entry);
+      if (typeof onExpire === 'function') onExpire();
+    }, ms);
+    this._randomEventTimers.push(entry);
+    return entry;
+  }
+
+  _removeMeteorTimer(entry) {
+    const idx = this._meteorTimers.indexOf(entry);
+    if (idx >= 0) this._meteorTimers.splice(idx, 1);
+  }
+
+  _scheduleMeteorTick(delayMs) {
+    const ms = Math.max(1, Number(delayMs) || 1);
+    const entry = {
+      fireAt: Date.now() + ms,
+      remainingMs: 0,
+      timer: null,
+    };
+    entry.timer = setTimeout(() => {
+      entry.timer = null;
+      this._removeMeteorTimer(entry);
+      this._meteorShowerTick();
+    }, ms);
+    this._meteorTimers.push(entry);
+    return entry;
+  }
+
+  _clearTimerLike(entry) {
+    if (!entry) return;
+    if (entry.timer) clearTimeout(entry.timer);
+    else clearTimeout(entry);
+  }
+
+  _pauseRoomRuntimeTimers() {
+    const now = Date.now();
+
+    if (this._liveRankingTimer) {
+      clearTimeout(this._liveRankingTimer);
+      this._liveRankingTimer = null;
+    }
+
+    this._pausedPlayerTempBoostRemainingMs = {};
+    for (const [pid, timer] of Object.entries(this._playerTempBoostTimers || {})) {
+      if (timer) clearTimeout(timer);
+      delete this._playerTempBoostTimers[pid];
+      const endsAt = Number(this._playerTempBoostEndsAt?.[pid] || 0);
+      const remainingMs = Math.max(1, (endsAt || now) - now);
+      if ((this._playerTempBoost?.[pid] || 1.0) > 1.0) {
+        this._pausedPlayerTempBoostRemainingMs[pid] = remainingMs;
+      }
+    }
+
+    const pausedRandom = [];
+    for (const entry of this._randomEventTimers || []) {
+      this._clearTimerLike(entry);
+      if (entry && typeof entry === 'object' && typeof entry.onExpire === 'function') {
+        entry.remainingMs = Math.max(1, Number(entry.expiresAt || 0) - now);
+        entry.timer = null;
+        pausedRandom.push(entry);
+      }
+    }
+    this._randomEventTimers = pausedRandom;
+
+    this._pausedHotSpringRemainingMs = this._hotSpringEndAt > now ? Math.max(1, this._hotSpringEndAt - now) : 0;
+
+    const pausedMeteor = [];
+    for (const entry of this._meteorTimers || []) {
+      this._clearTimerLike(entry);
+      if (entry && typeof entry === 'object') {
+        entry.remainingMs = Math.max(1, Number(entry.fireAt || 0) - now);
+        entry.timer = null;
+        pausedMeteor.push(entry);
+      }
+    }
+    this._meteorTimers = pausedMeteor;
+
+    const effect = this._roulette && this._roulette._effectActive;
+    if (effect && effect.endsAt && effect.endsAt > now) {
+      effect.pausedRemainingMs = Math.max(1, effect.endsAt - now);
+    }
+
+    if (this._contribMultTimer || this._contribMult > 1.0) {
+      this._pausedContribMultRemainingMs = Math.max(1, (this._contribMultEndsAt || effect?.endsAt || now) - now);
+      if (this._contribMultTimer) clearTimeout(this._contribMultTimer);
+      this._contribMultTimer = null;
+    }
+    if (this._auroraTimer || this._auroraEffMult > 1.0) {
+      this._pausedAuroraRemainingMs = Math.max(1, (this._auroraEndsAt || effect?.endsAt || now) - now);
+      if (this._auroraTimer) clearTimeout(this._auroraTimer);
+      this._auroraTimer = null;
+    }
+    if (this._freezeUntilMs > now) {
+      this._pausedFreezeRemainingMs = Math.max(1, this._freezeUntilMs - now);
+      this._freezeUntilMs = 0;
+    }
+    if (this._eliteRaidEndsAt > now) {
+      this._pausedEliteRaidRemainingMs = Math.max(1, this._eliteRaidEndsAt - now);
+      this._eliteRaidEndsAt = 0;
+    }
+    if (this._traderTimer || this._traderOffer) {
+      this._pausedTraderRemainingMs = Math.max(1, Number(this._traderOffer?.expiresAt || now) - now);
+      if (this._traderTimer) clearTimeout(this._traderTimer);
+      this._traderTimer = null;
+    }
+
+    for (const [pid, timer] of Object.entries(this._shopSpotlightTimers || {})) {
+      if (timer) clearTimeout(timer);
+      const active = this._shopSpotlightActive?.[pid];
+      if (active) {
+        active.pausedRemainingMs = Math.max(1, Number(active.endsAt || 0) - now);
+      }
+      delete this._shopSpotlightTimers[pid];
+    }
+
+    for (const exp of this._expeditions.values()) {
+      if (!exp) continue;
+      let phase = 'outbound';
+      let endsAt = exp.outboundEndsAt || (Number(exp.startAt || now) + Number(exp.outboundSec || 0) * 1000);
+      if (exp.eventId && !exp.outcome) {
+        phase = 'event';
+        endsAt = exp.eventEndsAt || now;
+      } else if (exp.outcome) {
+        phase = 'return';
+        endsAt = exp.returnsAt || now;
+      }
+      exp.pausedByRoom = true;
+      exp.pausedPhase = phase;
+      exp.pausedRemainingMs = Math.max(1, Number(endsAt || now) - now);
+      if (exp.outboundTimer) clearTimeout(exp.outboundTimer);
+      if (exp.eventTimer) clearTimeout(exp.eventTimer);
+      if (exp.returnTimer) clearTimeout(exp.returnTimer);
+      exp.outboundTimer = null;
+      exp.eventTimer = null;
+      exp.returnTimer = null;
+    }
+  }
+
+  _resumeRoomRuntimeTimers(now) {
+    for (const [pid, remainingMs] of Object.entries(this._pausedPlayerTempBoostRemainingMs || {})) {
+      if ((this._playerTempBoost?.[pid] || 1.0) > 1.0) {
+        this._schedulePlayerTempBoostExpiry(pid, now + Math.max(1, Number(remainingMs) || 1));
+      }
+    }
+    this._pausedPlayerTempBoostRemainingMs = {};
+
+    for (const entry of this._randomEventTimers || []) {
+      if (!entry || typeof entry.onExpire !== 'function') continue;
+      const remainingMs = Math.max(1, Number(entry.remainingMs) || 1);
+      entry.remainingMs = 0;
+      entry.expiresAt = now + remainingMs;
+      if (entry.kind === 'ice_ground') this._iceGroundEndAt = entry.expiresAt;
+      if (entry.kind === 'heavy_fog') this._heavyFogEndAt = entry.expiresAt;
+      entry.timer = setTimeout(() => {
+        entry.timer = null;
+        this._removeRandomEventTimer(entry);
+        entry.onExpire();
+      }, remainingMs);
+    }
+
+    if (this._pausedHotSpringRemainingMs > 0) {
+      this._hotSpringEndAt = now + this._pausedHotSpringRemainingMs;
+      this._hotSpringLastTick = this._tickCounter || 0;
+      this._pausedHotSpringRemainingMs = 0;
+    }
+
+    for (const entry of this._meteorTimers || []) {
+      if (!entry || typeof entry !== 'object') continue;
+      const remainingMs = Math.max(1, Number(entry.remainingMs) || 1);
+      entry.remainingMs = 0;
+      entry.fireAt = now + remainingMs;
+      entry.timer = setTimeout(() => {
+        entry.timer = null;
+        this._removeMeteorTimer(entry);
+        this._meteorShowerTick();
+      }, remainingMs);
+    }
+
+    const effect = this._roulette && this._roulette._effectActive;
+    if (effect && effect.pausedRemainingMs) {
+      effect.endsAt = now + Math.max(1, Number(effect.pausedRemainingMs) || 1);
+      delete effect.pausedRemainingMs;
+    }
+
+    if (this._pausedContribMultRemainingMs > 0 && this._contribMult > 1.0) {
+      this._scheduleContribMultExpiry(now + this._pausedContribMultRemainingMs);
+      this._pausedContribMultRemainingMs = 0;
+    }
+    if (this._pausedAuroraRemainingMs > 0 && this._auroraEffMult > 1.0) {
+      this._scheduleAuroraExpiry(now + this._pausedAuroraRemainingMs);
+      this._pausedAuroraRemainingMs = 0;
+    }
+    if (this._pausedFreezeRemainingMs > 0) {
+      this._freezeUntilMs = now + this._pausedFreezeRemainingMs;
+      this._setRouletteEffectEndsAt('time_freeze', this._freezeUntilMs);
+      this._pausedFreezeRemainingMs = 0;
+    }
+    if (this._pausedEliteRaidRemainingMs > 0) {
+      this._eliteRaidEndsAt = now + this._pausedEliteRaidRemainingMs;
+      this._setRouletteEffectEndsAt('elite_raid', this._eliteRaidEndsAt);
+      this._pausedEliteRaidRemainingMs = 0;
+    }
+    if (this._pausedTraderRemainingMs > 0 && this._traderOffer) {
+      const expiresAt = now + this._pausedTraderRemainingMs;
+      this._pausedTraderRemainingMs = 0;
+      this._scheduleTraderExpiry(expiresAt);
+      this._broadcast({
+        type: 'broadcaster_trader_offer',
+        data: { cardA: this._traderOffer.cardA, cardB: this._traderOffer.cardB, expiresAt },
+      });
+    }
+
+    for (const [pid, active] of Object.entries(this._shopSpotlightActive || {})) {
+      const remainingMs = Number(active?.pausedRemainingMs || 0);
+      if (remainingMs <= 0) continue;
+      delete active.pausedRemainingMs;
+      const endsAt = now + remainingMs;
+      this._scheduleShopSpotlightExpiry(pid, endsAt);
+      this._broadcast({
+        type: 'shop_effect_triggered',
+        data: {
+          itemId: 'spotlight',
+          effect: 'spotlight',
+          sourcePlayerId: pid,
+          sourcePlayerName: this._getPlayerName(pid),
+          targetPlayerId: pid,
+          durationSec: Math.max(1, Math.ceil(remainingMs / 1000)),
+          endsAt,
+        },
+      });
+    }
+
+    for (const [expId, exp] of this._expeditions.entries()) {
+      if (!exp || !exp.pausedByRoom) continue;
+      const remainingMs = Math.max(1, Number(exp.pausedRemainingMs) || 1);
+      const phase = exp.pausedPhase || 'outbound';
+      exp.pausedByRoom = false;
+      exp.pausedPhase = null;
+      exp.pausedRemainingMs = 0;
+      if (phase === 'event') {
+        exp.eventEndsAt = now + remainingMs;
+        exp.returnsAt = exp.eventEndsAt + Math.max(0, Number(exp.returnSec || 0)) * 1000;
+        exp.eventTimer = setTimeout(() => this._resolveExpeditionEvent(expId, exp.userChoice), remainingMs);
+      } else if (phase === 'return') {
+        exp.returnsAt = now + remainingMs;
+        exp.returnTimer = setTimeout(() => this._returnExpedition(expId, Date.now()), remainingMs);
+      } else {
+        exp.outboundEndsAt = now + remainingMs;
+        exp.returnsAt = exp.outboundEndsAt
+          + Math.max(0, Number(exp.eventSec || 0)) * 1000
+          + Math.max(0, Number(exp.returnSec || 0)) * 1000;
+        exp.outboundTimer = setTimeout(() => this._triggerExpeditionEvent(expId, Date.now()), remainingMs);
+      }
+    }
+  }
+
   pause() {
+    if (this._roomPaused) return;
+    this._roomPaused = true;
+    this._pausedAt = Date.now();
+
+    this._clearTick();
+    this._clearNightWaves();
+
+    if (this._recoveryTimer) {
+      clearTimeout(this._recoveryTimer);
+      this._recoveryTimer = null;
+    }
+    if (this._settleTimerHandle) {
+      this._pausedSettlementRemainingMs = Math.max(1, (this._settleEndsAt || Date.now()) - Date.now());
+      clearTimeout(this._settleTimerHandle);
+      this._settleTimerHandle = null;
+    }
+    if (this._buildVote && this._buildVote.timer) {
+      this._buildVote.pausedRemainingMs = Math.max(1, Number(this._buildVote.votingEndsAt || 0) - Date.now());
+      this._buildVote.pausedByRoom = true;
+      clearTimeout(this._buildVote.timer);
+      this._buildVote.timer = null;
+    }
+
+    for (const [, info] of this._buildingInProgress) {
+      if (!info || info.paused) continue;
+      const remainingMs = Math.max(1, Number(info.completesAt || 0) - Date.now());
+      if (info.timer) clearTimeout(info.timer);
+      if (info.progressTimer) clearInterval(info.progressTimer);
+      info.timer = null;
+      info.progressTimer = null;
+      info.completesAt = 0;
+      info.remainingMs = remainingMs;
+      info.paused = true;
+      info.pausedByRoom = true;
+    }
+
+    this._stopFrostPulseTimer();
+    if (this._streamerPromptTimer) { clearInterval(this._streamerPromptTimer); this._streamerPromptTimer = null; }
+    if (this._engagementInterval)  { clearInterval(this._engagementInterval);  this._engagementInterval  = null; }
+    this._pauseRoomRuntimeTimers();
+  }
+
+  /** 房间销毁/服务器关闭时全量停止所有运行时定时器。 */
+  stop() {
+    if (!this._roomPaused) {
+      this.pause();
+    }
     this._clearAllTimers();
+    this._roomPaused = true;
+    this._pausedAt = Date.now();
   }
 
   resume() {
+    if (!this._roomPaused) {
+      this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
+      return;
+    }
+
+    this._roomPaused = false;
+    this._pausedAt = 0;
+
+    const now = Date.now();
+    for (const [buildId, info] of this._buildingInProgress) {
+      if (!info || !info.pausedByRoom) continue;
+      const remainingMs = Math.max(1, Number(info.remainingMs) || 1);
+      info.paused = false;
+      info.pausedByRoom = false;
+      info.pausedSeasonId = null;
+      info.remainingMs = 0;
+      info.completesAt = now + remainingMs;
+      info.timer = setTimeout(() => this._completeBuild(buildId), remainingMs);
+      info.progressTimer = setInterval(() => this._broadcastBuildProgress(buildId), 2000);
+    }
+
+    if (this.state === 'day' || this.state === 'night' || this.state === 'recovery') {
+      this._startTick();
+    }
+    if ((this.state === 'day' || this.state === 'night') && this.gateLevel === GATE_MAX_HP_BY_LEVEL.length) {
+      this._startFrostPulseTimer();
+    }
+    if (this.state === 'night' && !this._peaceNightSkipSpawn && this._waveTimers.length === 0 && this.remainingTime > 0) {
+      this._scheduleNightWaves(this.currentDay);
+    }
+    if (this.state === 'recovery' && this.remainingTime > 0) {
+      this._recoveryTimer = setTimeout(() => {
+        this._recoveryTimer = null;
+        this._enterNight(this._getCombatDay());
+      }, Math.max(1, Math.round(this.remainingTime * 1000)));
+    }
+    if (this.state === 'settlement' && this._pausedSettlementRemainingMs > 0) {
+      const delayMs = this._pausedSettlementRemainingMs;
+      this._pausedSettlementRemainingMs = 0;
+      this._settleEndsAt = Date.now() + delayMs;
+      this._settleTimerHandle = setTimeout(() => {
+        this._recoveryTimer = null;
+        this._settleTimerHandle = null;
+        this._settleEndsAt = 0;
+        this._enterRecovery();
+      }, delayMs);
+      this._recoveryTimer = this._settleTimerHandle;
+    }
+    if (this._buildVote && this._buildVote.pausedByRoom) {
+      const remainingMs = Math.max(1, Number(this._buildVote.pausedRemainingMs) || BUILD_VOTE_WINDOW_MS);
+      this._buildVote.pausedByRoom = false;
+      this._buildVote.pausedRemainingMs = 0;
+      this._buildVote.votingEndsAt = now + remainingMs;
+      this._buildVote.timer = setTimeout(() => this._closeBuildVote(), remainingMs);
+      this._broadcast({
+        type: 'build_vote_started',
+        data: {
+          proposalId: this._buildVote.proposalId,
+          proposerName: this._buildVote.proposerName,
+          options: this._buildVote.options,
+          votingEndsAt: this._buildVote.votingEndsAt,
+        },
+      });
+      this._broadcastBuildVoteUpdate();
+    }
+    if (this.state === 'day' || this.state === 'night' || this.state === 'recovery') {
+      this._startStreamerPromptTimer();
+      this._startEngagementReminderTimer();
+    }
+    this._resumeRoomRuntimeTimers(now);
+
     // 连接恢复后重新推送当前状态
     this.broadcast({ type: 'survival_game_state', timestamp: Date.now(), data: this.getFullState() });
   }
@@ -1658,20 +2161,7 @@ class SurvivalGameEngine {
    * content "6"     → attack（夜晚有效）
    */
   handleComment(playerId, playerName, avatarUrl, content) {
-    if (this.state !== 'day' && this.state !== 'night') return;
     const content_trim = (content || '').trim();
-
-    // ── §37.3 建造投票弹幕：`建X`（X=1..options.length，对应活跃投票的候选列表）──
-    // 投票不活跃时静默忽略（避免与 cmd 1-6 冲突由 `^建\d+$` 限定）；活跃时调用 handleBuildVote
-    const buildMatch = content_trim.match(/^建(\d{1,2})$/);
-    if (buildMatch) {
-      if (!this._buildVote) return;
-      const idx = parseInt(buildMatch[1]) - 1;
-      if (idx >= 0 && idx < this._buildVote.options.length) {
-        this.handleBuildVote(playerId, this._buildVote.proposalId, this._buildVote.options[idx]);
-      }
-      return;
-    }
 
     // ── §39.4 商店购买弹幕：`买A<n>` / `买B<n>`（严格正则）──
     // A1~4 / B1~8 → 查表 → handleShopPurchase（无 pendingId，弹幕意图已显式）
@@ -1742,6 +2232,22 @@ class SurvivalGameEngine {
         return;  // 越界静默忽略
       }
       this.handleShopEquip(playerId, slot, itemId);
+      return;
+    }
+
+    // §39 商店弹幕在 recovery 与 B 类 settlement 仍应可达；recovery 遗留怪允许玩家继续用 6 清理。
+    const isRecoveryAttack = this.state === 'recovery' && content_trim === '6';
+    if (this.state !== 'day' && this.state !== 'night' && !isRecoveryAttack) return;
+
+    // ── §37.3 建造投票弹幕：`建X`（X=1..options.length，对应活跃投票的候选列表）──
+    // 投票不活跃时静默忽略（避免与 cmd 1-6 冲突由 `^建\d+$` 限定）；活跃时调用 handleBuildVote
+    const buildMatch = content_trim.match(/^建(\d{1,2})$/);
+    if (buildMatch) {
+      if (!this._buildVote) return;
+      const idx = parseInt(buildMatch[1]) - 1;
+      if (idx >= 0 && idx < this._buildVote.options.length) {
+        this.handleBuildVote(playerId, this._buildVote.proposalId, this._buildVote.options[idx]);
+      }
       return;
     }
 
@@ -1920,10 +2426,11 @@ class SurvivalGameEngine {
 
       console.log(`[SurvivalEngine] work_command: ${playerName} → ${cmdLabels[cmd]}`);
     } else if (cmd === 6) {
-      // 攻击指令（夜晚有效）
-      if (this.state === 'night') {
+      // 攻击指令：夜晚有效；recovery 期仅用于清理结算前遗留怪，不推进夜晚胜利逻辑
+      if (this.state === 'night' || this.state === 'recovery') {
+        const wasNight = this.state === 'night';
         this._handleAttack(playerId, playerName);
-        this._tribeWarAddEnergy(1);  // §35 攻击能量：cmd=6 夜战 +1
+        if (wasNight) this._tribeWarAddEnergy(1);  // §35 攻击能量：cmd=6 夜战 +1
       }
     } else if (content_trim === '探') {
       // §38 探险指令：派出自己的矿工外出探险
@@ -1983,15 +2490,8 @@ class SurvivalGameEngine {
     if (playerId && !this.playerNames[playerId])
       this.playerNames[playerId] = playerName || playerId;
 
-    // §33 助威模式：名额已满且未注册 → 先尝试晋升为助威者，再进入礼物处理
-    //   §36.12 supporter_mode.minDay（默认 6）由 _promoteToSupporter 内部读取；未解锁时返 false，
-    //   后续 T1 fairy_wand 会在 gift 识别后走 gift_silent_fail 静默驳回（仅发送者可见）
-    if (playerId
-        && this.contributions[playerId] === undefined
-        && !this._supporters.has(playerId)
-        && this.totalPlayers >= SurvivalGameEngine.MAX_PLAYERS) {
-      this._promoteToSupporter(playerId, playerName);
-    }
+    // 礼物也算首个入场行为；必须先占守护者/助威身份，再写贡献，避免绕过 12 人上限。
+    this._ensureParticipantBeforeContribution(playerId, playerName, avatarUrl);
     const isSupporter = playerId ? this._supporters.has(playerId) : false;
 
     // §33.5 守护者送礼属于活跃行为，刷新 AFK 计时
@@ -2137,11 +2637,12 @@ class SurvivalGameEngine {
       } catch (e) { /* ignore */ }
     }
     if (_isOverflowGhost) {
-      // ghost 路径：仅累加 _lifetimeContrib + _contribBalance（与 _trackContribution 内部一致），跳过 contributions / _dayStats / 协作里程碑
+      // ghost 路径：仅累加 _lifetimeContrib + _contribBalance，跳过 contributions / _dayStats / 协作里程碑
+      // §30 追赶倍率只影响成长水位，不放大 §39 可消费余额。
       const _lc = this._lifetimeContrib[playerId] || 0;
       const _catchUpMult = (_lc < 100) ? 3 : 1;
       this._lifetimeContrib[playerId] = _lc + gift.score * _catchUpMult;
-      this._contribBalance[playerId]  = (this._contribBalance[playerId] || 0) + gift.score * _catchUpMult;
+      this._contribBalance[playerId]  = (this._contribBalance[playerId] || 0) + gift.score;
       console.log(`[SurvivalEngine] D1-D5 overflow ghost: pid=${playerId} giftId=${gift.id} score=${gift.score} → 仅累加 _lifetimeContrib（策划案 §33.4 line 4731-4732）`);
     } else {
       // 贡献值 = 礼物得分（策划案 §9）
@@ -2267,6 +2768,7 @@ class SurvivalGameEngine {
         effects.addOre    = addOre;
         effects.addGateHp = 300;
         effects.giftPause = 3000;
+        this._giftPauseUntil = Math.max(this._giftPauseUntil || 0, Date.now() + 3000);
         this.broadcast({ type: 'gift_pause', timestamp: Date.now(), data: { duration: 3000 } });
         // T6 礼物联动：城门自动升级（不扣矿石，不计每日额度），并补送者 +100 贡献
         // §10.7 规则：gateLevel == 6 时跳过升级逻辑，但 +100 贡献无条件发放
@@ -2514,6 +3016,13 @@ class SurvivalGameEngine {
     }
   }
 
+  _ensureParticipantBeforeContribution(playerId, playerName, avatarUrl) {
+    if (!playerId) return;
+    if (Object.prototype.hasOwnProperty.call(this.contributions, playerId)) return;
+    if (this._supporters && this._supporters.has(playerId)) return;
+    this.handlePlayerJoined(playerId, playerName || playerId, avatarUrl || '');
+  }
+
   // ==================== §33 助威模式 ====================
 
   /**
@@ -2670,11 +3179,7 @@ class SurvivalGameEngine {
   _applyEnergyBatteryBoostTo(targetId) {
     if (!targetId) return false;
     this._playerTempBoost[targetId] = 1.3;
-    if (this._playerTempBoostTimers[targetId]) clearTimeout(this._playerTempBoostTimers[targetId]);
-    this._playerTempBoostTimers[targetId] = setTimeout(() => {
-      this._playerTempBoost[targetId] = 1.0;
-      delete this._playerTempBoostTimers[targetId];
-    }, 180000);
+    this._schedulePlayerTempBoostExpiry(targetId, Date.now() + 180000);
     return true;
   }
 
@@ -3516,9 +4021,11 @@ class SurvivalGameEngine {
     //   服务端必须等完整 33s 后再发 recovery；否则 C 屏会被 phase_changed{variant:recovery} 提前关闭。
     //   handleStreamerSkipSettlement 在该窗口内仍可提前跳过。
     // §34.3 B2：同时赋值 _settleTimerHandle，供 streamer_skip_settlement 跳过
+    this._settleEndsAt = Date.now() + SETTLEMENT_RECOVERY_DELAY_MS;
     this._settleTimerHandle = setTimeout(() => {
       this._recoveryTimer = null;
       this._settleTimerHandle = null;
+      this._settleEndsAt = 0;
       this._enterRecovery();
     }, SETTLEMENT_RECOVERY_DELAY_MS);
     // 保留原 _recoveryTimer 句柄以兼容 _clearAllTimers 的清理路径（同一句柄）
@@ -5287,6 +5794,15 @@ class SurvivalGameEngine {
 
   _spawnWave(cfg, day, waveIndex) {
     if (this.state !== 'night') return;
+    const giftPauseRemaining = (this._giftPauseUntil || 0) - Date.now();
+    if (giftPauseRemaining > 0) {
+      const resumeTimer = setTimeout(() => {
+        if (this.state === 'night') this._spawnWave(cfg, day, waveIndex);
+      }, giftPauseRemaining);
+      this._waveTimers.push(resumeTimer);
+      console.log(`[SurvivalEngine] _spawnWave delayed by gift_pause: wave=${waveIndex} delay=${giftPauseRemaining}ms`);
+      return;
+    }
     // §36.5 整夜和平夜（peace_night / peace_night_silent）→ 不刷怪
     if (this._peaceNightSkipSpawn) {
       console.log(`[SurvivalEngine] _spawnWave skipped (peace night full): wave=${waveIndex}`);
@@ -5762,15 +6278,13 @@ class SurvivalGameEngine {
       case 'E01_snowstorm': {
         // 暴风雪：炉温衰减×2，持续60秒
         this.tempDecayMultiplier = 2.0;
-        const t = setTimeout(() => { this.tempDecayMultiplier = 1.0; }, 60000);
-        this._randomEventTimers.push(t);
+        this._scheduleRandomEventTimer('E01_snowstorm', 60000, () => { this.tempDecayMultiplier = 1.0; });
         break;
       }
       case 'E02_harvest': {
         // 丰收：食物采集效率×1.5，持续30秒
         this.foodBonus = 1.5;
-        const t = setTimeout(() => { this.foodBonus = 1.0; }, 30000);
-        this._randomEventTimers.push(t);
+        this._scheduleRandomEventTimer('E02_harvest', 30000, () => { this.foodBonus = 1.0; });
         break;
       }
       case 'E03_monster_wave': {
@@ -5842,8 +6356,7 @@ class SurvivalGameEngine {
       case 'E05_ore_vein': {
         // 矿脉：矿石采集效率×2，持续45秒
         this.oreBonus = 2.0;
-        const t = setTimeout(() => { this.oreBonus = 1.0; }, 45000);
-        this._randomEventTimers.push(t);
+        this._scheduleRandomEventTimer('E05_ore_vein', 45000, () => { this.oreBonus = 1.0; });
         break;
       }
 
@@ -5869,10 +6382,9 @@ class SurvivalGameEngine {
         this._iceGroundEndAt = Date.now() + 30000;
         extraData.durationMs = 30000;
         extraData.slowMult   = 0.8;
-        const t = setTimeout(() => {
+        this._scheduleRandomEventTimer('ice_ground', 30000, () => {
           if (Date.now() >= this._iceGroundEndAt) this._iceGroundEndAt = 0;
-        }, 30000);
-        this._randomEventTimers.push(t);
+        });
         break;
       }
       case 'aurora_flash': {
@@ -5887,12 +6399,11 @@ class SurvivalGameEngine {
         this.oreBonus  = Math.max(1.0, this.oreBonus)  * 1.05;
         extraData.durationMs  = 5000;
         extraData.effBonus    = 0.05;
-        const t = setTimeout(() => {
+        this._scheduleRandomEventTimer('aurora_flash', 5000, () => {
           // 保守回滚（如果期间有其他事件设置 foodBonus/oreBonus，不强制复位；仅清除本事件加成）
           this.foodBonus = prevFoodBonus;
           this.oreBonus  = prevOreBonus;
-        }, 5000);
-        this._randomEventTimers.push(t);
+        });
         break;
       }
       case 'earthquake': {
@@ -5943,14 +6454,13 @@ class SurvivalGameEngine {
         this._heavyFogEndAt = Date.now() + 30000;
         extraData.durationMs     = 30000;
         extraData.hideMonsterHp  = true;
-        const t = setTimeout(() => {
+        this._scheduleRandomEventTimer('heavy_fog', 30000, () => {
           if (Date.now() >= this._heavyFogEndAt) {
             this._heavyFogEndAt = 0;
             // 事件结束：补发 resource_update 让客户端恢复血条显示
             this._broadcastResourceUpdate();
           }
-        }, 30000);
-        this._randomEventTimers.push(t);
+        });
         this._broadcastResourceUpdate();
         break;
       }
@@ -6025,8 +6535,17 @@ class SurvivalGameEngine {
   /**
    * 给玩家增加贡献值（供外部调用，如点赞处理）
    */
-  addContribution(playerId, amount) {
-    this._trackContribution(playerId, amount);
+  addContribution(playerId, amount, source, playerName, avatarUrl) {
+    if (!playerId) return;
+    this._ensureParticipantBeforeContribution(playerId, playerName || this.playerNames[playerId] || playerId, avatarUrl || '');
+    if (this._supporters && this._supporters.has(playerId)) {
+      this._trackSupporterContribution(playerId, amount, source);
+      return;
+    }
+    if (!Object.prototype.hasOwnProperty.call(this.contributions, playerId)) {
+      return;
+    }
+    this._trackContribution(playerId, amount, source);
   }
 
   /**
@@ -6469,6 +6988,10 @@ class SurvivalGameEngine {
     if (playerId && this._supporters.has(playerId)) {
       return failPropose('supporter_not_allowed');
     }
+    // 非正式守护者 / 未绑定 WS 统一拒绝，避免客户端伪造 playerId 发起 §37 建造提案
+    if (!playerId || this.contributions[playerId] === undefined) {
+      return failPropose('supporter_not_allowed');
+    }
     // 5) 非法 buildId（当作 already_built 口径统一）
     if (!BUILDING_CATALOG[buildId]) {
       return failPropose('already_built');
@@ -6528,20 +7051,8 @@ class SurvivalGameEngine {
     console.log(`[Building] propose: ${playerName} → buildId=${buildId} options=[${options.join(',')}] votingEndsAt=+45s`);
   }
 
-  /**
-   * 投票（C→S build_vote 或 弹幕 `建X`）
-   * 校验 proposalId 匹配 + buildId 在 options 内；每位玩家 1 票，重复投票覆盖
-   * 广播并行数组格式 build_vote_update；全员投完（正式守护者，不含助威者）则立即 _closeBuildVote
-   */
-  handleBuildVote(playerId, proposalId, buildId) {
-    if (!playerId || !this._buildVote) return;
-    if (this._buildVote.proposalId !== proposalId) return;
-    if (!this._buildVote.options.includes(buildId)) return;
-    if (this.contributions[playerId] === undefined && !(this._supporters && this._supporters.has(playerId))) return;
-
-    this._buildVote.votes.set(playerId, buildId);
-
-    // 聚合 build_vote_update（并行数组格式：与客户端协议对齐）
+  _broadcastBuildVoteUpdate() {
+    if (!this._buildVote) return;
     const tally = new Map();
     for (const [, bid] of this._buildVote.votes) {
       tally.set(bid, (tally.get(bid) || 0) + 1);
@@ -6557,8 +7068,24 @@ class SurvivalGameEngine {
         voteBuildIds,
         voteCounts,
         totalVoters,
+        votingEndsAt: this._buildVote.votingEndsAt,
       },
     });
+  }
+
+  /**
+   * 投票（C→S build_vote 或 弹幕 `建X`）
+   * 校验 proposalId 匹配 + buildId 在 options 内；每位玩家 1 票，重复投票覆盖
+   * 广播并行数组格式 build_vote_update；全员投完（正式守护者，不含助威者）则立即 _closeBuildVote
+   */
+  handleBuildVote(playerId, proposalId, buildId) {
+    if (!playerId || !this._buildVote) return;
+    if (this._buildVote.proposalId !== proposalId) return;
+    if (!this._buildVote.options.includes(buildId)) return;
+    if (this.contributions[playerId] === undefined && !(this._supporters && this._supporters.has(playerId))) return;
+
+    this._buildVote.votes.set(playerId, buildId);
+    this._broadcastBuildVoteUpdate();
 
     // 全员投完（仅统计正式守护者，不含助威者）→ 立即结算
     // 正式守护者数 = Object.keys(contributions).length（§33 助威者不在 contributions 中）
@@ -6958,13 +7485,10 @@ class SurvivalGameEngine {
         if (!exp) continue;
         // 三阶段推断 phase：outbound → event → return
         let phase = 'outbound';
-        if (exp.eventEndsAt && nowMs < exp.eventEndsAt) {
-          phase = 'event';
-        } else if (exp.eventEndsAt && nowMs >= exp.eventEndsAt && nowMs < exp.returnsAt) {
+        if (exp.outcome) {
           phase = 'return';
-        } else if (!exp.eventEndsAt) {
-          // 未到事件阶段
-          phase = 'outbound';
+        } else if (exp.eventId) {
+          phase = 'event';
         }
         expeditions.push({
           expeditionId: expId,
@@ -8495,13 +9019,13 @@ class SurvivalGameEngine {
       this._evaluateVeteranForCreator('lifetime_contrib');
     }
 
-    // ── §39 商店：_contribBalance 与 _lifetimeContrib 同步增长（同 catchUpMult）────
-    // 策划案 §39.3 不变式：_addContribution 前后 _lifetimeContrib 的差值 = _contribBalance 的差值
+    // ── §39 商店：_contribBalance 只按真实贡献增长，不吃 §30 新人追赶倍率 ────
+    // 策划案 §39.3 不变式：B 类余额来自实际贡献；§30 catchUpMult 只服务等级/皮肤成长。
     // 该字段独立于 contributions（本局）与 _lifetimeContrib（终身水位）：
     //   - B 类购买仅扣 _contribBalance，_lifetimeContrib 不变（等级/皮肤/豁免不受影响）
     //   - 不可为负（购买前 handleShopPurchase 校验）
     // §39.10 持久化已落地：RoomPersistence v1→v2 已迁移 _contribBalance（r14 GAP-E stale 注释清理）
-    this._contribBalance[playerId] = (this._contribBalance[playerId] || 0) + finalAmount * catchUpMult;
+    this._contribBalance[playerId] = (this._contribBalance[playerId] || 0) + finalAmount;
 
     // 首次玩家初始等级为 Lv.1
     if (this._playerLevel[playerId] == null) this._playerLevel[playerId] = 1;
@@ -8886,12 +9410,7 @@ class SurvivalGameEngine {
   _applyDoubleContrib(nowMs) {
     const durationMs = 60 * 1000;
     this._contribMult = 2.0;
-    if (this._contribMultTimer) clearTimeout(this._contribMultTimer);
-    this._contribMultTimer = setTimeout(() => {
-      this._contribMult = 1.0;
-      this._contribMultTimer = null;
-      console.log('[SurvivalEngine] double_contrib expired');
-    }, durationMs);
+    this._scheduleContribMultExpiry(nowMs + durationMs);
     this.broadcast({
       type: 'bobao',
       timestamp: nowMs,
@@ -8927,17 +9446,7 @@ class SurvivalGameEngine {
     });
 
     // 30s 超时兜底：自动弃权（不扣不给）
-    if (this._traderTimer) clearTimeout(this._traderTimer);
-    this._traderTimer = setTimeout(() => {
-      if (!this._traderOffer) return;
-      this._traderOffer = null;
-      this._traderTimer = null;
-      this._broadcast({
-        type: 'broadcaster_trader_result',
-        data: { success: false, reason: 'timeout' },
-      });
-      console.log('[SurvivalEngine] mystery_trader expired without choice');
-    }, durationMs);
+    this._scheduleTraderExpiry(expiresAt);
 
     return expiresAt;
   }
@@ -8951,14 +9460,11 @@ class SurvivalGameEngine {
     const ticks = 15;
     const durationMs = ticks * 1000;
     // 先清理旧计时器（极端情况下 reset 未清干净）
-    for (const t of this._meteorTimers) clearTimeout(t);
+    for (const t of this._meteorTimers) this._clearTimerLike(t);
     this._meteorTimers = [];
 
     for (let i = 1; i <= ticks; i++) {
-      const timer = setTimeout(() => {
-        this._meteorShowerTick();
-      }, i * 1000);
-      this._meteorTimers.push(timer);
+      this._scheduleMeteorTick(i * 1000);
     }
     this.broadcast({
       type: 'bobao',
@@ -9038,12 +9544,7 @@ class SurvivalGameEngine {
 
     // 效率 ×1.5（60s）
     this._auroraEffMult = 1.5;
-    if (this._auroraTimer) clearTimeout(this._auroraTimer);
-    this._auroraTimer = setTimeout(() => {
-      this._auroraEffMult = 1.0;
-      this._auroraTimer = null;
-      console.log('[SurvivalEngine] aurora expired');
-    }, durationMs);
+    this._scheduleAuroraExpiry(nowMs + durationMs);
 
     // 城门 +200HP
     this.gateHp = Math.min(this.gateMaxHp, this.gateHp + 200);
@@ -9180,6 +9681,7 @@ class SurvivalGameEngine {
     }
 
     const returnsAt = nowMs + totalSec * 1000;
+    const outboundEndsAt = nowMs + outboundSec * 1000;
 
     const exp = {
       expeditionId,
@@ -9187,6 +9689,7 @@ class SurvivalGameEngine {
       playerName: this._getPlayerName(playerId),
       workerIdx,
       startAt:       nowMs,
+      outboundEndsAt,
       returnsAt,
       outboundSec, eventSec, returnSec,
       eventId:       null,
@@ -9218,6 +9721,10 @@ class SurvivalGameEngine {
   _triggerExpeditionEvent(expeditionId, nowMs) {
     const exp = this._expeditions.get(expeditionId);
     if (!exp) return;
+    if (exp.outboundTimer) {
+      clearTimeout(exp.outboundTimer);
+      exp.outboundTimer = null;
+    }
 
     // 若 forceDied（白天末段发起 → 抵达即判死），事件阶段仍跑一个短流程以保持协议连贯
     // 选 lost_cache（空奖励）作为中性事件，返回阶段会覆盖为 died=true
@@ -9277,6 +9784,12 @@ class SurvivalGameEngine {
   _resolveExpeditionEvent(expeditionId, userChoice) {
     const exp = this._expeditions.get(expeditionId);
     if (!exp) return;
+    if (exp.eventTimer) {
+      clearTimeout(exp.eventTimer);
+      exp.eventTimer = null;
+    }
+    const resolvedAt = Date.now();
+    exp.eventEndsAt = resolvedAt;
 
     const outcome = { type: 'success', resources: null, contributions: 0, died: false };
 
@@ -9369,6 +9882,7 @@ class SurvivalGameEngine {
     exp.outcome = outcome;
 
     // 设返回定时器
+    exp.returnsAt = resolvedAt + exp.returnSec * 1000;
     exp.returnTimer = setTimeout(() => this._returnExpedition(expeditionId, Date.now()), exp.returnSec * 1000);
   }
 
@@ -9381,9 +9895,9 @@ class SurvivalGameEngine {
     const { playerId, outcome } = exp;
 
     // 清理定时器（防 double-fire）
-    if (exp.outboundTimer) clearTimeout(exp.outboundTimer);
-    if (exp.eventTimer)    clearTimeout(exp.eventTimer);
-    if (exp.returnTimer)   clearTimeout(exp.returnTimer);
+    if (exp.outboundTimer) { clearTimeout(exp.outboundTimer); exp.outboundTimer = null; }
+    if (exp.eventTimer)    { clearTimeout(exp.eventTimer);    exp.eventTimer    = null; }
+    if (exp.returnTimer)   { clearTimeout(exp.returnTimer);   exp.returnTimer   = null; }
 
     // 应用资源
     if (outcome.resources) {
@@ -9411,6 +9925,10 @@ class SurvivalGameEngine {
       // §34.4 E3b immortal 里程碑（20000）：探险死亡也消耗一次免死豁免
       //   消耗成功 → 跳过死亡标记与广播（玩家视角：探险归来满血）
       if (this._consumeFreeDeathPass(playerId)) {
+        outcome.type = 'safe';
+        outcome.died = false;
+        outcome.resources = null;
+        outcome.contributions = 0;
         this._broadcastWorkerHp();
       } else {
 
@@ -10167,6 +10685,7 @@ class SurvivalGameEngine {
           remainingBalance: Math.round(this._contribBalance[playerId] || 0),
         },
       });
+      this.handleShopInventory(playerId);
       console.log(`[Shop] B purchase: ${pname} → ${itemId} (price ${cfg.price}, balance ${this._contribBalance[playerId]})`);
     }
   }
@@ -10258,16 +10777,7 @@ class SurvivalGameEngine {
       case 'spotlight': {
         // §39.2 A4：10s 高亮 + 本局限 1 次
         const endsAt = now + SHOP_SPOTLIGHT_DURATION_MS;
-        this._shopSpotlightActive[sourcePlayerId] = { endsAt };
-        // setTimeout 10s 清理激活并标记本局已用
-        if (this._shopSpotlightTimers[sourcePlayerId]) {
-          clearTimeout(this._shopSpotlightTimers[sourcePlayerId]);
-        }
-        this._shopSpotlightTimers[sourcePlayerId] = setTimeout(() => {
-          delete this._shopSpotlightActive[sourcePlayerId];
-          delete this._shopSpotlightTimers[sourcePlayerId];
-          this._shopSpotlightUsedThisGame[sourcePlayerId] = true;
-        }, SHOP_SPOTLIGHT_DURATION_MS);
+        this._scheduleShopSpotlightExpiry(sourcePlayerId, endsAt);
         this._broadcast({
           type: 'shop_effect_triggered',
           data: {
@@ -10501,9 +11011,11 @@ class SurvivalGameEngine {
     // 清除 per-player 临时 boost 定时器（能量电池）
     for (const t of Object.values(this._playerTempBoostTimers || {})) clearTimeout(t);
     this._playerTempBoostTimers = {};
+    this._playerTempBoostEndsAt = {};
+    this._pausedPlayerTempBoostRemainingMs = {};
     this._playerTempBoost = {};
     // 清除随机事件超时
-    for (const t of this._randomEventTimers) clearTimeout(t);
+    for (const t of this._randomEventTimers) this._clearTimerLike(t);
     this._randomEventTimers = [];
     this.tempDecayMultiplier = 1.0;
     this.foodBonus = 1.0;
@@ -10512,14 +11024,22 @@ class SurvivalGameEngine {
     this._heavyFogEndAt = 0;
     this._hotSpringEndAt = 0;
     this._hotSpringLastTick = 0;
+    this._pausedHotSpringRemainingMs = 0;
     // 清除实时榜防抖定时器
     if (this._liveRankingTimer) { clearTimeout(this._liveRankingTimer); this._liveRankingTimer = null; }
 
     // §24.4 轮盘相关定时器
     if (this._contribMultTimer) { clearTimeout(this._contribMultTimer); this._contribMultTimer = null; }
+    this._contribMultEndsAt = 0;
+    this._pausedContribMultRemainingMs = 0;
     if (this._auroraTimer)      { clearTimeout(this._auroraTimer);      this._auroraTimer      = null; }
+    this._auroraEndsAt = 0;
+    this._pausedAuroraRemainingMs = 0;
+    this._pausedFreezeRemainingMs = 0;
+    this._pausedEliteRaidRemainingMs = 0;
     if (this._traderTimer)      { clearTimeout(this._traderTimer);      this._traderTimer      = null; }
-    for (const t of (this._meteorTimers || [])) clearTimeout(t);
+    this._pausedTraderRemainingMs = 0;
+    for (const t of (this._meteorTimers || [])) this._clearTimerLike(t);
     this._meteorTimers = [];
 
     // §38 探险系统定时器：由 _cancelAllExpeditions 清理；此处保险兜底
@@ -10527,6 +11047,12 @@ class SurvivalGameEngine {
       if (exp.outboundTimer) clearTimeout(exp.outboundTimer);
       if (exp.eventTimer)    clearTimeout(exp.eventTimer);
       if (exp.returnTimer)   clearTimeout(exp.returnTimer);
+      exp.outboundTimer = null;
+      exp.eventTimer = null;
+      exp.returnTimer = null;
+      exp.pausedByRoom = false;
+      exp.pausedPhase = null;
+      exp.pausedRemainingMs = 0;
     }
     // 不清 _expeditions Map（由 reset() / _cancelAllExpeditions 决定清时机）
 
@@ -10548,9 +11074,14 @@ class SurvivalGameEngine {
     // §34.4 组 D：清 E5a 提词器 + E8 参与感唤回定时器
     if (this._streamerPromptTimer) { clearInterval(this._streamerPromptTimer); this._streamerPromptTimer = null; }
     if (this._engagementInterval)  { clearInterval(this._engagementInterval);  this._engagementInterval  = null; }
+    for (const t of (this._giftImpactTimers || [])) clearTimeout(t);
+    this._giftImpactTimers = [];
 
     // §34.3 B2：结算 33s 倒计时句柄（streamer_skip_settlement 亦会清）
     if (this._settleTimerHandle) { clearTimeout(this._settleTimerHandle); this._settleTimerHandle = null; }
+    this._settleEndsAt = 0;
+    this._pausedSettlementRemainingMs = 0;
+    this._giftPauseUntil = 0;
   }
 }
 

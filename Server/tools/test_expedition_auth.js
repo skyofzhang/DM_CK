@@ -188,6 +188,34 @@ test('T7: ws broadcaster recall wrong_phase feedback returns to broadcaster', ()
   assert.ok(!wsMiner._sent.find(m => m.type === 'expedition_failed'), 'target miner should not receive broadcaster recall failure');
 });
 
+test('T8: expedition return consumes free-death pass and reports safe outcome', () => {
+  const eng = makeEngine();
+  const pid = 'miner_immortal';
+  eng._freeDeathPass = true;
+  eng._workerHp[pid] = { hp: 0, maxHp: 100, isDead: false, respawnAt: 0 };
+  eng._expeditions.set('exp_free', {
+    expeditionId: 'exp_free',
+    playerId: pid,
+    playerName: 'Immortal',
+    outboundTimer: null,
+    eventTimer: null,
+    returnTimer: null,
+    outcome: { type: 'died', resources: null, contributions: 200, died: true },
+  });
+
+  eng._returnExpedition('exp_free', Date.now());
+
+  const returned = findMsg(eng._captured, 'expedition_returned', d => d.playerId === pid);
+  assert.ok(returned, 'expected expedition_returned broadcast');
+  assert.strictEqual(returned.data.outcome.type, 'safe');
+  assert.strictEqual(returned.data.outcome.died, false);
+  assert.strictEqual(returned.data.outcome.contributions, 0);
+  assert.strictEqual(eng._workerHp[pid].isDead, false);
+  assert.strictEqual(eng._workerHp[pid].hp, 100);
+  assert.strictEqual(eng._freeDeathPass, false);
+  assert.ok(!findMsg(eng._captured, 'worker_died', d => d.playerId === pid), 'saved expedition should not emit worker_died');
+});
+
 console.log('\n=== Expedition auth/gating test summary ===');
 console.log(`Passed: ${passed}`);
 console.log(`Failed: ${failed}`);

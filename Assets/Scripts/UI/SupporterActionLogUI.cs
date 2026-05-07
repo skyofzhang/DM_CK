@@ -92,6 +92,7 @@ namespace DrscfZ.UI
             sgm.OnSupporterJoined   += HandleJoined;
             sgm.OnSupporterAction   += HandleAction;
             sgm.OnSupporterPromoted += HandlePromoted;
+            sgm.OnGiftSilentFail    += HandleGiftSilentFail;
             _subscribed = true;
         }
 
@@ -104,6 +105,7 @@ namespace DrscfZ.UI
                 sgm.OnSupporterJoined   -= HandleJoined;
                 sgm.OnSupporterAction   -= HandleAction;
                 sgm.OnSupporterPromoted -= HandlePromoted;
+                sgm.OnGiftSilentFail    -= HandleGiftSilentFail;
             }
             _subscribed = false;
         }
@@ -139,6 +141,13 @@ namespace DrscfZ.UI
             if (data == null) return;
             string name = string.IsNullOrEmpty(data.newPlayerName) ? "观众" : data.newPlayerName;
             PushRow($"[守护者] {name} 从助威者晋升");
+        }
+
+        private void HandleGiftSilentFail(GiftSilentFailData data)
+        {
+            if (data == null) return;
+            int unlockDay = data.unlockDay > 0 ? data.unlockDay : 6;
+            PushRow($"[助威者] 礼物未生效（D{unlockDay} 解锁）");
         }
 
         // ── 行管理 ──────────────────────────────────────────────────────

@@ -142,6 +142,10 @@ test('T2: B 类 ≥1000 prepare 生成 pendingId + 应答 shop_purchase_confirm_
   assert.strictEqual(eng._shopPendingPurchases.size, 0, 'pending 应删除');
   const purchaseOk = findBroadcast(eng, 'shop_purchase_confirm', d => d.category === 'B' && d.itemId === 'frame_silver');
   assert.ok(purchaseOk, '应广播 shop_purchase_confirm { category:B }');
+  const inventoryAfterB = findBroadcast(eng, 'shop_inventory_data', d => d.playerId === pid);
+  assert.ok(inventoryAfterB, 'B 类购买后应同步 shop_inventory_data');
+  assert.ok(inventoryAfterB.data.owned.includes('frame_silver'), '库存同步应包含 frame_silver');
+  assert.strictEqual(inventoryAfterB.data.contribBalance, 0, '库存同步应包含最新余额');
 
   // <1000 的 B1 title_supporter 不触发 prepare（直接扣费路径）
   const pid2 = 'p2_b_small';
@@ -167,6 +171,9 @@ test('T2: B 类 ≥1000 prepare 生成 pendingId + 应答 shop_purchase_confirm_
   eng._lifetimeContrib[pid4] = 10000;
   eng.handleShopPurchase(pid4, 'Direct Barrage', 'frame_silver', null, 'barrage');
   assert.ok(findBroadcast(eng, 'shop_purchase_confirm', d => d.category === 'B' && d.itemId === 'frame_silver'), 'barrage path may buy B>=1000 without HUD pending');
+  const directBInventory = findBroadcast(eng, 'shop_inventory_data', d => d.playerId === pid4);
+  assert.ok(directBInventory, 'barrage B purchase should also sync shop_inventory_data');
+  assert.ok(directBInventory.data.owned.includes('frame_silver'), 'barrage B inventory sync should include frame_silver');
   assert.ok(!silentPrompt, '<1000 prepare 不应推 prompt');
 });
 
@@ -287,6 +294,27 @@ test('T4: 弹幕 `买A1` / `装T2` / `买B9` 经 handleComment 分流', () => {
   const unequip = findBroadcast(eng, 'shop_equip_changed', d => d.itemId === '');
   assert.ok(unequip, '装T0 应卸下');
   assert.strictEqual(eng._playerShopEquipped[pid].title || '', '', '卸下后 title 为空');
+
+  // recovery 阶段：弹幕 A 类购买应走 §39.6 窗口，而不能被 handleComment 的 day/night 总闸吞掉
+  eng.state = 'recovery';
+  eng.gateHp = 200;
+  eng.gateMaxHp = 1000;
+  eng.contributions[pid] = 500;
+  clearBroadcasts(eng);
+  eng.handleComment(pid, 'Dave', '', '买A2');
+  const recoveryA2 = findBroadcast(eng, 'shop_purchase_confirm', d => d.itemId === 'gate_quickpatch');
+  assert.ok(recoveryA2, 'recovery 阶段弹幕买A2 应通过');
+  assert.strictEqual(eng.gateHp, 300, 'recovery 弹幕买A2 应修复城门');
+
+  // settlement 阶段：B 类身份装备允许购买，弹幕入口也必须与 HUD/底层 handleShopPurchase 保持一致
+  eng.state = 'settlement';
+  eng._contribBalance[pid] = 500;
+  eng._playerShopInventory[pid] = [];
+  clearBroadcasts(eng);
+  eng.handleComment(pid, 'Dave', '', '买B1');
+  const settlementB1 = findBroadcast(eng, 'shop_purchase_confirm', d => d.itemId === 'title_supporter');
+  assert.ok(settlementB1, 'settlement 阶段弹幕买B1 应通过');
+  assert.ok(eng._playerShopInventory[pid].includes('title_supporter'));
 });
 
 // ============================================================
@@ -361,22 +389,20 @@ test('T6: _addContribution 原子同步 contributions / _lifetimeContrib / _cont
   assert.strictEqual(eng._lifetimeContrib[pid] || 0, 0);
   assert.strictEqual(eng._contribBalance[pid] || 0, 0);
 
-  // 加 50（<100 → §30.8 catchUpMult ×3 仅作用于 lifetime/balance）
+  // 加 50（<100 → §30.8 catchUpMult ×3 仅作用于 lifetime，不放大可消费余额）
   eng._addContribution(pid, 50, 'gift');
   assert.strictEqual(Math.round(eng.contributions[pid]), 50, 'contributions += 50');
   assert.strictEqual(eng._lifetimeContrib[pid], 150, '_lifetimeContrib += 50*3=150 (catchUp)');
-  assert.strictEqual(eng._contribBalance[pid], 150, '_contribBalance += 50*3=150 (catchUp)');
+  assert.strictEqual(eng._contribBalance[pid], 50, '_contribBalance += 50 (no catchUp)');
 
-  // 关键不变式：_lifetimeContrib 与 _contribBalance 同步增长
-  const lifeDelta0 = eng._lifetimeContrib[pid];
-  const balDelta0  = eng._contribBalance[pid];
-  assert.strictEqual(lifeDelta0, balDelta0, '_lifetimeContrib diff === _contribBalance diff');
+  // 关键不变式：可消费余额不能被成长追赶倍率放大
+  assert.ok(eng._contribBalance[pid] < eng._lifetimeContrib[pid], '_contribBalance should not include catchUp multiplier');
 
   // 再加 200（此时 _lifetimeContrib >= 100，catchUp 失效 ×1）
   eng._addContribution(pid, 200, 'gift');
   assert.strictEqual(Math.round(eng.contributions[pid]), 250, 'contributions += 200');
   assert.strictEqual(eng._lifetimeContrib[pid], 350, '_lifetimeContrib += 200 (no catchUp)');
-  assert.strictEqual(eng._contribBalance[pid], 350, '_contribBalance += 200 (no catchUp)');
+  assert.strictEqual(eng._contribBalance[pid], 250, '_contribBalance += 200 (no catchUp)');
 
   // B 类购买：_contribBalance 扣；_lifetimeContrib 不变
   eng._contribBalance[pid] = 500;

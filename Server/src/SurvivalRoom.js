@@ -393,7 +393,11 @@ class SurvivalRoom {
       clearTimeout(this._efficiencyBoostTimer);
       this._efficiencyBoostTimer = null;
     }
-    this.survivalEngine.pause();
+    if (this.survivalEngine && typeof this.survivalEngine.stop === 'function') {
+      this.survivalEngine.stop();
+    } else if (this.survivalEngine) {
+      this.survivalEngine.pause();
+    }
 
     // §36 销毁前保存一次快照
     if (this.roomPersistence) {
@@ -860,7 +864,7 @@ class SurvivalRoom {
         // §36.12 building 门槛（seasonDay ≥ 3）
         if (!this._checkFeatureOrFail('building', 'build_propose_failed', {}, ws)) break;
         // { buildId, playerName? }
-        const pid   = ws._playerId || (data && data.playerId) || '';
+        const pid   = ws._playerId || '';
         // playerName 从 data.playerName 读；fallback 到引擎内 playerNames[pid] 或 pid
         const pname = (data && data.playerName)
                       || (this.survivalEngine.playerNames && this.survivalEngine.playerNames[pid])
@@ -877,7 +881,7 @@ class SurvivalRoom {
           break;
         }
         // { proposalId, buildId }
-        const pid        = ws._playerId || (data && data.playerId) || '';
+        const pid        = ws._playerId || '';
         const proposalId = (data && data.proposalId) || '';
         const buildId    = (data && data.buildId)    || '';
         this.survivalEngine.handleBuildVote(pid, proposalId, buildId);
@@ -889,7 +893,7 @@ class SurvivalRoom {
       //   未解锁/赛季末等守门一律跳过（策划案 v1.27 MVP 范围）
       case 'shop_list': {
         // §36.12 shop 门槛（seasonDay ≥ 2）；锁定期返回空目录（不推失败，避免客户端商店 Tab 刷红）
-        const pidL = ws._playerId || (data && data.playerId) || '';
+        const pidL = ws._playerId || '';
         const catL = (data && data.category) || '';
         this._refreshVeteranStatus();
         if (!isFeatureUnlocked(this, 'shop')) {
@@ -914,7 +918,7 @@ class SurvivalRoom {
         //   客户端对 reason==='not_broadcaster' 静默不弹红 toast（B' 优化，详见 SurvivalGameManager.HandleBroadcasterActionFailed）。
         if (!this._requireBroadcaster(ws, 'shop_purchase_prepare')) break;
         // { itemId } — 仅主播 HUD B 类 ≥1000 时客户端调用
-        const pid    = ws._playerId || (data && data.playerId) || '';
+        const pid    = ws._playerId || '';
         this.survivalEngine.handleShopPurchasePrepare(pid, itemIdP);
         break;
       }
@@ -924,7 +928,7 @@ class SurvivalRoom {
         if (!this._checkFeatureOrFail('shop', 'shop_purchase_failed', { itemId: itemIdPr }, ws)) break;
         if (!this._requireBroadcaster(ws, 'shop_purchase')) break;
         // { itemId, pendingId? }
-        const pid       = ws._playerId || (data && data.playerId) || '';
+        const pid       = ws._playerId || '';
         const pname     = (data && data.playerName)
                           || (this.survivalEngine.playerNames && this.survivalEngine.playerNames[pid])
                           || pid;
@@ -940,7 +944,7 @@ class SurvivalRoom {
         //   r37 改用 shop_equip_failed 与 §19.2 line 2540 设计对齐
         if (!this._checkFeatureOrFail('shop', 'shop_equip_failed', { itemId: itemIdE, slot: (data && data.slot) || '' }, ws)) break;
         // { slot, itemId? } — itemId 缺省/空 = 卸下该槽位
-        const pid    = ws._playerId || (data && data.playerId) || '';
+        const pid    = ws._playerId || '';
         const slot   = (data && data.slot)   || '';
         this.survivalEngine.handleShopEquip(pid, slot, itemIdE);
         break;
@@ -948,7 +952,7 @@ class SurvivalRoom {
       case 'shop_inventory': {
         // §39 库存查询（C→S）—— 主动触发 shop_inventory_data 推送
         // §36.12 shop 门槛：未解锁时推送空 inventory（避免客户端空指针，与 shop_list 锁定期返空一致）
-        const pidI = ws._playerId || (data && data.playerId) || '';
+        const pidI = ws._playerId || '';
         this._refreshVeteranStatus();
         if (!isFeatureUnlocked(this, 'shop')) {
           // r17 GAP-R17-PM-04：locked 路径 broadcast → unicast（与 r15 GAP-E15-4 / r16 GAP-R16-PM-01 同形态延伸）
@@ -1158,7 +1162,7 @@ class SurvivalRoom {
       //   非主播静默忽略；state 非 'settlement' 时返回 false（_enterSettlement 已清句柄则无效）
       case 'streamer_skip_settlement': {
         if (!this._requireBroadcaster(ws, 'streamer_skip_settlement')) break;
-        const pid = (data && data.playerId) || ws._playerId || '';
+        const pid = ws._playerId || '';
         const ok = this.survivalEngine.handleStreamerSkipSettlement(pid);
         if (!ok) {
           console.log(`[SurvivalRoom:${this.roomId}] streamer_skip_settlement no-op (state=${this.survivalEngine.state})`);
@@ -1253,8 +1257,7 @@ class SurvivalRoom {
       );
     }
 
-    // 送礼 = 玩家加入（如果还没加入）
-    this.survivalEngine.handlePlayerJoined(secOpenId, nickname, avatarUrl);
+    // 送礼首行为的身份绑定由 SurvivalGameEngine.handleGift 内部完成，避免重复 join 广播。
   }
 
   /**
@@ -1267,7 +1270,7 @@ class SurvivalRoom {
 
     // 点赞贡献值（每次点赞+2积分）
     if (secOpenId) {
-      this.survivalEngine.addContribution(secOpenId, 2 * count);
+      this.survivalEngine.addContribution(secOpenId, 2 * count, 'like', nickname, avatarUrl);
     }
 
     // 积分池：点赞每次 +0.5 分（每2个点赞贡献1分；量大则效果可观）

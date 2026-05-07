@@ -99,6 +99,7 @@ namespace DrscfZ.UI
         // 当前序列 Coroutine 句柄（用于主播跳过时打断）
         private Coroutine _sequenceCoroutine;
         private Coroutine _recoveryWatchdogCoroutine;
+        private bool _hideAfterSequenceRequested = false;
 
         // 🆕 §34 B2 主播身份判定（通过 NetworkManager 的 join_room_confirm 消息确定）
         private bool _isRoomCreator = false;
@@ -199,6 +200,7 @@ namespace DrscfZ.UI
         {
             // 保险：显示时再订阅一次（Awake 顺序若早于 NetworkManager 初始化时会跳过，此处兜底）
             SyncRoomCreatorFromManager();
+            _hideAfterSequenceRequested = false;
 
             // audit-r10 §29：结算面板出现 SFX（翻页声）
 
@@ -223,6 +225,18 @@ namespace DrscfZ.UI
 
             if (_sequenceCoroutine != null) StopCoroutine(_sequenceCoroutine);
             _sequenceCoroutine = StartCoroutine(PlaySettlementSequence(data));
+        }
+
+        public void HideForRecoveryWhenReady()
+        {
+            if (!gameObject.activeSelf) return;
+            if (_sequenceCoroutine != null)
+            {
+                _hideAfterSequenceRequested = true;
+                Debug.Log("[SurvivalSettlementUI] 收到 recovery，等待 30s 结算序列播完后关闭");
+                return;
+            }
+            gameObject.SetActive(false);
         }
 
         private void OnDisable()
@@ -291,6 +305,11 @@ namespace DrscfZ.UI
             Debug.Log("[SurvivalSettlementUI] §34 B2 结算 30s 播完，等待服务端 recovery 推送或主播手动关闭");
             StartRecoveryWatchdog();
             _sequenceCoroutine = null;
+            if (_hideAfterSequenceRequested)
+            {
+                _hideAfterSequenceRequested = false;
+                gameObject.SetActive(false);
+            }
         }
 
         private void StartRecoveryWatchdog()
@@ -618,7 +637,11 @@ namespace DrscfZ.UI
                 for (int i = 0; i < 3; i++)
                 {
                     var slot = _top3Slots[i];
-                    if (slot == null) continue;
+                    if (slot == null)
+                    {
+                        Debug.LogWarning($"[SurvivalSettlementUI] _top3Slots[{i}] 未配置，保留 MVP 单行兜底");
+                        continue;
+                    }
 
                     bool hasData = data.Rankings != null && i < data.Rankings.Count;
                     slot.SetActive(hasData);
@@ -671,6 +694,7 @@ namespace DrscfZ.UI
         private void OnRestartClicked()
         {
             // 仅关闭面板；不触发 reset_game（永续模式服务端自动进入 recovery）
+            _hideAfterSequenceRequested = false;
             gameObject.SetActive(false);
             Debug.Log("[SurvivalSettlementUI] 主播手动关闭结算面板（不触发 reset_game）");
         }

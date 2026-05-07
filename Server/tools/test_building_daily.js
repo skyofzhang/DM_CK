@@ -1,5 +1,6 @@
 const assert = require('assert');
 const SurvivalGameEngine = require('../src/SurvivalGameEngine');
+const SurvivalRoom = require('../src/SurvivalRoom');
 
 function makeEngine(captures, seasonId = 1, seasonDay = 3) {
   const engine = new SurvivalGameEngine({}, (msg) => captures.push(msg));
@@ -95,5 +96,49 @@ ghostVote.handleBuildVote('ghost', ghostVote._buildVote.proposalId, ghostVote._b
 assert.ok(!ghostVote._buildVote.votes.has('ghost'), 'D3 overflow ghost should not be counted as a build voter before supporter unlock');
 assert.ok(!findMsg(captures, 'build_vote_update'), 'ghost vote should not broadcast build_vote_update');
 ghostVote._clearAllTimers();
+
+captures = [];
+const ghostPropose = makeEngine(captures, 1, 3);
+ghostPropose.handleBuildPropose('ghost', 'Ghost', 'watchtower');
+assert.ok(!ghostPropose._buildVote, 'ghost proposer should not start a build vote');
+assert.ok(
+  findMsg(captures, 'build_propose_failed', 'supporter_not_allowed'),
+  'ghost proposer should receive supporter_not_allowed'
+);
+ghostPropose._clearAllTimers();
+
+{
+  const room = new SurvivalRoom('build_vote_spoof_test', { pauseTimeout: 1000 }, null, {
+    seasonMgr: { seasonId: 1, seasonDay: 3 },
+  });
+  try {
+    const eng = room.survivalEngine;
+    eng.state = 'day';
+    eng.seasonMgr = room.seasonMgr;
+    eng.contributions.p1 = 1;
+    eng.playerNames.p1 = 'Real Voter';
+    eng.totalPlayers = 1;
+    eng._buildVote = {
+      proposalId: 'prop_spoof',
+      proposerId: 'p1',
+      proposerName: 'Real Voter',
+      options: ['watchtower'],
+      votes: new Map(),
+      startedAt: Date.now(),
+      votingEndsAt: Date.now() + 45000,
+      timer: null,
+    };
+
+    const spoofWs = { _playerId: '', readyState: 1, send: () => {} };
+    room.handleClientMessage(spoofWs, 'build_vote', {
+      playerId: 'p1',
+      proposalId: 'prop_spoof',
+      buildId: 'watchtower',
+    });
+    assert.strictEqual(eng._buildVote.votes.has('p1'), false, 'build_vote must not trust data.playerId when ws._playerId is empty');
+  } finally {
+    room.destroy();
+  }
+}
 
 console.log('PASS  §37 daily build vote persistence and season isolation');

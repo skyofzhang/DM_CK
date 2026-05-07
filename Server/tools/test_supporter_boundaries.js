@@ -38,6 +38,45 @@ const SurvivalGameEngine = require('../src/SurvivalGameEngine');
 
 {
   const engine = new SurvivalGameEngine({}, () => {});
+  engine.room = { seasonMgr: { seasonDay: 6 } };
+  engine.state = 'day';
+  engine.handleGift('gift_first', 'Gift First', '', 'fairy_wand', 1);
+  assert.strictEqual(engine.totalPlayers, 1, 'gift-first player should occupy a guardian slot');
+  assert.ok(Object.prototype.hasOwnProperty.call(engine.contributions, 'gift_first'), 'gift-first player should be registered as guardian');
+  assert.ok(engine._getWorkerIndex('gift_first') >= 0, 'gift-first player should get a worker slot');
+  engine._clearAllTimers();
+}
+
+{
+  const engine = new SurvivalGameEngine({}, () => {});
+  engine.room = { seasonMgr: { seasonDay: 6 } };
+  engine.state = 'day';
+  engine.addContribution('like_first', 10, 'like', 'Like First', '');
+  assert.strictEqual(engine.totalPlayers, 1, 'like-first player should occupy a guardian slot');
+  assert.strictEqual(engine.contributions.like_first, 10, 'like-first contribution should apply after registration');
+  assert.ok(engine._getWorkerIndex('like_first') >= 0, 'like-first player should get a worker slot');
+  engine._clearAllTimers();
+}
+
+{
+  const engine = new SurvivalGameEngine({}, () => {});
+  engine.room = { seasonMgr: { seasonDay: 1 } };
+  engine.state = 'day';
+  for (let i = 0; i < SurvivalGameEngine.MAX_PLAYERS; i++) {
+    const pid = `full_${i}`;
+    engine.contributions[pid] = 1;
+    engine.playerNames[pid] = pid;
+    engine._playerSlots[pid] = i;
+  }
+  engine.totalPlayers = SurvivalGameEngine.MAX_PLAYERS;
+  engine.addContribution('like_overflow', 2, 'like', 'Like Overflow', '');
+  assert.strictEqual(engine.contributions.like_overflow, undefined, 'locked overflow like must not create a 13th guardian');
+  assert.strictEqual(engine.totalPlayers, SurvivalGameEngine.MAX_PLAYERS, 'overflow like must not increase guardian count');
+  engine._clearAllTimers();
+}
+
+{
+  const engine = new SurvivalGameEngine({}, () => {});
   const variants = Array.from({ length: 6 }, (_, i) => engine._selectVariant(4, i));
   assert.strictEqual(variants.filter(v => v === 'assassin').length, 1, 'day4 should include assassin');
   assert.strictEqual(variants.filter(v => v === 'rush').length, 1, 'day4 should still include one rush');

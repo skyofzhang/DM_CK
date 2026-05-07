@@ -448,7 +448,7 @@ namespace DrscfZ.Survival
                         Debug.Log("[SGM] Settlement 态收到 phase_changed{variant=recovery} → 切回 Running（§16 永续模式）");
                         ChangeState(SurvivalState.Running);
                         if (_settlementUI != null && _settlementUI.gameObject.activeSelf)
-                            _settlementUI.gameObject.SetActive(false);  // 关闭结算面板（若 8s 自动关闭未触发）
+                            _settlementUI.HideForRecoveryWhenReady();
                     }
 
                     // 结算/空闲状态下仍忽略昼夜计时器/防守切换等副作用（避免残留状态污染 UI）
@@ -1109,6 +1109,22 @@ namespace DrscfZ.Survival
                             _lastPhaseVariant = roomVariant;
                             if (roomVariantChanged)
                                 OnPhaseVariantChanged?.Invoke(roomVariant);
+                            if (roomVariant == "recovery")
+                            {
+                                if (_state == SurvivalState.Settlement)
+                                {
+                                    Debug.Log("[SGM] Settlement 态收到 room_state{variant=recovery} → 切回 Running");
+                                    ChangeState(SurvivalState.Running);
+                                    if (_settlementUI != null && _settlementUI.gameObject.activeSelf)
+                                        _settlementUI.HideForRecoveryWhenReady();
+                                }
+                                else if ((_state == SurvivalState.Loading || _state == SurvivalState.Waiting) && IsEnteringScene)
+                                {
+                                    StopLoadingTimeout();
+                                    ChangeState(SurvivalState.Running);
+                                    Debug.Log("[SGM] 进入流程收到 room_state{variant=recovery} → Running");
+                                }
+                            }
                             OnPhaseChanged?.Invoke(new PhaseChangedData
                             {
                                 phase = rst.phase == "recovery" ? "day" : rst.phase,
@@ -1548,7 +1564,7 @@ namespace DrscfZ.Survival
                         Debug.Log("[SGM] Settlement 态收到 survival_game_state{state=day, variant=recovery} → 切回 Running（§16 断线重连兜底）");
                         ChangeState(SurvivalState.Running);
                         if (_settlementUI != null && _settlementUI.gameObject.activeSelf)
-                            _settlementUI.gameObject.SetActive(false);
+                            _settlementUI.HideForRecoveryWhenReady();
                     }
                     else if ((_state == SurvivalState.Loading || _state == SurvivalState.Waiting) && IsEnteringScene)
                     {
@@ -1615,7 +1631,7 @@ namespace DrscfZ.Survival
                     {
                         ChangeState(SurvivalState.Running);
                         if (_settlementUI != null && _settlementUI.gameObject.activeSelf)
-                            _settlementUI.gameObject.SetActive(false);
+                            _settlementUI.HideForRecoveryWhenReady();
                     }
                     else if ((_state == SurvivalState.Loading || _state == SurvivalState.Waiting) && IsEnteringScene)
                     {
@@ -3498,18 +3514,28 @@ namespace DrscfZ.Survival
             Debug.Log($"[SGM] tribe_war_attack_failed: reason={data.reason} cooldownMs={data.cooldownMs}");
         }
 
-        /// <summary>攻击开始广播（双方房间均广播）：
-        /// MVP 阶段不区分攻/守视角（缺少自身 roomId 上下文）——两边都打开对应状态面板。
-        /// 人工 QA 可根据场景选用适合视角（攻击方/防守方面板之一）。</summary>
+        /// <summary>攻击开始广播（双方房间均广播）：按当前 roomId 区分攻守视角。</summary>
         private void HandleTribeWarAttackStarted(TribeWarAttackStartedData data)
         {
             OnTribeWarAttackStarted?.Invoke(data);
-            UI.TribeWarDefenseStatusPanel.Instance?.Hide();
-            UI.TribeWarAttackStatusPanel.Instance?.Show(data);
+            string currentRoomId = NetworkManager.Instance != null ? NetworkManager.Instance.CurrentRoomId : "";
+            bool isAttacker = !string.IsNullOrEmpty(currentRoomId) && currentRoomId == data.attackerRoomId;
+            bool isDefender = !string.IsNullOrEmpty(currentRoomId) && currentRoomId == data.defenderRoomId;
+            bool unknownRoom = string.IsNullOrEmpty(currentRoomId) || currentRoomId == "default";
+
+            if (isAttacker || (!isDefender && unknownRoom))
+            {
+                UI.TribeWarDefenseStatusPanel.Instance?.Hide();
+                UI.TribeWarAttackStatusPanel.Instance?.Show(data);
+            }
+            else if (isDefender)
+            {
+                UI.TribeWarAttackStatusPanel.Instance?.Hide();
+            }
             OnPlayerActivityMessage?.Invoke($"【攻防战】{data.attackerStreamerName} → {data.defenderStreamerName}");
             UI.HorizontalMarqueeUI.Instance?.AddMessage(
                 data.attackerStreamerName, null, $"发起攻防战 → {data.defenderStreamerName}");
-            Debug.Log($"[SGM] tribe_war_attack_started: sessionId={data.sessionId} atk={data.attackerStreamerName} def={data.defenderStreamerName}");
+            Debug.Log($"[SGM] tribe_war_attack_started: sessionId={data.sessionId} atk={data.attackerStreamerName} def={data.defenderStreamerName} currentRoom={currentRoomId} attackerView={isAttacker} defenderView={isDefender}");
         }
 
         /// <summary>被攻击通知（仅防守方房间广播）：展示防守方状态面板 + 顶部飘字告警。</summary>
