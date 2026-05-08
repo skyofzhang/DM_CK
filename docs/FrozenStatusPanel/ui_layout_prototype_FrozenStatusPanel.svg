@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <rect width="1080" height="1920" fill="#f4f7fa"/>
+  <rect x="24" y="24" width="1032" height="1872" rx="10" fill="none" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="54" y="76" font-size="34" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">FrozenStatusPanel 施工原型</text>
+  <text x="54" y="112" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569">1080x1920 竖屏；灰盒、坐标、节点名均为施工标注，最终效果图不要出现这些文字。</text>
+  <rect x="54" y="150" width="972" height="1" fill="#cbd5e1"/>
+<g id="block_0_SceneSafeArea">
+  <rect x="40" y="180" width="1000" height="1180" rx="8" fill="#f7fbff" fill-opacity="1" stroke="#7aa6c2" stroke-width="3" stroke-dasharray="12 10"/>
+  <text x="58" y="222" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#2f5065">游戏画面安全区</text>
+  <text x="58" y="256" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#2f5065" opacity="0.85">SceneSafeArea</text>
+  <text x="58" y="1342" font-size="20" fill="#2f5065" opacity="0.75">中部保持无遮挡</text>
+</g>
+<g id="block_1_FrozenStatusPanel/BackgroundImage">
+  <rect x="70" y="1460" width="940" height="180" rx="8" fill="#e8f0f5" fill-opacity="0.98" stroke="#416075" stroke-width="3"/>
+  <text x="88" y="1502" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#143042">底部冻结横幅</text>
+  <text x="88" y="1536" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#143042" opacity="0.85">FrozenStatusPanel/BackgroundImage</text>
+  <text x="88" y="1622" font-size="20" fill="#143042" opacity="0.75">蓝黑半透明全宽条</text>
+</g>
+<g id="block_2_FrozenText">
+  <rect x="130" y="1508" width="620" height="58" rx="8" fill="#d9edf7" fill-opacity="1" stroke="#2f6f88" stroke-width="3"/>
+  <text x="148" y="1540" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#073042">冻结主文案</text>
+  <text x="148" y="1569" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#073042" opacity="0.85">FrozenText</text>
+  <text x="148" y="1548" font-size="20" fill="#073042" opacity="0.75">全体守护者已冻结</text>
+</g>
+<g id="block_3_CountdownText">
+  <rect x="130" y="1580" width="620" height="48" rx="8" fill="#ffe2dc" fill-opacity="1" stroke="#c2412d" stroke-width="3"/>
+  <text x="148" y="1612" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#7f1d1d">倒计时</text>
+  <text x="148" y="1638" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#7f1d1d" opacity="0.85">CountdownText</text>
+  <text x="148" y="1610" font-size="20" fill="#7f1d1d" opacity="0.75">解冻倒计时：30s</text>
+</g>
+<g id="block_4_IceIcon">
+  <rect x="795" y="1505" width="110" height="110" rx="8" fill="#f8fafc" fill-opacity="1" stroke="#94a3b8" stroke-width="3" stroke-dasharray="8 8"/>
+  <text x="813" y="1547" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#475569">冰晶图标区</text>
+  <text x="813" y="1581" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569" opacity="0.85">IceIcon</text>
+  <text x="813" y="1597" font-size="20" fill="#475569" opacity="0.75">雪花/冰晶</text>
+</g>
+  <rect x="54" y="1660" width="972" height="190" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="80" y="1700" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">Prefab 核对</text>
+  <text x="80" y="1734" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">脚本：外部控制脚本，见策划案</text>
+  <text x="80" y="1766" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">节点摘录：BackgroundImage / CountdownText / FrozenText</text>
+<text x="80" y="1726" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：解冻倒计时：30s</text>
+<text x="80" y="1760" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：全体守护者已冻结</text>
+</svg>

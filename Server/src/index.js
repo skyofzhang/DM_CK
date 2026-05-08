@@ -21,15 +21,62 @@
 const WebSocket = require('ws');
 const express = require('express');
 const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+const fs = require('fs');
+
+function loadEnvFile(envPath) {
+  try {
+    require('dotenv').config({ path: envPath });
+    return;
+  } catch (err) {
+    if (!err || err.code !== 'MODULE_NOT_FOUND' || !String(err.message || '').includes('dotenv')) {
+      throw err;
+    }
+  }
+
+  try {
+    const text = fs.readFileSync(envPath, 'utf8');
+    for (const rawLine of text.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+      const eq = line.indexOf('=');
+      if (eq <= 0) continue;
+
+      const key = line.slice(0, eq).trim();
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+      if (Object.prototype.hasOwnProperty.call(process.env, key)) continue;
+
+      let value = line.slice(eq + 1).trim();
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      process.env[key] = value;
+    }
+  } catch (err) {
+    if (!err || err.code !== 'ENOENT') throw err;
+  }
+}
+
+loadEnvFile(path.join(__dirname, '..', '.env'));
 
 const RoomManager = require('./RoomManager');
 const DouyinAPI = require('./DouyinAPI');
-const { getAllGifts } = require('./GiftConfig');
+const { getAllGifts, assertDouyinGiftIdsReady } = require('./GiftConfig');
 
 const http = require('http');
 const config = require('../config/default.json');
 const PORT = process.env.PORT || config.server.wsPort; // 统一使用wsPort(8081)
+
+const allowTbdDouyinGiftIds = process.env.ALLOW_TBD_DOUYIN_GIFT_IDS === '1';
+const unresolvedDouyinGifts = assertDouyinGiftIdsReady({
+  allowPlaceholders: process.env.NODE_ENV !== 'production' || allowTbdDouyinGiftIds,
+});
+if (unresolvedDouyinGifts.length > 0) {
+  const ids = unresolvedDouyinGifts.map(g => `${g.id}/${g.tier}`).join(', ');
+  console.warn(`[GiftConfig] ${unresolvedDouyinGifts.length} gifts still use TBD douyin_id: ${ids}`);
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[GiftConfig] Development mode allows price_fen fallback. Production deploy will fail until real Douyin gift ids are filled.');
+  }
+}
 
 // ==================== Express HTTP ====================
 const app = express();
@@ -128,7 +175,11 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: Date.now(),
-    rooms: roomManager.getStats()
+    rooms: roomManager.getStats(),
+    giftConfig: {
+      unresolvedDouyinGiftIds: unresolvedDouyinGifts.length,
+      productionReady: unresolvedDouyinGifts.length === 0,
+    }
   });
 });
 

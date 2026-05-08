@@ -86,6 +86,7 @@ namespace DrscfZ.Survival
         public const string BuildingDemolishedBatch = "building_demolished_batch";   // S→C：失败降级批量拆除
         public const string MonsterWaveIncoming     = "monster_wave_incoming";       // S→C：瞭望塔 10s 预告
         public const string BuildPropose            = "build_propose";               // C→S：主播或前 12 位守护者发起投票
+        public const string BuildDemolish           = "build_demolish";              // C→S：主播手动拆除已建成建筑
 
         // ----- §39 商店系统 -----
         public const string ShopListData              = "shop_list_data";               // S→C：商品清单应答
@@ -154,8 +155,9 @@ namespace DrscfZ.Survival
         public const string TribeWarCombatReport         = "tribe_war_combat_report";          // S→C：攻击方战报
         public const string TribeWarCombatReportDefense  = "tribe_war_combat_report_defense";  // S→C：防守方战报
         public const string TribeWarAttackEnded          = "tribe_war_attack_ended";           // S→C：攻击结束广播（双方房间）
+        public const string TribeWarExpeditionHit        = "tribe_war_expedition_hit";         // C→S：远征怪命中动画回报（服务端二次校验）
         // C→S 消息（客户端发送时直接用字面量，无需此常量解析）：
-        //   tribe_war_room_list / tribe_war_attack / tribe_war_stop / tribe_war_retaliate
+        //   tribe_war_room_list / tribe_war_attack / tribe_war_stop / tribe_war_retaliate / tribe_war_expedition_hit
 
         // ----- §34 Layer 3 组 C 体验引擎（🆕 v1.27） -----
         // tension / giftRecommendation / totalContribution 附加在 resource_update 消息内，无需常量。

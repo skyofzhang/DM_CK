@@ -19,6 +19,8 @@ namespace DrscfZ.Survival
     public class SurvivalGameManager : MonoBehaviour
     {
         public static SurvivalGameManager Instance { get; private set; }
+        private NetworkManager _subscribedNetworkManager;
+        private bool _networkSubscribed;
 
         [Header("子系统引用（在Inspector中拖入）")]
         public DayNightCycleManager dayNightManager;
@@ -156,6 +158,7 @@ namespace DrscfZ.Survival
         public event Action<TribeWarCombatReportData>       OnTribeWarCombatReport;
         public event Action<TribeWarCombatReportData>       OnTribeWarCombatReportDefense;
         public event Action<TribeWarAttackEndedData>        OnTribeWarAttackEnded;
+        public event Action<TribeWarRetaliationStartedData> OnTribeWarRetaliationStarted;
 
         // §36 全服同步 + 赛季制（🆕 v1.27 MVP）
         public event Action<WorldClockTickData>      OnWorldClockTick;
@@ -303,9 +306,7 @@ namespace DrscfZ.Survival
 
         private void Start()
         {
-            var net = NetworkManager.Instance;
-            if (net != null)
-                net.OnMessageReceived += HandleMessage;
+            TrySubscribeNetwork();
 
             // 初始化子系统
             resourceSystem?.Initialize();
@@ -332,11 +333,17 @@ namespace DrscfZ.Survival
             Debug.Log("[SurvivalGM] 极地生存游戏管理器已启动");
         }
 
+        private void Update()
+        {
+            TrySubscribeNetwork();
+        }
+
         private void OnDestroy()
         {
-            var net = NetworkManager.Instance;
-            if (net != null)
-                net.OnMessageReceived -= HandleMessage;
+            if (_subscribedNetworkManager != null)
+                _subscribedNetworkManager.OnMessageReceived -= HandleMessage;
+            _subscribedNetworkManager = null;
+            _networkSubscribed = false;
 
             if (resourceSystem != null)
             {
@@ -358,22 +365,84 @@ namespace DrscfZ.Survival
         private void HandleLocalNightStarted(int day) => UI.TopFloatingTextUI.Instance?.ShowDanger("【夜袭】怪物入侵！全员防守！");
         private void HandleLocalDayStarted(int day) => UI.TopFloatingTextUI.Instance?.ShowGold("【黎明】守住了！太阳升起！");
 
+        private void TrySubscribeNetwork()
+        {
+            if (_networkSubscribed) return;
+            var net = NetworkManager.Instance;
+            if (net == null) return;
+
+            net.OnMessageReceived += HandleMessage;
+            _subscribedNetworkManager = net;
+            _networkSubscribed = true;
+        }
+
         private static void EnsureOptionalRuntimeUI()
         {
             EnsureRuntimeUI<UI.TopFloatingTextUI>("TopFloatingTextUI");
+            EnsureRuntimeUI<UI.AnnouncementUI>("AnnouncementUI");
             EnsureRuntimeUI<UI.FortressDayBadgeUI>("FortressDayBadgeUI");
             EnsureRuntimeUI<UI.RoomFailedBannerUI>("RoomFailedBannerUI");
+            EnsureRuntimeUI<UI.SurvivalLoadingUI>("SurvivalLoadingUI");
+            EnsureRuntimeUI<UI.SurvivalTopBarUI>("SurvivalTopBarUI");
+            EnsureRuntimeUI<UI.SeasonTopBarUI>("SeasonTopBarUI");
+            EnsureRuntimeUI<UI.BroadcasterDecisionHUD>("BroadcasterDecisionHUD");
             EnsureRuntimeUI<UI.RouletteUI>("RouletteUI");
             EnsureRuntimeUI<UI.BuildVoteUI>("BuildVoteUI");
             EnsureRuntimeUI<UI.TraderOfferUI>("TraderOfferUI");
+            EnsureRuntimeUI<UI.TraderCaravanUI>("TraderCaravanUI");
+            EnsureRuntimeUI<UI.BuildingStatusPanelUI>("BuildingStatusPanelUI");
+            EnsureRuntimeUI<UI.OnboardingBubbleUI>("OnboardingBubbleUI");
+            EnsureRuntimeUI<UI.FeatureUnlockBanner>("FeatureUnlockBanner");
+            EnsureRuntimeUI<UI.FeatureLockOverlay>("FeatureLockOverlay");
+            EnsureRuntimeUI<UI.ExpeditionMarkerUI>("ExpeditionMarkerUI");
+            EnsureRuntimeUI<UI.SeasonSettlementUI>("SeasonSettlementUI");
+            EnsureRuntimeUI<UI.WaitingPhaseUI>("WaitingPhaseUI");
+            EnsureRuntimeUI<UI.GiftAnimationUI>("GiftAnimationUI");
+            EnsureRuntimeUI<UI.GiftRecommendationUI>("GiftRecommendationUI");
+            EnsureRuntimeUI<UI.VIPAnnouncementUI>("VIPAnnouncementUI");
             EnsureRuntimeUI<UI.TribeWarLobbyUI>("TribeWarLobbyUI");
             EnsureRuntimeUI<UI.TribeWarAttackStatusPanel>("TribeWarAttackStatusPanel");
             EnsureRuntimeUI<UI.TribeWarDefenseStatusPanel>("TribeWarDefenseStatusPanel");
+            EnsureRuntimeUI<UI.SupporterTopBarUI>("SupporterTopBarUI");
+            EnsureRuntimeUI<UI.SupporterActionLogUI>("SupporterActionLogUI");
+            EnsureRuntimeUI<UI.SupporterJoinedToastUI>("SupporterJoinedToastUI");
+            EnsureRuntimeUI<UI.SupporterMarqueeUI>("SupporterMarqueeUI");
+            EnsureRuntimeUI<UI.SupporterPromotedMarqueeUI>("SupporterPromotedMarqueeUI");
+            EnsureRuntimeUI<UI.SupporterNightFlashUI>("SupporterNightFlashUI");
         }
 
         private static void EnsureRuntimeUI<T>(string objectName) where T : Component
         {
             if (UnityEngine.Object.FindObjectOfType<T>(true) != null) return;
+            if (UI.UIPrefabLoader.Instance != null)
+            {
+                var loaded = UI.UIPrefabLoader.Instance.EnsurePanel<T>(objectName);
+                if (loaded != null)
+                {
+                    Debug.Log($"[SurvivalGM] Runtime UI loaded via UIPrefabLoader: {objectName}");
+                    return;
+                }
+            }
+
+            var prefab = Resources.Load<GameObject>("UI/" + objectName)
+                         ?? Resources.Load<GameObject>("UI/Panels/" + objectName);
+            if (prefab != null)
+            {
+                var parent = UI.RuntimeUIFactory.GetCanvasTransform();
+                var instance = UnityEngine.Object.Instantiate(prefab, parent, false);
+                instance.name = prefab.name;
+                if (!instance.activeSelf)
+                    instance.SetActive(true);
+                var component = instance.GetComponentInChildren<T>(true);
+                if (component != null)
+                {
+                    Debug.Log($"[SurvivalGM] Runtime UI prefab loaded: {objectName}");
+                    return;
+                }
+
+                Debug.LogWarning($"[SurvivalGM] Runtime UI prefab lacks component {typeof(T).Name}: {objectName}");
+            }
+
             var go = new GameObject(objectName, typeof(RectTransform));
             go.transform.SetParent(UI.RuntimeUIFactory.GetCanvasTransform(), false);
             go.AddComponent<T>();
@@ -938,6 +1007,10 @@ namespace DrscfZ.Survival
                     var twAE = JsonUtility.FromJson<TribeWarAttackEndedData>(dataJson);
                     if (twAE != null) HandleTribeWarAttackEnded(twAE);
                     break;
+                case "tribe_war_retaliation_started":
+                    var twRS = JsonUtility.FromJson<TribeWarRetaliationStartedData>(dataJson);
+                    if (twRS != null) HandleTribeWarRetaliationStarted(twRS);
+                    break;
 
                 // ----- §36 全服同步 + 赛季制 -----
                 case "world_clock_tick":
@@ -1459,6 +1532,7 @@ namespace DrscfZ.Survival
                 case SurvivalMessageProtocol.SeasonBossRushStart:
                 case SurvivalMessageProtocol.SeasonBossRushKilled:
                 case SurvivalMessageProtocol.FeatureUnlocked:
+                case SurvivalMessageProtocol.SettlementHighlights:
                 case SurvivalMessageProtocol.VeteranUnlocked:
                 case SurvivalMessageProtocol.WaitingPhaseStarted:
                 case SurvivalMessageProtocol.WaitingPhaseEnded:
@@ -1609,6 +1683,7 @@ namespace DrscfZ.Survival
                     break;
 
                 case "settlement":
+                    monsterWaveSpawner?.ResetAll();
                     // 断线重连时服务器处于结算状态 → 直接切换到 Settlement UI（原因未知，用 unknown）
                     // 不调用 HandleDefeatOrVictory（那会创建假的"胜利"结算数据）
                     // 服务端结算窗口结束后会推 recovery，客户端收到 phase_changed/survival_game_state 后回 Running
@@ -1903,6 +1978,12 @@ namespace DrscfZ.Survival
 
         private void HandleGift(SurvivalGiftData gift)
         {
+            if (gift == null)
+            {
+                Debug.LogWarning("[SGM] survival_gift ignored: data is null");
+                return;
+            }
+
             resourceSystem?.ApplyGiftEffect(gift);
             TrackContribution(gift.playerId, gift.contribution);
             OnGiftReceived?.Invoke(gift);
@@ -2083,7 +2164,7 @@ namespace DrscfZ.Survival
 
         private void HandleGameEnded(SurvivalGameEndedData data)
         {
-            monsterWaveSpawner?.StopAllWaves();
+            monsterWaveSpawner?.ResetAll();
             dayNightManager?.HandleSettlement();
             OnGameEnded?.Invoke(data);
 
@@ -2200,13 +2281,12 @@ namespace DrscfZ.Survival
         public void RequestReturnFromSettlement()
         {
             if (_state != SurvivalState.Settlement) return;
-            // 结算后回 Idle（大厅），让用户点"开始游戏"重新选难度开局
-            // 不设 _returnToWaiting = true，避免进入 Waiting 后两个 UI 都不显示
+            _returnToWaiting = true;
             IsEnteringScene = false;
             ChangeState(SurvivalState.Loading);
             NetworkManager.Instance?.SendMessage("reset_game");
             _loadingTimeoutCoroutine = StartCoroutine(LoadingTimeout());
-            Debug.Log("[SGM] 结算结束→Loading，已发送 reset_game，结束后回到 Idle 大厅...");
+            Debug.Log("[SGM] 结算结束→Loading，已发送 reset_game，结束后回到 Waiting...");
         }
 
         // ==================== 工具 ====================
@@ -3207,7 +3287,10 @@ namespace DrscfZ.Survival
             //   (FailureToastLocale.cs:50 已声明 demoted_during_build/manual/attacked/demoted 中文映射)
             //   原"{name} 已拆除（demoted_during_build）"→ "{name} 已拆除（建造期间被降级,无法继续）"
             string reasonText = DrscfZ.UI.FailureToastLocale.Get(data.reason);
-            OnPlayerActivityMessage?.Invoke($"{name} 已拆除（{reasonText}）");
+            if (data.reason == "manual" && data.refund != null)
+                OnPlayerActivityMessage?.Invoke($"{name} 已拆除（{reasonText}，返还 食物+{data.refund.food} 煤炭+{data.refund.coal} 矿石+{data.refund.ore}）");
+            else
+                OnPlayerActivityMessage?.Invoke($"{name} 已拆除（{reasonText}）");
         }
 
         private void HandleBuildProposeFailed(BuildProposeFailedData data)
@@ -3276,6 +3359,7 @@ namespace DrscfZ.Survival
                 case "daily_limit":            return "今日已投过票";
                 case "wrong_phase":            return "仅白天可投票";
                 case "already_built":          return "该建筑已建造";
+                case "not_built":              return "该建筑尚未建成";
                 case "already_voting":         return "已有投票进行中";
                 case "supporter_not_allowed":  return "助威者无法发起";
                 case "season_ending":          return "赛季即将结束";
@@ -3616,8 +3700,18 @@ namespace DrscfZ.Survival
             OnPlayerActivityMessage?.Invoke(summary);
 
             UI.TribeWarAttackStatusPanel.Instance?.Hide();
-            UI.TribeWarDefenseStatusPanel.Instance?.Hide();
+            if (data.reason == "manual" || data.reason == "manual_stop")
+                UI.TribeWarDefenseStatusPanel.Instance?.BeginManualRetaliationWindow(data);
+            else
+                UI.TribeWarDefenseStatusPanel.Instance?.Hide();
             Debug.Log($"[SGM] tribe_war_attack_ended: sessionId={data.sessionId} reason={data.reason} stolen=({data.stolenFood},{data.stolenCoal},{data.stolenOre})");
+        }
+
+        private void HandleTribeWarRetaliationStarted(TribeWarRetaliationStartedData data)
+        {
+            OnTribeWarRetaliationStarted?.Invoke(data);
+            UI.TribeWarDefenseStatusPanel.Instance?.ShowRetaliationWindow(data);
+            Debug.Log($"[SGM] tribe_war_retaliation_started: target={data.targetRoomId} expiresAt={data.expiresAt}");
         }
 
         /// <summary>§35.10 attack_failed.reason → 中文（MVP 仅活动消息/跑马灯用）

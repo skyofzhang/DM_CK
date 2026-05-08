@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <defs>
+    <style>
+      .bg { fill: #f2f3f5; }
+      .root { fill: #ffffff; stroke: #222222; stroke-width: 2; }
+      .panel { fill: #f8fafc; stroke: #222222; stroke-width: 2; }
+      .panel-soft { fill: #eef4fb; stroke: #222222; stroke-width: 2; }
+      .panel-hot { fill: #fff1c2; stroke: #222222; stroke-width: 2; }
+      .panel-warn { fill: #ffe2df; stroke: #222222; stroke-width: 2; }
+      .slot { fill: #ffffff; stroke: #777777; stroke-width: 2; stroke-dasharray: 8 8; }
+      .scene { fill: #eef0f2; stroke: #999999; stroke-width: 2; stroke-dasharray: 10 8; }
+      .button { fill: #fff8db; stroke: #222222; stroke-width: 2; }
+      .chip { fill: #ffffff; stroke: #333333; stroke-width: 1.5; }
+      .inactive { fill: #f7f7f7; stroke: #999999; stroke-width: 2; stroke-dasharray: 6 6; }
+      .title { font-family: "Microsoft YaHei", "Alibaba PuHuiTi", sans-serif; font-size: 30px; font-weight: 800; fill: #111111; }
+      .h1 { font-family: "Microsoft YaHei", "Alibaba PuHuiTi", sans-serif; font-size: 38px; font-weight: 800; fill: #111111; }
+      .h2 { font-family: "Microsoft YaHei", "Alibaba PuHuiTi", sans-serif; font-size: 26px; font-weight: 800; fill: #111111; }
+      .label { font-family: "Microsoft YaHei", "Alibaba PuHuiTi", sans-serif; font-size: 21px; font-weight: 700; fill: #111111; }
+      .small { font-family: "Microsoft YaHei", "Alibaba PuHuiTi", sans-serif; font-size: 17px; fill: #333333; }
+      .tiny { font-family: "Microsoft YaHei", "Alibaba PuHuiTi", sans-serif; font-size: 14px; fill: #555555; }
+      .rank { font-family: "Microsoft YaHei", "Alibaba PuHuiTi", sans-serif; font-size: 26px; font-weight: 800; fill: #111111; }
+      .number { font-family: "Microsoft YaHei", "Alibaba PuHuiTi", sans-serif; font-size: 28px; font-weight: 900; fill: #111111; }
+      .gold { fill: #7a4a00; }
+      .blue { fill: #0f4f7a; }
+      .red { fill: #9b1c1c; }
+      .green { fill: #14532d; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1080" height="1920"/>
+  <rect class="root" x="16" y="16" width="1048" height="1888" rx="10"/>
+
+  <rect x="110" y="8" width="860" height="34" rx="17" fill="#222222"/>
+  <text class="label" x="540" y="32" text-anchor="middle" style="fill:#ffffff">SurvivalLiveRankingUI_GameUIPanel 施工原型 | 1080x1920</text>
+
+  <!-- Top operation and main status -->
+  <rect class="button" x="30" y="56" width="118" height="70" rx="8"/>
+  <text class="h2" x="89" y="88" text-anchor="middle">返回</text>
+  <text class="tiny" x="89" y="112" text-anchor="middle">ExitBtn</text>
+
+  <rect class="button" x="932" y="56" width="118" height="70" rx="8"/>
+  <text class="h2" x="991" y="88" text-anchor="middle">设置</text>
+  <text class="tiny" x="991" y="112" text-anchor="middle">BtnSettings</text>
+
+  <rect class="panel" x="164" y="56" width="752" height="100" rx="10"/>
+  <text class="h2" x="186" y="91">顶部主状态栏</text>
+  <text class="tiny" x="186" y="119">SurvivalTopBarUI_TopBar.prefab | x=164 y=56 w=752 h=100</text>
+  <rect class="chip" x="430" y="72" width="118" height="38" rx="6"/>
+  <text class="label" x="489" y="98" text-anchor="middle">第3天</text>
+  <rect class="chip" x="560" y="72" width="128" height="38" rx="6"/>
+  <text class="number" x="624" y="101" text-anchor="middle">02:48</text>
+  <rect class="chip" x="700" y="72" width="190" height="38" rx="6"/>
+  <text class="label" x="795" y="98" text-anchor="middle">城门 120/120</text>
+  <rect class="chip" x="186" y="122" width="146" height="28" rx="6"/>
+  <text class="small" x="259" y="142" text-anchor="middle">食物 888</text>
+  <rect class="chip" x="344" y="122" width="146" height="28" rx="6"/>
+  <text class="small" x="417" y="142" text-anchor="middle">煤炭 320</text>
+  <rect class="chip" x="502" y="122" width="146" height="28" rx="6"/>
+  <text class="small" x="575" y="142" text-anchor="middle">矿石 2.8万</text>
+  <rect class="chip" x="660" y="122" width="146" height="28" rx="6"/>
+  <text class="small red" x="733" y="142" text-anchor="middle">温度 -18</text>
+
+  <rect class="panel-soft" x="40" y="176" width="1000" height="64" rx="9"/>
+  <text class="h2" x="540" y="216" text-anchor="middle">横向跑马灯 MarqueeZone / SupporterMarquee</text>
+  <text class="tiny" x="540" y="234" text-anchor="middle">高价值送礼、晋升、系统播报，只保留一条主跑马灯</text>
+
+  <!-- Main game safe area -->
+  <rect class="scene" x="40" y="260" width="1000" height="1040" rx="10"/>
+  <text class="h1" x="540" y="660" text-anchor="middle">游戏主体安全区</text>
+  <text class="h2" x="540" y="704" text-anchor="middle">冰雪堡垒 / 战斗单位 / 礼物技能特效 / 摄像机画面</text>
+  <text class="small" x="540" y="738" text-anchor="middle">主体构图避开左右悬浮榜，临时特效可短时覆盖中下部</text>
+  <text class="tiny" x="540" y="770" text-anchor="middle">x=40 y=260 w=1000 h=1040</text>
+
+  <rect class="slot" x="242" y="288" width="596" height="76" rx="8"/>
+  <text class="h2 red" x="540" y="322" text-anchor="middle">EventTriggeredToast</text>
+  <text class="small" x="540" y="350" text-anchor="middle">暴风雪来袭 / 商队抵达 / Boss 出现</text>
+
+  <rect class="slot" x="260" y="1184" width="560" height="78" rx="8"/>
+  <text class="h2 gold" x="540" y="1218" text-anchor="middle">GiftAnimation 礼物爆发临时层</text>
+  <text class="tiny" x="540" y="1244" text-anchor="middle">0.8-1.5 秒，不长期遮挡战斗主体</text>
+
+  <!-- Resource ranking -->
+  <rect class="panel" x="56" y="288" width="174" height="350" rx="10"/>
+  <text class="label" x="143" y="318" text-anchor="middle">资源贡献榜</text>
+  <text class="tiny" x="143" y="338" text-anchor="middle">ResourceRankPanel</text>
+  <rect class="chip" x="68" y="354" width="150" height="72" rx="7"/>
+  <text class="small gold" x="143" y="378" text-anchor="middle">食物贡献</text>
+  <text class="tiny" x="143" y="402" text-anchor="middle">1. 云逸 1280</text>
+  <text class="tiny" x="143" y="418" text-anchor="middle">2. — / 3. —</text>
+  <rect class="chip" x="68" y="440" width="150" height="72" rx="7"/>
+  <text class="small" x="143" y="464" text-anchor="middle">煤炭贡献</text>
+  <text class="tiny" x="143" y="488" text-anchor="middle">1. 后羿 980</text>
+  <text class="tiny" x="143" y="504" text-anchor="middle">2. — / 3. —</text>
+  <rect class="chip" x="68" y="526" width="150" height="72" rx="7"/>
+  <text class="small blue" x="143" y="550" text-anchor="middle">矿石贡献</text>
+  <text class="tiny" x="143" y="574" text-anchor="middle">1. 弥勒 760</text>
+  <text class="tiny" x="143" y="590" text-anchor="middle">2. — / 3. —</text>
+  <text class="tiny" x="143" y="622" text-anchor="middle">x56 y288 w174 h350</text>
+
+  <!-- Live ranking -->
+  <rect class="panel-hot" x="850" y="288" width="174" height="350" rx="10"/>
+  <text class="label" x="937" y="318" text-anchor="middle">守护者榜</text>
+  <text class="tiny" x="937" y="338" text-anchor="middle">LiveRankingPanel</text>
+  <rect class="chip" x="862" y="354" width="150" height="46" rx="7"/>
+  <text class="small gold" x="874" y="374">#1 ★云逸</text>
+  <text class="small gold" x="1000" y="394" text-anchor="end">18.6万</text>
+  <rect class="chip" x="862" y="410" width="150" height="40" rx="7"/>
+  <text class="small" x="874" y="435">#2 后羿</text>
+  <text class="tiny" x="1000" y="435" text-anchor="end">1.2万</text>
+  <rect class="chip" x="862" y="460" width="150" height="40" rx="7"/>
+  <text class="small" x="874" y="485">#3 弥勒</text>
+  <text class="tiny" x="1000" y="485" text-anchor="end">9450</text>
+  <rect class="chip" x="862" y="510" width="150" height="40" rx="7"/>
+  <text class="small" x="874" y="535">#4 玉兔</text>
+  <text class="tiny" x="1000" y="535" text-anchor="end">6210</text>
+  <rect class="chip" x="862" y="560" width="150" height="40" rx="7"/>
+  <text class="small" x="874" y="585">#5 酒剑</text>
+  <text class="tiny" x="1000" y="585" text-anchor="end">3800</text>
+  <text class="tiny" x="937" y="622" text-anchor="middle">x850 y288 w174 h350</text>
+
+  <!-- Barrage -->
+  <rect class="panel-soft" x="40" y="1324" width="1000" height="132" rx="10"/>
+  <text class="h2" x="64" y="1363">弹幕动态 BarragePanel</text>
+  <text class="small" x="64" y="1398">发送 煤炭 提升炉火 | 发送 修门 守住城门</text>
+  <text class="small" x="64" y="1428">送礼触发守护技能，最高贡献者登上守护者榜</text>
+
+  <!-- Bottom functional grid -->
+  <rect class="panel" x="40" y="1480" width="312" height="124" rx="10"/>
+  <text class="h2" x="64" y="1518">建筑状态</text>
+  <text class="small" x="64" y="1550">BuildingStatusPanel</text>
+  <text class="tiny" x="64" y="1578">城门 / 火炉 / 箭塔耐久</text>
+
+  <rect class="panel-hot" x="40" y="1624" width="312" height="92" rx="10"/>
+  <text class="h2" x="64" y="1660">个人贡献条</text>
+  <text class="small" x="64" y="1692">PersonalContribBar</text>
+
+  <rect class="panel-soft" x="384" y="1480" width="656" height="236" rx="10"/>
+  <text class="h2" x="408" y="1518">礼物贴纸说明</text>
+  <text class="small" x="408" y="1550">GiftStickerPanel / GiftIconBar + GiftInfoPanel</text>
+  <text class="tiny" x="408" y="1576">抖音要求：展示游戏内可用礼物及对应效果说明，默认常驻</text>
+
+  <rect class="chip" x="408" y="1594" width="292" height="24" rx="6"/>
+  <text class="tiny" x="424" y="1611">仙女棒：效率+5%</text>
+  <rect class="chip" x="408" y="1622" width="292" height="24" rx="6"/>
+  <text class="tiny" x="424" y="1639">能力药丸：全员效率+50%</text>
+  <rect class="chip" x="408" y="1650" width="292" height="24" rx="6"/>
+  <text class="tiny" x="424" y="1667">甜甜圈：城门+200 食物+100</text>
+  <rect class="chip" x="408" y="1678" width="292" height="24" rx="6"/>
+  <text class="tiny" x="424" y="1695">能量电池：炉温+30℃ 效率+30%</text>
+
+  <rect class="chip" x="716" y="1594" width="300" height="24" rx="6"/>
+  <text class="tiny" x="732" y="1611">神秘空投：超级补给</text>
+  <rect class="chip" x="716" y="1622" width="300" height="24" rx="6"/>
+  <text class="tiny" x="732" y="1639">爱的爆炸：AOE伤害 矿工全满 城门+200</text>
+  <rect class="chip" x="716" y="1650" width="300" height="24" rx="6"/>
+  <text class="tiny" x="732" y="1667">魔法糖：效率+10%</text>
+  <rect class="chip" x="716" y="1678" width="300" height="24" rx="6"/>
+  <text class="tiny" x="732" y="1695">超能暴射：全场伤害+50%</text>
+
+  <rect class="slot" x="40" y="1736" width="486" height="92" rx="10"/>
+  <text class="h2 gold" x="64" y="1774">VIPAnnouncement / JoinedToast</text>
+  <text class="small" x="64" y="1806">高价值加入、VIP 播报、短时 toast</text>
+
+  <rect class="slot" x="554" y="1736" width="486" height="92" rx="10"/>
+  <text class="h2" x="578" y="1774">BuildVotePanel 建造投票</text>
+  <text class="small" x="578" y="1806">修门 / 火炉 / 箭塔 / 哨站</text>
+
+</svg>

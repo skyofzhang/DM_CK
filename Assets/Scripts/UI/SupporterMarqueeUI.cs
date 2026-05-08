@@ -48,6 +48,7 @@ namespace DrscfZ.UI
 
         private void Start()
         {
+            EnsureRuntimeLabel();
             if (_label != null)
             {
                 _label.text  = "";
@@ -117,6 +118,19 @@ namespace DrscfZ.UI
         }
 
         // ── 显示协程 ──────────────────────────────────────────────────────
+
+        private void EnsureRuntimeLabel()
+        {
+            if (_label != null) return;
+            _label = RuntimeUIFactory.CreateText(RuntimeUIFactory.GetCanvasTransform(), "SupporterMarqueeLabel",
+                "", 22f, SUPPORTER_PURPLE, TextAlignmentOptions.Center, new Vector2(980f, 44f));
+            var rt = _label.GetComponent<RectTransform>();
+            rt.anchorMin = new Vector2(0.5f, 1f);
+            rt.anchorMax = new Vector2(0.5f, 1f);
+            rt.pivot = new Vector2(0.5f, 1f);
+            rt.anchoredPosition = new Vector2(0f, -174f);
+            _label.enableWordWrapping = false;
+        }
 
         private IEnumerator HoldAndFade()
         {

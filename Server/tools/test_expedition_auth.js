@@ -216,6 +216,56 @@ test('T8: expedition return consumes free-death pass and reports safe outcome', 
   assert.ok(!findMsg(eng._captured, 'worker_died', d => d.playerId === pid), 'saved expedition should not emit worker_died');
 });
 
+test('T9: expedition worker cannot work or attack while away', () => {
+  const eng = makeEngine();
+  const pid = 'miner_busy';
+  eng.room.seasonMgr.seasonDay = 6;
+  eng.seasonMgr = eng.room.seasonMgr;
+  eng.state = 'day';
+  eng.remainingTime = 120;
+  eng.playerNames[pid] = 'Busy Miner';
+  eng._playerSlots[pid] = 0;
+  eng._workerHp[pid] = { hp: 100, maxHp: 100, isDead: false, respawnAt: 0 };
+  eng.contributions[pid] = 0;
+
+  try {
+    assert.strictEqual(eng._startExpedition(pid, Date.now()), null, 'expedition should start');
+    const foodBefore = eng.food;
+    assert.strictEqual(eng._applyWorkEffect(1, pid), false, 'work should be rejected while away');
+    assert.strictEqual(eng.food, foodBefore, 'away worker should not add resources');
+
+    eng.state = 'night';
+    const monster = { id: 'm_busy', type: 'normal', currentHp: 100 };
+    eng._activeMonsters.set(monster.id, monster);
+    eng._handleAttack(pid, 'Busy Miner');
+    assert.strictEqual(monster.currentHp, 100, 'away worker should not damage monsters');
+
+    const state = eng.getFullState();
+    const worker = state.workers.find(w => w.playerId === pid);
+    assert.ok(worker, 'snapshot should include worker');
+    assert.strictEqual(worker.state, 'expedition', 'snapshot should mark expedition state');
+  } finally {
+    eng._cancelAllExpeditions('test');
+    eng._clearAllTimers();
+  }
+});
+
+test('T10: meteor fragment pending expires when day ends', () => {
+  const eng = makeEngine();
+  eng.seasonMgr = { seasonDay: 5, themeId: 'classic_frozen' };
+  eng.room.seasonMgr = eng.seasonMgr;
+  eng.state = 'day';
+  eng.currentDay = 5;
+  eng._meteorFragmentPending = true;
+
+  try {
+    eng._enterNight(5);
+    assert.strictEqual(eng._meteorFragmentPending, false, 'meteor fragment should not cross into night');
+  } finally {
+    eng._clearAllTimers();
+  }
+});
+
 console.log('\n=== Expedition auth/gating test summary ===');
 console.log(`Passed: ${passed}`);
 console.log(`Failed: ${failed}`);

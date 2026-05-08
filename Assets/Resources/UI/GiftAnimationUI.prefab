@@ -1,0 +1,70 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &326785190847570220
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1240084597122005376}
+  - component: {fileID: 3270579748131352818}
+  m_Layer: 0
+  m_Name: GiftAnimationUI_GiftAnimation
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &1240084597122005376
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 326785190847570220}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 500, y: 500}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &3270579748131352818
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 326785190847570220}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bf447f860d9bb0341ac41954c1a1da13, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  maxSimultaneous: 5
+  animationContainer: {fileID: 1240084597122005376}
+  tier1Height: 1200
+  tier2Height: 1250
+  tier3Height: 1400
+  tier4Height: 1600
+  tier5Height: 1800
+  tier6Height: 2000
+  tierVideoClips:
+  - {fileID: 32900000, guid: b2ac3815f76dfcd498b325547d2785af, type: 3}
+  - {fileID: 32900000, guid: c05720cc8bcc7f2498a9d6241a08f88b, type: 3}
+  - {fileID: 32900000, guid: a1b4e91d9e8c84441b120386ba83e262, type: 3}
+  - {fileID: 32900000, guid: 17e1727bdccec384e97c1ceda35b6259, type: 3}
+  - {fileID: 32900000, guid: a7626f15b8c5d7f4885e62e44c72264e, type: 3}
+  - {fileID: 32900000, guid: 2f8928381449b9d49a49e4e994e8d8c4, type: 3}
+  _vipVideoDisplay: {fileID: 0}
+  _vipCanvasGroup: {fileID: 0}
+  _vipFadeIn: 0.5
+  _vipFadeOut: 1
+  _maxVipQueue: 3

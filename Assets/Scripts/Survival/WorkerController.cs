@@ -292,6 +292,25 @@ namespace DrscfZ.Survival
             }
         }
 
+        /// <summary>Apply the authoritative worker_hp_update snapshot from server.</summary>
+        public void SyncHpSnapshot(int current, int max, bool isDead, long respawnAtMs)
+        {
+            SetHp(current, max);
+
+            if (isDead)
+            {
+                _respawnAt = respawnAtMs;
+                if (_state != State.Dead)
+                    TransitionTo(State.Dead);
+                else if (_deadCoroutine == null)
+                    _deadCoroutine = StartCoroutine(DeadCoroutine());
+                return;
+            }
+
+            if (_state == State.Dead)
+                Revive();
+        }
+
         /// <summary>兜底重绑定：若 _hpFillImage 意外为 null，尝试从层次结构中重新查找</summary>
         private void RebindHpFillIfNeeded()
         {
@@ -961,8 +980,13 @@ namespace DrscfZ.Survival
         /// <param name="respawnAtMs">复活时间点（Unix毫秒），0=不计时</param>
         public void EnterDead(long respawnAtMs)
         {
-            if (_state == State.Dead) return;
             _respawnAt = respawnAtMs;
+            if (_state == State.Dead)
+            {
+                if (_deadCoroutine == null)
+                    _deadCoroutine = StartCoroutine(DeadCoroutine());
+                return;
+            }
             TransitionTo(State.Dead);
         }
 

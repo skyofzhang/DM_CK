@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <rect width="1080" height="1920" fill="#f4f7fa"/>
+  <rect x="24" y="24" width="1032" height="1872" rx="10" fill="none" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="54" y="76" font-size="34" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">StatusLineBannerUI_StatusLineBanner 施工原型</text>
+  <text x="54" y="112" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569">1080x1920 竖屏；灰盒、坐标、节点名均为施工标注，最终效果图不要出现这些文字。</text>
+  <rect x="54" y="150" width="972" height="1" fill="#cbd5e1"/>
+<g id="block_0_SceneSafeArea">
+  <rect x="40" y="210" width="1000" height="1260" rx="8" fill="#f7fbff" fill-opacity="1" stroke="#7aa6c2" stroke-width="3" stroke-dasharray="12 10"/>
+  <text x="58" y="252" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#2f5065">游戏安全区</text>
+  <text x="58" y="286" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#2f5065" opacity="0.85">SceneSafeArea</text>
+  <text x="58" y="1452" font-size="20" fill="#2f5065" opacity="0.75">主画面</text>
+</g>
+<g id="block_1_BannerRoot">
+  <rect x="70" y="105" width="940" height="72" rx="8" fill="#e8f0f5" fill-opacity="0.98" stroke="#416075" stroke-width="3"/>
+  <text x="88" y="141" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#143042">状态细条</text>
+  <text x="88" y="173" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#143042" opacity="0.85">BannerRoot</text>
+  <text x="88" y="159" font-size="20" fill="#143042" opacity="0.75">局势提示</text>
+</g>
+<g id="block_2_StatusText">
+  <rect x="105" y="125" width="870" height="36" rx="8" fill="#d9edf7" fill-opacity="1" stroke="#2f6f88" stroke-width="3"/>
+  <text x="123" y="157" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#073042">状态文案</text>
+  <text x="123" y="183" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#073042" opacity="0.85">StatusText</text>
+  <text x="123" y="143" font-size="20" fill="#073042" opacity="0.75">第 N 天白天 — 守护者正在采集资源</text>
+</g>
+  <rect x="54" y="1660" width="972" height="190" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="80" y="1700" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">Prefab 核对</text>
+  <text x="80" y="1734" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">脚本：StatusLineBannerUI</text>
+  <text x="80" y="1766" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">节点摘录：StatusText</text>
+
+</svg>

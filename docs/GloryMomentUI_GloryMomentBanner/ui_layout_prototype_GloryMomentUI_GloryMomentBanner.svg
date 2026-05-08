@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <rect width="1080" height="1920" fill="#f4f7fa"/>
+  <rect x="24" y="24" width="1032" height="1872" rx="10" fill="none" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="54" y="76" font-size="34" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">GloryMomentUI_GloryMomentBanner 施工原型</text>
+  <text x="54" y="112" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569">1080x1920 竖屏；灰盒、坐标、节点名均为施工标注，最终效果图不要出现这些文字。</text>
+  <rect x="54" y="150" width="972" height="1" fill="#cbd5e1"/>
+<g id="block_0_SceneSafeArea">
+  <rect x="40" y="260" width="1000" height="1100" rx="8" fill="#f7fbff" fill-opacity="1" stroke="#7aa6c2" stroke-width="3" stroke-dasharray="12 10"/>
+  <text x="58" y="302" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#2f5065">游戏安全区</text>
+  <text x="58" y="336" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#2f5065" opacity="0.85">SceneSafeArea</text>
+  <text x="58" y="1342" font-size="20" fill="#2f5065" opacity="0.75">主画面</text>
+</g>
+<g id="block_1_BannerRoot">
+  <rect x="110" y="520" width="860" height="220" rx="8" fill="#fff2bd" fill-opacity="1" stroke="#b88912" stroke-width="3"/>
+  <text x="128" y="562" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#6b4e00">高光横幅</text>
+  <text x="128" y="596" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#6b4e00" opacity="0.85">BannerRoot</text>
+  <text x="128" y="722" font-size="20" fill="#6b4e00" opacity="0.75">高光时刻</text>
+</g>
+<g id="block_2_MainText">
+  <rect x="160" y="575" width="760" height="76" rx="8" fill="#d9edf7" fill-opacity="1" stroke="#2f6f88" stroke-width="3"/>
+  <text x="178" y="613" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#073042">主文案</text>
+  <text x="178" y="645" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#073042" opacity="0.85">MainText</text>
+  <text x="178" y="633" font-size="20" fill="#073042" opacity="0.75">高光时刻</text>
+</g>
+<g id="block_3_SubText">
+  <rect x="190" y="675" width="700" height="50" rx="8" fill="#f2f5f7" fill-opacity="1" stroke="#7b8a97" stroke-width="3"/>
+  <text x="208" y="707" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#243444">副文案</text>
+  <text x="208" y="733" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#243444" opacity="0.85">SubText</text>
+  <text x="208" y="707" font-size="20" fill="#243444" opacity="0.75">玩家/事件说明</text>
+</g>
+<g id="block_4_GoldBurst/RedFlash">
+  <rect x="110" y="520" width="860" height="220" rx="8" fill="#ffe2dc" fill-opacity="1" stroke="#c2412d" stroke-width="3"/>
+  <text x="128" y="562" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#7f1d1d">特效层</text>
+  <text x="128" y="596" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#7f1d1d" opacity="0.85">GoldBurst/RedFlash</text>
+  <text x="128" y="722" font-size="20" fill="#7f1d1d" opacity="0.75">短时闪光</text>
+</g>
+  <rect x="54" y="1660" width="972" height="190" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="80" y="1700" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">Prefab 核对</text>
+  <text x="80" y="1734" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">脚本：GloryMomentUI</text>
+  <text x="80" y="1766" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">节点摘录：GoldBurst / SubText / RedFlash / BannerRoot / MainText</text>
+
+</svg>

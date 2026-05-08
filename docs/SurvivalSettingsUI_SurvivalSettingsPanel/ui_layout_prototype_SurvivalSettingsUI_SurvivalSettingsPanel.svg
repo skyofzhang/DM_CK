@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <rect width="1080" height="1920" fill="#f4f7fa"/>
+  <rect x="24" y="24" width="1032" height="1872" rx="10" fill="none" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="54" y="76" font-size="34" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">SurvivalSettingsUI_SurvivalSettingsPanel 施工原型</text>
+  <text x="54" y="112" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569">1080x1920 竖屏；灰盒、坐标、节点名均为施工标注，最终效果图不要出现这些文字。</text>
+  <rect x="54" y="150" width="972" height="1" fill="#cbd5e1"/>
+<g id="block_0_SettingsBackdrop">
+  <rect x="0" y="0" width="1080" height="1920" rx="8" fill="#1f2937" fill-opacity="0.2" stroke="#334155" stroke-width="3"/>
+  <text x="18" y="42" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#e5e7eb">暗化背景</text>
+  <text x="18" y="76" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#e5e7eb" opacity="0.85">SettingsBackdrop</text>
+  <text x="18" y="1902" font-size="20" fill="#e5e7eb" opacity="0.75">设置弹窗</text>
+</g>
+<g id="block_1_SurvivalSettingsPanel">
+  <rect x="130" y="360" width="820" height="1040" rx="8" fill="#e8f0f5" fill-opacity="0.98" stroke="#416075" stroke-width="3"/>
+  <text x="148" y="402" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#143042">设置面板</text>
+  <text x="148" y="436" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#143042" opacity="0.85">SurvivalSettingsPanel</text>
+  <text x="148" y="1382" font-size="20" fill="#143042" opacity="0.75">设置</text>
+</g>
+<g id="block_2_Header/CloseBtn">
+  <rect x="180" y="420" width="720" height="82" rx="8" fill="#d9edf7" fill-opacity="1" stroke="#2f6f88" stroke-width="3"/>
+  <text x="198" y="461" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#073042">标题/关闭</text>
+  <text x="198" y="493" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#073042" opacity="0.85">Header/CloseBtn</text>
+  <text x="198" y="484" font-size="20" fill="#073042" opacity="0.75">设置 / 关闭</text>
+</g>
+<g id="block_3_BGMSlider/BGMToggle">
+  <rect x="190" y="555" width="700" height="110" rx="8" fill="#f2f5f7" fill-opacity="1" stroke="#7b8a97" stroke-width="3"/>
+  <text x="208" y="597" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#243444">BGM 行</text>
+  <text x="208" y="631" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#243444" opacity="0.85">BGMSlider/BGMToggle</text>
+  <text x="208" y="647" font-size="20" fill="#243444" opacity="0.75">背景音乐</text>
+</g>
+<g id="block_4_SFXSlider/SFXToggle">
+  <rect x="190" y="700" width="700" height="110" rx="8" fill="#f2f5f7" fill-opacity="1" stroke="#7b8a97" stroke-width="3"/>
+  <text x="208" y="742" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#243444">SFX 行</text>
+  <text x="208" y="776" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#243444" opacity="0.85">SFXSlider/SFXToggle</text>
+  <text x="208" y="792" font-size="20" fill="#243444" opacity="0.75">音效</text>
+</g>
+<g id="block_5_GiftVideo/VIPVideo">
+  <rect x="190" y="850" width="700" height="210" rx="8" fill="#fff2bd" fill-opacity="1" stroke="#b88912" stroke-width="3"/>
+  <text x="208" y="892" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#6b4e00">视频开关</text>
+  <text x="208" y="926" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#6b4e00" opacity="0.85">GiftVideo/VIPVideo</text>
+  <text x="208" y="1042" font-size="20" fill="#6b4e00" opacity="0.75">礼物视频 / VIP入场视频</text>
+</g>
+<g id="block_6_VersionText">
+  <rect x="190" y="1240" width="700" height="54" rx="8" fill="#f8fafc" fill-opacity="1" stroke="#94a3b8" stroke-width="3" stroke-dasharray="8 8"/>
+  <text x="208" y="1272" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#475569">版本号</text>
+  <text x="208" y="1299" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569" opacity="0.85">VersionText</text>
+  <text x="208" y="1276" font-size="20" fill="#475569" opacity="0.75">版本信息</text>
+</g>
+  <rect x="54" y="1660" width="972" height="190" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="80" y="1700" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">Prefab 核对</text>
+  <text x="80" y="1734" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">脚本：SurvivalSettingsUI</text>
+  <text x="80" y="1766" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">节点摘录：Fill / Handle Slide Area / Checkmark / GiftVideoRow / Label / Fill Area / SFXSlider / Handle</text>
+<text x="80" y="1726" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：VIP入场视频</text>
+<text x="80" y="1760" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：背景音乐</text>
+<text x="80" y="1794" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：礼物视频动画</text>
+<text x="80" y="1828" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：音效</text>
+</svg>

@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <rect width="1080" height="1920" fill="#f4f7fa"/>
+  <rect x="24" y="24" width="1032" height="1872" rx="10" fill="none" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="54" y="76" font-size="34" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">GameControlUI_BottomBar 施工原型</text>
+  <text x="54" y="112" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569">1080x1920 竖屏；灰盒、坐标、节点名均为施工标注，最终效果图不要出现这些文字。</text>
+  <rect x="54" y="150" width="972" height="1" fill="#cbd5e1"/>
+<g id="block_0_SceneSafeArea">
+  <rect x="40" y="120" width="1000" height="1390" rx="8" fill="#f7fbff" fill-opacity="1" stroke="#7aa6c2" stroke-width="3" stroke-dasharray="12 10"/>
+  <text x="58" y="162" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#2f5065">游戏安全区</text>
+  <text x="58" y="196" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#2f5065" opacity="0.85">SceneSafeArea</text>
+  <text x="58" y="1492" font-size="20" fill="#2f5065" opacity="0.75">主画面</text>
+</g>
+<g id="block_1_GameControlUI_BottomBar">
+  <rect x="30" y="1585" width="1020" height="260" rx="8" fill="#e8f0f5" fill-opacity="0.98" stroke="#416075" stroke-width="3"/>
+  <text x="48" y="1627" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#143042">底部工具栏</text>
+  <text x="48" y="1661" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#143042" opacity="0.85">GameControlUI_BottomBar</text>
+  <text x="48" y="1827" font-size="20" fill="#143042" opacity="0.75">GM 工具</text>
+</g>
+<g id="block_2_StatusText">
+  <rect x="60" y="1615" width="960" height="46" rx="8" fill="#f2f5f7" fill-opacity="1" stroke="#7b8a97" stroke-width="3"/>
+  <text x="78" y="1647" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#243444">状态文本</text>
+  <text x="78" y="1673" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#243444" opacity="0.85">StatusText</text>
+  <text x="78" y="1643" font-size="20" fill="#243444" opacity="0.75">GM工具就绪</text>
+</g>
+<g id="block_3_Start/Pause/End/Monster">
+  <rect x="60" y="1685" width="600" height="72" rx="8" fill="#d9edf7" fill-opacity="1" stroke="#2f6f88" stroke-width="3"/>
+  <text x="78" y="1721" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#073042">控制按钮组</text>
+  <text x="78" y="1753" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#073042" opacity="0.85">Start/Pause/End/Monster</text>
+  <text x="78" y="1739" font-size="20" fill="#073042" opacity="0.75">开始/暂停/结束/召唤</text>
+</g>
+<g id="block_4_BtnGiftT1/T3/T5">
+  <rect x="680" y="1685" width="340" height="72" rx="8" fill="#fff2bd" fill-opacity="1" stroke="#b88912" stroke-width="3"/>
+  <text x="698" y="1721" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#6b4e00">礼物测试组</text>
+  <text x="698" y="1753" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#6b4e00" opacity="0.85">BtnGiftT1/T3/T5</text>
+  <text x="698" y="1739" font-size="20" fill="#6b4e00" opacity="0.75">T1/T3/T5 礼物</text>
+</g>
+<g id="block_5_Connect/Freeze">
+  <rect x="60" y="1775" width="960" height="70" rx="8" fill="#ffe2dc" fill-opacity="1" stroke="#c2412d" stroke-width="3"/>
+  <text x="78" y="1810" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#7f1d1d">连接/冻结</text>
+  <text x="78" y="1842" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#7f1d1d" opacity="0.85">Connect/Freeze</text>
+  <text x="78" y="1827" font-size="20" fill="#7f1d1d" opacity="0.75">GM连接/冻结</text>
+</g>
+  <rect x="54" y="1660" width="972" height="190" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="80" y="1700" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">Prefab 核对</text>
+  <text x="80" y="1734" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">脚本：GameControlUI</text>
+  <text x="80" y="1766" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">节点摘录：BtnGiftT5 / StatusText / BtnEnd / Text / BtnMonster / BtnGiftT3 / BtnStart / BtnGiftT1</text>
+<text x="80" y="1726" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：GM工具就绪</text>
+<text x="80" y="1760" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：暂停游戏</text>
+<text x="80" y="1794" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：T5 礼物</text>
+<text x="80" y="1828" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：召唤怪物</text>
+</svg>

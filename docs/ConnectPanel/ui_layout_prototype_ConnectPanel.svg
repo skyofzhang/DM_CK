@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <rect width="1080" height="1920" fill="#f4f7fa"/>
+  <rect x="24" y="24" width="1032" height="1872" rx="10" fill="none" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="54" y="76" font-size="34" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">ConnectPanel 施工原型</text>
+  <text x="54" y="112" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569">1080x1920 竖屏；灰盒、坐标、节点名均为施工标注，最终效果图不要出现这些文字。</text>
+  <rect x="54" y="150" width="972" height="1" fill="#cbd5e1"/>
+<g id="block_0_FullScreenBg">
+  <rect x="0" y="0" width="1080" height="1920" rx="8" fill="#1f2937" fill-opacity="0.2" stroke="#334155" stroke-width="3"/>
+  <text x="18" y="42" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#e5e7eb">背景</text>
+  <text x="18" y="76" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#e5e7eb" opacity="0.85">FullScreenBg</text>
+  <text x="18" y="1902" font-size="20" fill="#e5e7eb" opacity="0.75">极地深色</text>
+</g>
+<g id="block_1_TitleText">
+  <rect x="120" y="420" width="840" height="100" rx="8" fill="#d9edf7" fill-opacity="1" stroke="#2f6f88" stroke-width="3"/>
+  <text x="138" y="462" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#073042">标题</text>
+  <text x="138" y="496" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#073042" opacity="0.85">TitleText</text>
+  <text x="138" y="502" font-size="20" fill="#073042" opacity="0.75">冬日生存法则</text>
+</g>
+<g id="block_2_Spinner/DotText">
+  <rect x="440" y="650" width="200" height="200" rx="8" fill="#f8fafc" fill-opacity="1" stroke="#94a3b8" stroke-width="3" stroke-dasharray="8 8"/>
+  <text x="458" y="692" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#475569">连接动效</text>
+  <text x="458" y="726" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569" opacity="0.85">Spinner/DotText</text>
+  <text x="458" y="832" font-size="20" fill="#475569" opacity="0.75">旋转/点点</text>
+</g>
+<g id="block_3_StatusText">
+  <rect x="190" y="900" width="700" height="76" rx="8" fill="#f2f5f7" fill-opacity="1" stroke="#7b8a97" stroke-width="3"/>
+  <text x="208" y="938" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#243444">状态文案</text>
+  <text x="208" y="970" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#243444" opacity="0.85">StatusText</text>
+  <text x="208" y="958" font-size="20" fill="#243444" opacity="0.75">正在连接服务器 / 已连接</text>
+</g>
+<g id="block_4_RetryButton">
+  <rect x="340" y="1045" width="400" height="96" rx="8" fill="#fff3cc" fill-opacity="1" stroke="#b7791f" stroke-width="3"/>
+  <text x="358" y="1087" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#78350f">重试按钮</text>
+  <text x="358" y="1121" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#78350f" opacity="0.85">RetryButton</text>
+  <text x="358" y="1123" font-size="20" fill="#78350f" opacity="0.75">失败时显示</text>
+</g>
+  <rect x="54" y="1660" width="972" height="190" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="80" y="1700" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">Prefab 核对</text>
+  <text x="80" y="1734" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">脚本：外部控制脚本，见策划案</text>
+  <text x="80" y="1766" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">节点摘录：Spinner / RetryButton / Text / DotText / StatusText / TitleText</text>
+<text x="80" y="1726" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：重 试</text>
+<text x="80" y="1760" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：...</text>
+<text x="80" y="1794" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：正在连接服务器</text>
+<text x="80" y="1828" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：冬日生存法则</text>
+</svg>

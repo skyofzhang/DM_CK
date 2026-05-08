@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <rect width="1080" height="1920" fill="#f4f7fa"/>
+  <rect x="24" y="24" width="1032" height="1872" rx="10" fill="none" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="54" y="76" font-size="34" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">ReconnectDialog 施工原型</text>
+  <text x="54" y="112" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569">1080x1920 竖屏；灰盒、坐标、节点名均为施工标注，最终效果图不要出现这些文字。</text>
+  <rect x="54" y="150" width="972" height="1" fill="#cbd5e1"/>
+<g id="block_0_ModalBackdrop">
+  <rect x="0" y="0" width="1080" height="1920" rx="8" fill="#1f2937" fill-opacity="0.2" stroke="#334155" stroke-width="3"/>
+  <text x="18" y="42" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#e5e7eb">暗化背景</text>
+  <text x="18" y="76" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#e5e7eb" opacity="0.85">ModalBackdrop</text>
+  <text x="18" y="1902" font-size="20" fill="#e5e7eb" opacity="0.75">重连弹窗</text>
+</g>
+<g id="block_1_DialogBox">
+  <rect x="150" y="560" width="780" height="540" rx="8" fill="#e8f0f5" fill-opacity="0.98" stroke="#416075" stroke-width="3"/>
+  <text x="168" y="602" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#143042">弹窗盒</text>
+  <text x="168" y="636" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#143042" opacity="0.85">DialogBox</text>
+  <text x="168" y="1082" font-size="20" fill="#143042" opacity="0.75">重连确认</text>
+</g>
+<g id="block_2_TitleText">
+  <rect x="210" y="625" width="660" height="70" rx="8" fill="#d9edf7" fill-opacity="1" stroke="#2f6f88" stroke-width="3"/>
+  <text x="228" y="660" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#073042">标题</text>
+  <text x="228" y="692" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#073042" opacity="0.85">TitleText</text>
+  <text x="228" y="677" font-size="20" fill="#073042" opacity="0.75">检测到上一局进行中</text>
+</g>
+<g id="block_3_DescText">
+  <rect x="220" y="730" width="640" height="120" rx="8" fill="#f2f5f7" fill-opacity="1" stroke="#7b8a97" stroke-width="3"/>
+  <text x="238" y="772" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#243444">说明</text>
+  <text x="238" y="806" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#243444" opacity="0.85">DescText</text>
+  <text x="238" y="832" font-size="20" fill="#243444" opacity="0.75">是否继续上一局？</text>
+</g>
+<g id="block_4_ReconnectButton/NewGameButton">
+  <rect x="210" y="920" width="660" height="96" rx="8" fill="#d9edf7" fill-opacity="1" stroke="#2f6f88" stroke-width="3"/>
+  <text x="228" y="962" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#073042">按钮行</text>
+  <text x="228" y="996" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#073042" opacity="0.85">ReconnectButton/NewGameButton</text>
+  <text x="228" y="998" font-size="20" fill="#073042" opacity="0.75">继续 / 放弃重开</text>
+</g>
+  <rect x="54" y="1660" width="972" height="190" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="80" y="1700" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">Prefab 核对</text>
+  <text x="80" y="1734" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">脚本：ReconnectDialog</text>
+  <text x="80" y="1766" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">节点摘录：NewGameButton / DescText / TitleText / Label / DialogBox / ReconnectButton / ButtonRow</text>
+<text x="80" y="1726" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：发现未完成的游戏，是否继续上一局？</text>
+<text x="80" y="1760" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：检测到上一局进行中</text>
+<text x="80" y="1794" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：继续上一局</text>
+<text x="80" y="1828" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：放弃，重新开始</text>
+</svg>

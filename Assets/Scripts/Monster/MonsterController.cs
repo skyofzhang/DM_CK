@@ -1,6 +1,7 @@
 using UnityEngine;
 using System;
 using System.Collections;
+using DrscfZ.Survival;
 
 namespace DrscfZ.Monster
 {
@@ -475,7 +476,7 @@ namespace DrscfZ.Monster
                 {
                     string targetType = _currentWorkerTarget != null ? "worker" : "gate";
                     // SendJson 接受单参数 (完整 JSON 字符串)，按项目惯例（如 BuildVoteUI.SendPropose）手工拼 type+data
-                    string json = $"{{\"type\":\"tribe_war_expedition_hit\",\"data\":{{\"sessionId\":\"{_tribeWarSessionId}\",\"monsterId\":\"{MonsterId}\",\"targetType\":\"{targetType}\"}}}}";
+                    string json = $"{{\"type\":\"{SurvivalMessageProtocol.TribeWarExpeditionHit}\",\"data\":{{\"sessionId\":\"{_tribeWarSessionId}\",\"monsterId\":\"{MonsterId}\",\"targetType\":\"{targetType}\"}}}}";
                     DrscfZ.Core.NetworkManager.Instance?.SendJson(json);
                     _tribeWarHitReported = true;
                     Debug.Log($"[MonsterController] tribe_war_expedition_hit emit: sessionId={_tribeWarSessionId} mid={MonsterId} target={targetType}");

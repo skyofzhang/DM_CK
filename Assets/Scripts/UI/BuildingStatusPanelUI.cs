@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using System.Collections;
+using DrscfZ.Core;
 using DrscfZ.Survival;
 
 namespace DrscfZ.UI
@@ -49,6 +50,9 @@ namespace DrscfZ.UI
         [Header("5 个建筑进度 TMP（建造中显示百分比；其他态可隐藏）")]
         [SerializeField] private TMP_Text[] _buildingPercents = new TMP_Text[5];
 
+        [Header("已建成建筑拆除按钮（可选；未绑定时运行时生成）")]
+        [SerializeField] private Button[] _demolishButtons = new Button[5];
+
         // ==================== 常量 ====================
 
         private static readonly string[] BUILDING_IDS = { "watchtower", "market", "hospital", "altar", "beacon" };
@@ -68,6 +72,10 @@ namespace DrscfZ.UI
         private readonly float[] _progress = new float[5];         // 0..1（建造中）
         private readonly long[]  _completesAt = new long[5];       // Unix ms（用于服务端未发 progress 时本地插值）
         private bool _subscribed = false;
+        private SurvivalGameManager _subscribedSgm;
+        private bool _demolishButtonsBound = false;
+        private int _pendingDemolishIdx = -1;
+        private long _pendingDemolishUntilMs = 0;
 
         // ==================== 生命周期 ====================
 
@@ -75,11 +83,14 @@ namespace DrscfZ.UI
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
+            EnsureFallbackUI();
+            EnsureDemolishButtons();
             for (int i = 0; i < 5; i++) _states[i] = BuildingState.Unbuilt;
         }
 
         private void Start()
         {
+            EnsureDemolishButtons();
             TrySubscribe();
             RenderAll();
         }
@@ -115,9 +126,11 @@ namespace DrscfZ.UI
 
         private void TrySubscribe()
         {
-            if (_subscribed) return;
             var sgm = SurvivalGameManager.Instance;
             if (sgm == null) return;
+            if (_subscribed && _subscribedSgm == sgm) return;
+
+            Unsubscribe();
 
             sgm.OnBuildStarted            += HandleBuildStarted;
             sgm.OnBuildProgress           += HandleBuildProgress;
@@ -125,6 +138,7 @@ namespace DrscfZ.UI
             sgm.OnBuildDemolished         += HandleBuildDemolished;
             sgm.OnBuildingDemolishedBatch += HandleBuildingDemolishedBatch;
             sgm.OnBuildCancelled          += HandleBuildCancelled;
+            _subscribedSgm = sgm;
             _subscribed = true;
             Debug.Log("[BuildingStatusPanelUI] 已订阅 SurvivalGameManager 建造事件");
         }
@@ -132,17 +146,102 @@ namespace DrscfZ.UI
         private void Unsubscribe()
         {
             if (!_subscribed) return;
-            var sgm = SurvivalGameManager.Instance;
-            if (sgm != null)
+            if (_subscribedSgm != null)
             {
-                sgm.OnBuildStarted            -= HandleBuildStarted;
-                sgm.OnBuildProgress           -= HandleBuildProgress;
-                sgm.OnBuildCompleted          -= HandleBuildCompleted;
-                sgm.OnBuildDemolished         -= HandleBuildDemolished;
-                sgm.OnBuildingDemolishedBatch -= HandleBuildingDemolishedBatch;
-                sgm.OnBuildCancelled          -= HandleBuildCancelled;
+                _subscribedSgm.OnBuildStarted            -= HandleBuildStarted;
+                _subscribedSgm.OnBuildProgress           -= HandleBuildProgress;
+                _subscribedSgm.OnBuildCompleted          -= HandleBuildCompleted;
+                _subscribedSgm.OnBuildDemolished         -= HandleBuildDemolished;
+                _subscribedSgm.OnBuildingDemolishedBatch -= HandleBuildingDemolishedBatch;
+                _subscribedSgm.OnBuildCancelled          -= HandleBuildCancelled;
             }
+            _subscribedSgm = null;
             _subscribed = false;
+        }
+
+        private void EnsureFallbackUI()
+        {
+            EnsureArraySizes();
+            if (_root != null) return;
+            if (transform.parent == null)
+                transform.SetParent(RuntimeUIFactory.GetCanvasTransform(), false);
+
+            _root = RuntimeUIFactory.CreatePanel(transform, "BuildingStatusPanel",
+                new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(250f, -250f), new Vector2(420f, 310f), new Color(0.07f, 0.08f, 0.09f, 0.90f));
+            RuntimeUIFactory.AddVerticalLayout(_root, 8f, new RectOffset(16, 16, 14, 14), TextAnchor.UpperLeft);
+
+            var title = RuntimeUIFactory.CreateText(_root.transform, "Title", "建筑状态", 24f,
+                new Color(0.8f, 0.95f, 1f), TextAlignmentOptions.Left, new Vector2(380f, 34f));
+            RuntimeUIFactory.AddLayoutElement(title.gameObject, 34f);
+
+            for (int i = 0; i < BUILDING_IDS.Length; i++)
+            {
+                var row = new GameObject($"Row_{BUILDING_IDS[i]}", typeof(RectTransform), typeof(HorizontalLayoutGroup));
+                row.transform.SetParent(_root.transform, false);
+                RuntimeUIFactory.AddLayoutElement(row, 40f);
+                var layout = row.GetComponent<HorizontalLayoutGroup>();
+                layout.spacing = 8f;
+                layout.childAlignment = TextAnchor.MiddleLeft;
+                layout.childControlWidth = false;
+                layout.childControlHeight = false;
+                layout.childForceExpandWidth = false;
+                layout.childForceExpandHeight = false;
+
+                var dotGo = new GameObject("Dot", typeof(RectTransform), typeof(Image));
+                dotGo.transform.SetParent(row.transform, false);
+                RuntimeUIFactory.AddLayoutElement(dotGo, 18f, 18f);
+                _buildingDots[i] = dotGo.GetComponent<Image>();
+
+                _buildingLabels[i] = RuntimeUIFactory.CreateText(row.transform, "Name", BUILDING_NAMES[i], 18f,
+                    Color.white, TextAlignmentOptions.Left, new Vector2(120f, 34f));
+                RuntimeUIFactory.AddLayoutElement(_buildingLabels[i].gameObject, 34f, 120f);
+
+                _buildingPercents[i] = RuntimeUIFactory.CreateText(row.transform, "State", "", 16f,
+                    new Color(0.86f, 0.9f, 0.92f), TextAlignmentOptions.Left, new Vector2(100f, 34f));
+                RuntimeUIFactory.AddLayoutElement(_buildingPercents[i].gameObject, 34f, 100f);
+
+                TextMeshProUGUI label;
+                _demolishButtons[i] = RuntimeUIFactory.CreateButton(row.transform, "Demolish", "拆除", out label,
+                    new Color(0.38f, 0.12f, 0.12f, 0.95f), new Vector2(78f, 34f));
+                RuntimeUIFactory.AddLayoutElement(_demolishButtons[i].gameObject, 34f, 78f);
+                if (label != null) label.fontSize = 18f;
+            }
+        }
+
+        private void EnsureArraySizes()
+        {
+            if (_buildingDots == null || _buildingDots.Length < 5) System.Array.Resize(ref _buildingDots, 5);
+            if (_buildingLabels == null || _buildingLabels.Length < 5) System.Array.Resize(ref _buildingLabels, 5);
+            if (_buildingPercents == null || _buildingPercents.Length < 5) System.Array.Resize(ref _buildingPercents, 5);
+            if (_demolishButtons == null || _demolishButtons.Length < 5) System.Array.Resize(ref _demolishButtons, 5);
+        }
+
+        private void EnsureDemolishButtons()
+        {
+            EnsureArraySizes();
+            if (_root == null) return;
+            if (!_demolishButtonsBound)
+            {
+                for (int i = 0; i < BUILDING_IDS.Length; i++)
+                {
+                    if (_demolishButtons[i] == null)
+                    {
+                        Transform parent = _buildingLabels[i] != null ? _buildingLabels[i].transform.parent : _root.transform;
+                        TextMeshProUGUI label;
+                        _demolishButtons[i] = RuntimeUIFactory.CreateButton(parent, $"Demolish_{BUILDING_IDS[i]}", "拆除", out label,
+                            new Color(0.38f, 0.12f, 0.12f, 0.95f), new Vector2(78f, 34f));
+                        RuntimeUIFactory.AddLayoutElement(_demolishButtons[i].gameObject, 34f, 78f);
+                        if (label != null) label.fontSize = 18f;
+                    }
+
+                    int idx = i;
+                    if (_demolishButtons[i] != null)
+                        _demolishButtons[i].onClick.AddListener(() => OnDemolishClicked(idx));
+                }
+                _demolishButtonsBound = true;
+            }
+            RefreshDemolishButtons();
         }
 
         // ==================== 事件回调 ====================
@@ -246,8 +345,8 @@ namespace DrscfZ.UI
             if (idx < _buildingLabels.Length && _buildingLabels[idx] != null)
                 _buildingLabels[idx].text = BUILDING_NAMES[idx];
 
-            // 百分比文本
             RefreshPercentText(idx);
+            RefreshDemolishButton(idx);
         }
 
         private void RefreshPercentText(int idx)
@@ -286,6 +385,60 @@ namespace DrscfZ.UI
                     txt.text = "";
                     break;
             }
+        }
+
+        private void RefreshDemolishButtons()
+        {
+            for (int i = 0; i < BUILDING_IDS.Length; i++) RefreshDemolishButton(i);
+        }
+
+        private void RefreshDemolishButton(int idx)
+        {
+            if (idx < 0 || idx >= _demolishButtons.Length) return;
+            var btn = _demolishButtons[idx];
+            if (btn == null) return;
+            btn.interactable = _states[idx] == BuildingState.Built;
+            btn.gameObject.SetActive(_states[idx] == BuildingState.Built);
+        }
+
+        private void OnDemolishClicked(int idx)
+        {
+            if (idx < 0 || idx >= BUILDING_IDS.Length) return;
+            if (_states[idx] != BuildingState.Built) return;
+
+            long nowMs = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (_pendingDemolishIdx == idx && nowMs <= _pendingDemolishUntilMs)
+            {
+                _pendingDemolishIdx = -1;
+                _pendingDemolishUntilMs = 0;
+                SendBuildDemolish(BUILDING_IDS[idx]);
+                RefreshPercentText(idx);
+                return;
+            }
+
+            _pendingDemolishIdx = idx;
+            _pendingDemolishUntilMs = nowMs + 5000;
+            if (idx < _buildingPercents.Length && _buildingPercents[idx] != null)
+                _buildingPercents[idx].text = "再次点击确认";
+        }
+
+        private static void SendBuildDemolish(string buildId)
+        {
+            var net = NetworkManager.Instance;
+            if (net == null || !net.IsConnected)
+            {
+                Debug.LogWarning("[BuildingStatusPanelUI] build_demolish skipped: NetworkManager not connected");
+                return;
+            }
+            string json = $"{{\"type\":\"build_demolish\",\"data\":{{\"buildId\":\"{EscapeJson(buildId)}\"}}}}";
+            net.SendJson(json);
+            Debug.Log($"[BuildingStatusPanelUI] send build_demolish buildId={buildId}");
+        }
+
+        private static string EscapeJson(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            return s.Replace("\\", "\\\\").Replace("\"", "\\\"");
         }
 
         // ==================== 工具 ====================

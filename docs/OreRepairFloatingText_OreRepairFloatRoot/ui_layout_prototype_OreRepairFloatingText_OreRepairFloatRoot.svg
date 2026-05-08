@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <rect width="1080" height="1920" fill="#f4f7fa"/>
+  <rect x="24" y="24" width="1032" height="1872" rx="10" fill="none" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="54" y="76" font-size="34" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">OreRepairFloatingText_OreRepairFloatRoot 施工原型</text>
+  <text x="54" y="112" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569">1080x1920 竖屏；灰盒、坐标、节点名均为施工标注，最终效果图不要出现这些文字。</text>
+  <rect x="54" y="150" width="972" height="1" fill="#cbd5e1"/>
+<g id="block_0_CityGateWorldAnchor">
+  <rect x="360" y="730" width="360" height="120" rx="8" fill="#f7fbff" fill-opacity="1" stroke="#7aa6c2" stroke-width="3" stroke-dasharray="12 10"/>
+  <text x="378" y="772" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#2f5065">城门世界投影区</text>
+  <text x="378" y="806" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#2f5065" opacity="0.85">CityGateWorldAnchor</text>
+  <text x="378" y="832" font-size="20" fill="#2f5065" opacity="0.75">CityGate + Vector3.up * 2</text>
+</g>
+<g id="block_1_DamageNumber.Show">
+  <rect x="300" y="650" width="480" height="76" rx="8" fill="#fff3cc" fill-opacity="1" stroke="#b7791f" stroke-width="3"/>
+  <text x="318" y="688" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#78350f">飘字内容</text>
+  <text x="318" y="720" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#78350f" opacity="0.85">DamageNumber.Show</text>
+  <text x="318" y="708" font-size="20" fill="#78350f" opacity="0.75">矿石修复城门 +7HP</text>
+</g>
+<g id="block_2_TweenPath">
+  <rect x="390" y="520" width="300" height="240" rx="8" fill="#f8fafc" fill-opacity="1" stroke="#94a3b8" stroke-width="3" stroke-dasharray="8 8"/>
+  <text x="408" y="562" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#475569">上浮淡出轨迹</text>
+  <text x="408" y="596" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569" opacity="0.85">TweenPath</text>
+  <text x="408" y="742" font-size="20" fill="#475569" opacity="0.75">1.2 秒上浮</text>
+</g>
+<g id="block_3_NoPersistentPanel">
+  <rect x="160" y="980" width="760" height="160" rx="8" fill="#f2f5f7" fill-opacity="1" stroke="#7b8a97" stroke-width="3"/>
+  <text x="178" y="1022" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#243444">无常驻 UI 区</text>
+  <text x="178" y="1056" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#243444" opacity="0.85">NoPersistentPanel</text>
+  <text x="178" y="1122" font-size="20" fill="#243444" opacity="0.75">prefab 只负责脚本挂载</text>
+</g>
+  <rect x="54" y="1660" width="972" height="190" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="80" y="1700" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">Prefab 核对</text>
+  <text x="80" y="1734" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">脚本：OreRepairFloatingText</text>
+  <text x="80" y="1766" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">节点摘录：仅根节点或运行时生成</text>
+
+</svg>

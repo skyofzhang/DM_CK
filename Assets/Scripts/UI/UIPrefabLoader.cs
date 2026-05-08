@@ -173,6 +173,8 @@ namespace DrscfZ.UI
             GameObject prefab = entry != null ? entry.prefab : null;
             if (prefab == null)
                 prefab = Resources.Load<GameObject>("UI/" + id);
+            if (prefab == null)
+                prefab = Resources.Load<GameObject>("UI/Panels/" + id);
 
             if (prefab == null)
             {

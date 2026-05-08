@@ -353,6 +353,13 @@ namespace DrscfZ.Survival
         /// <summary>新玩家加入 → 激活一个空闲Worker，分配待机位（无人数上限）</summary>
         public void SpawnWorker(SurvivalPlayerJoinedData data)
         {
+            if (data == null || string.IsNullOrEmpty(data.playerId)) return;
+            if (FindWorkerByPlayerId(data.playerId) != null) return;
+            if (_activeWorkers.Count >= MAX_WORKERS)
+            {
+                Debug.LogWarning($"[WorkerManager] Ignore worker_join beyond MAX_WORKERS={MAX_WORKERS}: {data.playerId}");
+                return;
+            }
 
             WorkerController worker = GetPooledWorker();
             if (worker == null)
@@ -705,7 +712,7 @@ namespace DrscfZ.Survival
             {
                 var worker = FindWorkerByPlayerId(entry.playerId);
                 if (worker == null) continue;
-                worker.SetHp(entry.hp, entry.maxHp);
+                worker.SyncHpSnapshot(entry.hp, entry.maxHp, entry.isDead, entry.respawnAt);
             }
         }
 

@@ -81,6 +81,7 @@ namespace DrscfZ.UI
         // r15 Legacy 阶段 A 解耦：删除 _giftHandler / _subscribed 字段（旧角力游戏 GiftHandler 路径）
         // 保留 _survivalSubscribed（SurvivalGameManager.OnGiftReceived 是当前唯一活跃路径）
         private bool _survivalSubscribed;
+        private SurvivalGameManager _subscribedSurvivalManager;
 
         // VIP 入场队列
         private struct VIPRequest
@@ -130,15 +131,24 @@ namespace DrscfZ.UI
         {
             // r15 Legacy 阶段 A 解耦：移除旧 GiftHandler（卡皮巴拉对决 gift_received）订阅块
             // 仅保留 SurvivalGameManager（survival_gift）— 当前唯一活跃路径
-            if (!_survivalSubscribed)
+            var sgm = SurvivalGameManager.Instance;
+            if (sgm == null) return;
+            if (_survivalSubscribed && _subscribedSurvivalManager == sgm) return;
+
+            UnsubscribeSurvival();
+            sgm.OnGiftReceived += OnSurvivalGiftReceived;
+            _subscribedSurvivalManager = sgm;
+            _survivalSubscribed = true;
+        }
+
+        private void UnsubscribeSurvival()
+        {
+            if (_subscribedSurvivalManager != null)
             {
-                var sgm = SurvivalGameManager.Instance;
-                if (sgm != null)
-                {
-                    sgm.OnGiftReceived += OnSurvivalGiftReceived;
-                    _survivalSubscribed = true;
-                }
+                _subscribedSurvivalManager.OnGiftReceived -= OnSurvivalGiftReceived;
+                _subscribedSurvivalManager = null;
             }
+            _survivalSubscribed = false;
         }
 
         private void OnDestroy()
@@ -146,9 +156,7 @@ namespace DrscfZ.UI
             if (Instance == this) Instance = null;
 
             // r15 Legacy 阶段 A 解耦：移除旧 GiftHandler 解订阅块；仅保留 SurvivalGameManager
-            var sgm = SurvivalGameManager.Instance;
-            if (sgm != null)
-                sgm.OnGiftReceived -= OnSurvivalGiftReceived;
+            UnsubscribeSurvival();
 
             // 清理所有礼物 RenderTexture
             foreach (var a in _activeAnims)
@@ -160,6 +168,9 @@ namespace DrscfZ.UI
 
         private void Update()
         {
+            if (!_survivalSubscribed || _subscribedSurvivalManager == null)
+                TrySubscribe();
+
             for (int i = _activeAnims.Count - 1; i >= 0; i--)
             {
                 var a = _activeAnims[i];
@@ -823,8 +834,6 @@ namespace DrscfZ.UI
 
         private void CleanupVIPVideo()
         {
-            _vipPlaying = false;
-
             if (_vipPlayer != null)
             {
                 _vipPlayer.Stop();

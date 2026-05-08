@@ -7,63 +7,60 @@ using DrscfZ.Survival;
 namespace DrscfZ.UI
 {
     /// <summary>
-    /// 生存游戏 Loading 界面控制器。
-    /// 挂载在 Canvas（始终激活，符合 Rule #7）。
-    /// SurvivalState.Loading 时显示：
-    ///   - IsEnteringScene = true  → "准备进入战场..."
-    ///   - IsEnteringScene = false → "正在退出，返回大厅..."
+    /// Loading overlay shown while entering or leaving the survival battlefield.
+    /// Creates a minimal fallback panel when scene bindings are missing.
     /// </summary>
     public class SurvivalLoadingUI : MonoBehaviour
     {
-        [Header("面板根节点")]
+        [Header("Panel")]
         [SerializeField] private GameObject _panel;
 
-        [Header("文字 & 动画")]
+        [Header("Text & Animation")]
         [SerializeField] private TMP_Text _loadingText;
-        [SerializeField] private Image    _spinner;      // 旋转动画图标（可选）
+        [SerializeField] private Image _spinner;
 
-        // Spinner 旋转速度（度/秒）
         private const float SPINNER_SPEED = 270f;
-
-        // ==================== 生命周期 ====================
+        private SurvivalGameManager _subscribedManager;
+        private NetworkManager _subscribedNetwork;
 
         private void Start()
         {
-            // 订阅游戏状态事件
-            var sgm = SurvivalGameManager.Instance;
-            if (sgm != null)
-                sgm.OnStateChanged += OnStateChanged;
-
-            // 订阅断线事件（断线时强制隐藏 Loading）
-            var net = NetworkManager.Instance;
-            if (net != null)
-                net.OnDisconnected += OnDisconnected;
-
-            // 初始化
+            EnsureFallbackUI();
+            TrySubscribe();
             RefreshVisibility();
-        }
-
-        private void OnDestroy()
-        {
-            var sgm = SurvivalGameManager.Instance;
-            if (sgm != null)
-                sgm.OnStateChanged -= OnStateChanged;
-
-            var net = NetworkManager.Instance;
-            if (net != null)
-                net.OnDisconnected -= OnDisconnected;
         }
 
         private void Update()
         {
-            // Spinner 旋转
+            TrySubscribe();
             if (_spinner != null && _panel != null && _panel.activeSelf)
-            {
                 _spinner.transform.Rotate(0f, 0f, -SPINNER_SPEED * Time.deltaTime);
-            }
         }
 
-        // ==================== 事件回调 ====================
+        private void OnDestroy()
+        {
+            if (_subscribedManager != null)
+                _subscribedManager.OnStateChanged -= OnStateChanged;
+            if (_subscribedNetwork != null)
+                _subscribedNetwork.OnDisconnected -= OnDisconnected;
+            _subscribedManager = null;
+            _subscribedNetwork = null;
+        }
+
+        private void TrySubscribe()
+        {
+            if (_subscribedManager == null && SurvivalGameManager.Instance != null)
+            {
+                _subscribedManager = SurvivalGameManager.Instance;
+                _subscribedManager.OnStateChanged += OnStateChanged;
+            }
+
+            if (_subscribedNetwork == null && NetworkManager.Instance != null)
+            {
+                _subscribedNetwork = NetworkManager.Instance;
+                _subscribedNetwork.OnDisconnected += OnDisconnected;
+            }
+        }
 
         private void OnStateChanged(SurvivalGameManager.SurvivalState state)
         {
@@ -75,34 +72,65 @@ namespace DrscfZ.UI
             HidePanel();
         }
 
-        // ==================== 显隐逻辑 ====================
-
         private void RefreshVisibility()
         {
             var sgm = SurvivalGameManager.Instance;
             if (sgm != null && sgm.State == SurvivalGameManager.SurvivalState.Loading)
-            {
                 ShowPanel(sgm.IsEnteringScene);
-            }
             else
-            {
                 HidePanel();
-            }
         }
 
         private void ShowPanel(bool isEntering)
         {
             if (_panel != null) _panel.SetActive(true);
-
             if (_loadingText != null)
                 _loadingText.text = isEntering ? "准备进入战场..." : "正在退出，返回大厅...";
-
-            Debug.Log($"[LoadingUI] 显示 Loading：{(isEntering ? "进入" : "退出")}");
         }
 
         private void HidePanel()
         {
             if (_panel != null) _panel.SetActive(false);
+        }
+
+        private void EnsureFallbackUI()
+        {
+            if (_panel == null)
+            {
+                if (transform.parent == null)
+                    transform.SetParent(RuntimeUIFactory.GetCanvasTransform(), false);
+
+                _panel = RuntimeUIFactory.CreatePanel(
+                    transform,
+                    "LoadingPanel",
+                    Vector2.zero,
+                    Vector2.one,
+                    Vector2.zero,
+                    Vector2.zero,
+                    new Color(0.02f, 0.03f, 0.05f, 0.78f));
+
+                var rt = _panel.GetComponent<RectTransform>();
+                rt.offsetMin = Vector2.zero;
+                rt.offsetMax = Vector2.zero;
+            }
+
+            if (_loadingText == null)
+            {
+                _loadingText = RuntimeUIFactory.CreateText(
+                    _panel.transform,
+                    "LoadingText",
+                    "",
+                    34f,
+                    Color.white,
+                    TextAlignmentOptions.Center,
+                    new Vector2(720f, 80f));
+                var textRt = _loadingText.GetComponent<RectTransform>();
+                textRt.anchorMin = new Vector2(0.5f, 0.5f);
+                textRt.anchorMax = new Vector2(0.5f, 0.5f);
+                textRt.anchoredPosition = Vector2.zero;
+            }
+
+            _panel.SetActive(false);
         }
     }
 }

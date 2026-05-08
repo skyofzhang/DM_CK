@@ -64,30 +64,83 @@ namespace DrscfZ.Monster
         // 🆕 Fix B (组 B Reviewer P0) §34B B3 heavy_fog：
         //   缓存上一次 hideMonsterHp 状态，仅在切换时刷新所有怪物血条，避免每次 resource_update 重复 SetActive。
         private bool _hideMonsterHpCached = false;
+        private DayNightCycleManager _subscribedDayNightManager;
+        private SurvivalGameManager _subscribedGameManager;
+        private bool _dayNightSubscribed;
+        private bool _resourceSubscribed;
 
         private void Start()
         {
             // 订阅白天开始事件：夜晚结束时强制清除场上残余怪物
             if (DayNightCycleManager.Instance != null)
+            {
                 DayNightCycleManager.Instance.OnDayStarted += HandleDayStarted;
+                _subscribedDayNightManager = DayNightCycleManager.Instance;
+                _dayNightSubscribed = true;
+            }
 
             // 🆕 Fix B §34B B3 heavy_fog：订阅 resource_update，按 data.hideMonsterHp 切换所有存活怪物血条
             if (DrscfZ.Survival.SurvivalGameManager.Instance != null)
+            {
                 DrscfZ.Survival.SurvivalGameManager.Instance.OnResourceUpdate += HandleResourceUpdate;
+                _subscribedGameManager = DrscfZ.Survival.SurvivalGameManager.Instance;
+                _resourceSubscribed = true;
+            }
+        }
+
+        private void Update()
+        {
+            TrySubscribeManagers();
         }
 
         private void OnDestroy()
         {
+            if (_subscribedDayNightManager != null)
+                _subscribedDayNightManager.OnDayStarted -= HandleDayStarted;
+
+            if (_subscribedGameManager != null)
+                _subscribedGameManager.OnResourceUpdate -= HandleResourceUpdate;
+
             if (DayNightCycleManager.Instance != null)
                 DayNightCycleManager.Instance.OnDayStarted -= HandleDayStarted;
 
             if (DrscfZ.Survival.SurvivalGameManager.Instance != null)
                 DrscfZ.Survival.SurvivalGameManager.Instance.OnResourceUpdate -= HandleResourceUpdate;
+
+            _subscribedDayNightManager = null;
+            _subscribedGameManager = null;
+            _dayNightSubscribed = false;
+            _resourceSubscribed = false;
         }
 
         // 🆕 Fix B (组 B Reviewer P0) §34B B3：heavy_fog 期间强制隐藏所有怪物血条（30s），结束后恢复。
         //   新生成的怪物（OnResourceUpdate 之后的 SpawnWave）会因为 _hideMonsterHpCached=true 在 Initialize 完成后
         //   需要下一次 resource_update 触发来隐藏；重要：SpawnWithVariants/LegacySpawn 添加 _activeMonsters 后立即 apply 当前状态。
+        private void TrySubscribeManagers()
+        {
+            if (!_dayNightSubscribed)
+            {
+                var dnm = DayNightCycleManager.Instance;
+                if (dnm != null)
+                {
+                    dnm.OnDayStarted += HandleDayStarted;
+                    _subscribedDayNightManager = dnm;
+                    _dayNightSubscribed = true;
+                }
+            }
+
+            if (!_resourceSubscribed)
+            {
+                var sgm = SurvivalGameManager.Instance;
+                if (sgm != null)
+                {
+                    sgm.OnResourceUpdate += HandleResourceUpdate;
+                    _subscribedGameManager = sgm;
+                    _resourceSubscribed = true;
+                }
+            }
+        }
+
         private void HandleResourceUpdate(Survival.ResourceUpdateData ru)
         {
             if (ru == null) return;
@@ -265,9 +318,13 @@ namespace DrscfZ.Monster
             if (string.IsNullOrEmpty(s)) return MonsterType.Normal;
             switch (s.ToLowerInvariant())
             {
-                case "elite": return MonsterType.Elite;
-                case "boss":  return MonsterType.Boss;
-                default:      return MonsterType.Normal;
+                case "elite":
+                case "elite_raid":
+                    return MonsterType.Elite;
+                case "boss":
+                    return MonsterType.Boss;
+                default:
+                    return MonsterType.Normal;
             }
         }
 

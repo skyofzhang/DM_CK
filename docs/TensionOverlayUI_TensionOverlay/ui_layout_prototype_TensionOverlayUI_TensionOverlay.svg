@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <rect width="1080" height="1920" fill="#f4f7fa"/>
+  <rect x="24" y="24" width="1032" height="1872" rx="10" fill="none" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="54" y="76" font-size="34" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">TensionOverlayUI_TensionOverlay 施工原型</text>
+  <text x="54" y="112" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569">1080x1920 竖屏；灰盒、坐标、节点名均为施工标注，最终效果图不要出现这些文字。</text>
+  <rect x="54" y="150" width="972" height="1" fill="#cbd5e1"/>
+<g id="block_0_OverlayImage">
+  <rect x="0" y="0" width="1080" height="1920" rx="8" fill="#ffe2dc" fill-opacity="1" stroke="#c2412d" stroke-width="3"/>
+  <text x="18" y="42" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#7f1d1d">全屏覆盖</text>
+  <text x="18" y="76" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#7f1d1d" opacity="0.85">OverlayImage</text>
+  <text x="18" y="1902" font-size="20" fill="#7f1d1d" opacity="0.75">颜色/alpha 由 tension 驱动</text>
+</g>
+<g id="block_1_GameplayClearZone">
+  <rect x="190" y="360" width="700" height="1050" rx="8" fill="#f7fbff" fill-opacity="1" stroke="#7aa6c2" stroke-width="3" stroke-dasharray="12 10"/>
+  <text x="208" y="402" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#2f5065">中心清晰区</text>
+  <text x="208" y="436" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#2f5065" opacity="0.85">GameplayClearZone</text>
+  <text x="208" y="1392" font-size="20" fill="#2f5065" opacity="0.75">中间尽量透明</text>
+</g>
+<g id="block_2_EdgeVignette">
+  <rect x="30" y="120" width="1020" height="1680" rx="8" fill="#ffe2dc" fill-opacity="1" stroke="#c2412d" stroke-width="3"/>
+  <text x="48" y="162" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#7f1d1d">边缘警戒</text>
+  <text x="48" y="196" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#7f1d1d" opacity="0.85">EdgeVignette</text>
+  <text x="48" y="1782" font-size="20" fill="#7f1d1d" opacity="0.75">四边增强</text>
+</g>
+<g id="block_3_TensionLevels">
+  <rect x="270" y="1500" width="540" height="120" rx="8" fill="#f8fafc" fill-opacity="1" stroke="#94a3b8" stroke-width="3" stroke-dasharray="8 8"/>
+  <text x="288" y="1542" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#475569">等级标注</text>
+  <text x="288" y="1576" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569" opacity="0.85">TensionLevels</text>
+  <text x="288" y="1602" font-size="20" fill="#475569" opacity="0.75">施工标注：safe/tense/critical/dying</text>
+</g>
+  <rect x="54" y="1660" width="972" height="190" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="80" y="1700" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">Prefab 核对</text>
+  <text x="80" y="1734" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">脚本：TensionOverlayUI</text>
+  <text x="80" y="1766" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">节点摘录：仅根节点或运行时生成</text>
+
+</svg>

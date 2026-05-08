@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <rect width="1080" height="1920" fill="#f4f7fa"/>
+  <rect x="24" y="24" width="1032" height="1872" rx="10" fill="none" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="54" y="76" font-size="34" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">FairyWandMaxedBanner 施工原型</text>
+  <text x="54" y="112" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569">1080x1920 竖屏；灰盒、坐标、节点名均为施工标注，最终效果图不要出现这些文字。</text>
+  <rect x="54" y="150" width="972" height="1" fill="#cbd5e1"/>
+<g id="block_0_FlashRoot">
+  <rect x="0" y="0" width="1080" height="1920" rx="8" fill="#fff2bd" fill-opacity="1" stroke="#b88912" stroke-width="3"/>
+  <text x="18" y="42" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#6b4e00">全屏闪光</text>
+  <text x="18" y="76" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#6b4e00" opacity="0.85">FlashRoot</text>
+  <text x="18" y="1902" font-size="20" fill="#6b4e00" opacity="0.75">0.5 秒</text>
+</g>
+<g id="block_1_SceneSafeArea">
+  <rect x="55" y="260" width="970" height="1160" rx="8" fill="#f7fbff" fill-opacity="1" stroke="#7aa6c2" stroke-width="3" stroke-dasharray="12 10"/>
+  <text x="73" y="302" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#2f5065">主画面安全区</text>
+  <text x="73" y="336" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#2f5065" opacity="0.85">SceneSafeArea</text>
+  <text x="73" y="1402" font-size="20" fill="#2f5065" opacity="0.75">闪光后恢复</text>
+</g>
+<g id="block_2_MarqueeRoot">
+  <rect x="0" y="840" width="1080" height="120" rx="8" fill="#fff2bd" fill-opacity="1" stroke="#b88912" stroke-width="3"/>
+  <text x="18" y="882" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#6b4e00">跑马灯轨道</text>
+  <text x="18" y="916" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#6b4e00" opacity="0.85">MarqueeRoot</text>
+  <text x="18" y="942" font-size="20" fill="#6b4e00" opacity="0.75">右进左出</text>
+</g>
+<g id="block_3_MarqueeText">
+  <rect x="120" y="870" width="840" height="58" rx="8" fill="#d9edf7" fill-opacity="1" stroke="#2f6f88" stroke-width="3"/>
+  <text x="138" y="902" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#073042">跑马灯文案</text>
+  <text x="138" y="931" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#073042" opacity="0.85">MarqueeText</text>
+  <text x="138" y="910" font-size="20" fill="#073042" opacity="0.75">仙女棒能量已满</text>
+</g>
+  <rect x="54" y="1660" width="972" height="190" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="80" y="1700" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">Prefab 核对</text>
+  <text x="80" y="1734" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">脚本：FairyWandMaxedBanner</text>
+  <text x="80" y="1766" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">节点摘录：MarqueeRoot / FlashRoot / MarqueeText</text>
+
+</svg>

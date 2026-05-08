@@ -1,5 +1,6 @@
 const assert = require('assert');
 const TribeWarSession = require('../src/TribeWarSession');
+const TribeWarManager = require('../src/TribeWarManager');
 
 function makeRoom(roomId, engine) {
   const broadcasts = [];
@@ -229,6 +230,39 @@ function makeSession(damageMultiplier = 1.0) {
   assert.strictEqual(defenderEngine.broadcasts.find(m => m.type === 'build_demolished'), undefined, 'spoofed skeleton target must not demolish a missing building');
   assert.ok(defenderEngine.gateHp < 100, 'spoofed skeleton target should fall back to normal worker/gate resolution');
   session.end('test');
+}
+
+{
+  const attackerEngine = makeEngine();
+  const defenderEngine = makeEngine();
+  const attacker = makeRoom('attacker_room', attackerEngine);
+  const defender = makeRoom('defender_room', defenderEngine);
+  const rooms = new Map([
+    [attacker.roomId, attacker],
+    [defender.roomId, defender],
+  ]);
+  const mgr = new TribeWarManager({
+    rooms,
+    getRoom(roomId) { return rooms.get(roomId); },
+  });
+
+  const started = mgr.startAttack(attacker.roomId, defender.roomId);
+  assert.ok(started.ok, 'initial tribe war attack should start');
+  assert.strictEqual(mgr.stopAttack(started.sessionId, 'manual'), true, 'manual stop should end active attack');
+
+  const window = mgr.getRetaliationTarget(defender.roomId);
+  assert.ok(window, 'manual stop should keep defender retaliation window');
+  assert.strictEqual(window.targetRoomId, attacker.roomId, 'retaliation target should be original attacker');
+  const startedMsg = defender.broadcasts.find(m => m.type === 'tribe_war_retaliation_started');
+  assert.ok(startedMsg, 'manual stop should notify defender client about retaliation window');
+  assert.strictEqual(startedMsg.data.targetRoomId, attacker.roomId, 'retaliation notify should carry original attacker');
+  assert.ok(startedMsg.data.expiresAt > Date.now(), 'retaliation notify should carry a future expiry');
+  assert.strictEqual(startedMsg.data.cooldownMs, 60000, 'retaliation notify should carry the 60s window length');
+
+  const retaliation = mgr.startAttack(defender.roomId, window.targetRoomId);
+  assert.ok(retaliation.ok, 'defender should be able to retaliate after manual stop');
+  mgr.clearRetaliationWindow(defender.roomId);
+  mgr.shutdown();
 }
 
 console.log('PASS  tribe war expedition cap, damage, fallback, and building attack behavior');

@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
+using System.Collections;
 using System.Collections.Generic;
 using System.Text;
 using DrscfZ.Core;
@@ -47,6 +48,8 @@ namespace DrscfZ.UI
         private int    _stolenFood;
         private int    _stolenCoal;
         private int    _stolenOre;
+        private long   _retaliationExpiresAt;
+        private Coroutine _retaliationRoutine;
 
         private readonly Queue<string> _reportLines = new Queue<string>();
         private const int REPORT_MAX = 30;
@@ -143,6 +146,7 @@ namespace DrscfZ.UI
         public void Show(TribeWarUnderAttackData data)
         {
             if (data == null) return;
+            StopRetaliationCountdown();
             _sessionId          = data.sessionId;
             _attackerRoomId     = data.attackerRoomId;
             _attackerName       = data.attackerStreamerName;
@@ -168,7 +172,74 @@ namespace DrscfZ.UI
 
         public void Hide()
         {
+            StopRetaliationCountdown();
             if (_panel != null) _panel.SetActive(false);
+        }
+
+        public void BeginManualRetaliationWindow(TribeWarAttackEndedData data)
+        {
+            if (string.IsNullOrEmpty(_attackerRoomId))
+            {
+                Hide();
+                return;
+            }
+            ShowRetaliationWindow(_attackerRoomId, DateTimeOffsetUtcNowMs() + 60000);
+        }
+
+        public void ShowRetaliationWindow(TribeWarRetaliationStartedData data)
+        {
+            if (data == null || string.IsNullOrEmpty(data.targetRoomId)) return;
+            ShowRetaliationWindow(data.targetRoomId, data.expiresAt > 0 ? data.expiresAt : DateTimeOffsetUtcNowMs() + 60000);
+        }
+
+        private void ShowRetaliationWindow(string targetRoomId, long expiresAt)
+        {
+            StopRetaliationCountdown();
+            _attackerRoomId = targetRoomId;
+            if (string.IsNullOrEmpty(_attackerName)) _attackerName = targetRoomId;
+            _retaliationExpiresAt = expiresAt;
+
+            if (_panel == null)
+            {
+                Debug.Log($"[TribeWarDefenseStatusPanel] retaliation window target={targetRoomId} expiresAt={expiresAt}");
+                return;
+            }
+
+            _panel.SetActive(true);
+            AppendReport("攻击方已停止，可在 60 秒内反击。");
+            if (_btnRetaliate != null) _btnRetaliate.interactable = true;
+            UpdateRetaliationCountdownUI();
+            _retaliationRoutine = StartCoroutine(RetaliationCountdownLoop());
+        }
+
+        private IEnumerator RetaliationCountdownLoop()
+        {
+            while (DateTimeOffsetUtcNowMs() < _retaliationExpiresAt)
+            {
+                UpdateRetaliationCountdownUI();
+                yield return new WaitForSeconds(0.25f);
+            }
+            _retaliationRoutine = null;
+            _retaliationExpiresAt = 0;
+            if (_panel != null) _panel.SetActive(false);
+        }
+
+        private void UpdateRetaliationCountdownUI()
+        {
+            long remainMs = System.Math.Max(0, _retaliationExpiresAt - DateTimeOffsetUtcNowMs());
+            int sec = Mathf.CeilToInt(remainMs / 1000f);
+            if (_titleText != null) _titleText.text = $"反击窗口：{(_attackerName ?? _attackerRoomId)}（{sec}s）";
+            if (_btnRetaliate != null) _btnRetaliate.interactable = sec > 0 && !string.IsNullOrEmpty(_attackerRoomId);
+        }
+
+        private void StopRetaliationCountdown()
+        {
+            if (_retaliationRoutine != null)
+            {
+                StopCoroutine(_retaliationRoutine);
+                _retaliationRoutine = null;
+            }
+            _retaliationExpiresAt = 0;
         }
 
         /// <summary>tribe_war_expedition_incoming 调用，更新已承受远征怪数。</summary>
@@ -256,6 +327,11 @@ namespace DrscfZ.UI
         {
             if (string.IsNullOrEmpty(s)) return s;
             return s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+        }
+
+        private static long DateTimeOffsetUtcNowMs()
+        {
+            return System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         }
     }
 }

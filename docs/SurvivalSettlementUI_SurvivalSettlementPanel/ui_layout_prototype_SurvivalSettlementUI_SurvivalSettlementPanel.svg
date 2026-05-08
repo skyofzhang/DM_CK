@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <rect width="1080" height="1920" fill="#f4f7fa"/>
+  <rect x="24" y="24" width="1032" height="1872" rx="10" fill="none" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="54" y="76" font-size="34" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">SurvivalSettlementUI_SurvivalSettlementPanel 施工原型</text>
+  <text x="54" y="112" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569">1080x1920 竖屏；灰盒、坐标、节点名均为施工标注，最终效果图不要出现这些文字。</text>
+  <rect x="54" y="150" width="972" height="1" fill="#cbd5e1"/>
+<g id="block_0_SettlementBackdrop">
+  <rect x="0" y="0" width="1080" height="1920" rx="8" fill="#1f2937" fill-opacity="0.2" stroke="#334155" stroke-width="3"/>
+  <text x="18" y="42" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#e5e7eb">结算背景</text>
+  <text x="18" y="76" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#e5e7eb" opacity="0.85">SettlementBackdrop</text>
+  <text x="18" y="1902" font-size="20" fill="#e5e7eb" opacity="0.75">全屏结算</text>
+</g>
+<g id="block_1_ResultTitle">
+  <rect x="90" y="130" width="900" height="120" rx="8" fill="#d9edf7" fill-opacity="1" stroke="#2f6f88" stroke-width="3"/>
+  <text x="108" y="172" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#073042">结果标题</text>
+  <text x="108" y="206" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#073042" opacity="0.85">ResultTitle</text>
+  <text x="108" y="232" font-size="20" fill="#073042" opacity="0.75">极地陷落/胜利</text>
+</g>
+<g id="block_2_ScreenA">
+  <rect x="100" y="300" width="880" height="360" rx="8" fill="#e8f0f5" fill-opacity="0.98" stroke="#416075" stroke-width="3"/>
+  <text x="118" y="342" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#143042">ScreenA 高光</text>
+  <text x="118" y="376" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#143042" opacity="0.85">ScreenA</text>
+  <text x="118" y="642" font-size="20" fill="#143042" opacity="0.75">伤害最高/最佳救援</text>
+</g>
+<g id="block_3_ScreenB">
+  <rect x="100" y="700" width="880" height="450" rx="8" fill="#f7fbff" fill-opacity="1" stroke="#7aa6c2" stroke-width="3" stroke-dasharray="12 10"/>
+  <text x="118" y="742" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#2f5065">ScreenB 统计</text>
+  <text x="118" y="776" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#2f5065" opacity="0.85">ScreenB</text>
+  <text x="118" y="1132" font-size="20" fill="#2f5065" opacity="0.75">天数/击杀/采集/修复/排行</text>
+</g>
+<g id="block_4_ScreenC">
+  <rect x="100" y="1190" width="880" height="300" rx="8" fill="#fff2bd" fill-opacity="1" stroke="#b88912" stroke-width="3"/>
+  <text x="118" y="1232" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#6b4e00">ScreenC MVP</text>
+  <text x="118" y="1266" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#6b4e00" opacity="0.85">ScreenC</text>
+  <text x="118" y="1472" font-size="20" fill="#6b4e00" opacity="0.75">MVP/Top3</text>
+</g>
+<g id="block_5_Buttons/PageDots">
+  <rect x="190" y="1550" width="700" height="120" rx="8" fill="#d9edf7" fill-opacity="1" stroke="#2f6f88" stroke-width="3"/>
+  <text x="208" y="1592" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#073042">操作与页点</text>
+  <text x="208" y="1626" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#073042" opacity="0.85">Buttons/PageDots</text>
+  <text x="208" y="1652" font-size="20" fill="#073042" opacity="0.75">重开/查看英雄榜/跳过</text>
+</g>
+  <rect x="54" y="1660" width="972" height="190" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="80" y="1700" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">Prefab 核对</text>
+  <text x="80" y="1734" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">脚本：SurvivalSettlementUI</text>
+  <text x="80" y="1766" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">节点摘录：ScoreText / RankEntry_5 / RankMark / SurvivalDaysText / RankText / HighlightClosestCall / StatsPanelBg / NameText</text>
+<text x="80" y="1726" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：0</text>
+<text x="80" y="1760" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：3</text>
+<text x="80" y="1794" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：生存天数: 0</text>
+<text x="80" y="1828" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：'#2'</text>
+</svg>

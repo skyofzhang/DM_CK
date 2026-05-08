@@ -45,6 +45,7 @@ namespace DrscfZ.UI
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
+            EnsureFallbackUI();
             if (_panel != null && _panel != gameObject) _panel.SetActive(false);
 
             // 🔴 audit-r46 GAP-M-07：订阅 phase 切换兜底关闭面板
@@ -111,6 +112,52 @@ namespace DrscfZ.UI
         }
 
         /// <summary>服务端广播 build_vote_started 时调用:激活面板 + 启动倒计时 + 绑定按钮</summary>
+        private void EnsureFallbackUI()
+        {
+            if (_panel != null) return;
+            if (transform.parent == null)
+                transform.SetParent(RuntimeUIFactory.GetCanvasTransform(), false);
+
+            _panel = RuntimeUIFactory.CreatePanel(
+                transform,
+                "BuildVotePanel",
+                new Vector2(0.5f, 0.5f),
+                new Vector2(0.5f, 0.5f),
+                Vector2.zero,
+                new Vector2(560f, 430f),
+                new Color(0.06f, 0.08f, 0.11f, 0.96f));
+            RuntimeUIFactory.AddVerticalLayout(_panel, 10f, new RectOffset(24, 24, 20, 20));
+
+            var title = RuntimeUIFactory.CreateText(_panel.transform, "Title", "Build Vote", 28f,
+                new Color(1f, 0.86f, 0.25f), TextAlignmentOptions.Center, new Vector2(500f, 38f));
+            RuntimeUIFactory.AddLayoutElement(title.gameObject, 38f);
+
+            _proposerText = RuntimeUIFactory.CreateText(_panel.transform, "Proposer", "", 21f,
+                Color.white, TextAlignmentOptions.Center, new Vector2(500f, 32f));
+            RuntimeUIFactory.AddLayoutElement(_proposerText.gameObject, 32f);
+
+            _timerText = RuntimeUIFactory.CreateText(_panel.transform, "Timer", "", 21f,
+                new Color(0.78f, 0.90f, 1f), TextAlignmentOptions.Center, new Vector2(500f, 30f));
+            RuntimeUIFactory.AddLayoutElement(_timerText.gameObject, 30f);
+
+            if (_voteButtons == null || _voteButtons.Length < 3) _voteButtons = new Button[3];
+            if (_voteLabels == null || _voteLabels.Length < 3) _voteLabels = new TMP_Text[3];
+            if (_voteCounts == null || _voteCounts.Length < 3) _voteCounts = new TMP_Text[3];
+
+            for (int i = 0; i < 3; i++)
+            {
+                var btn = RuntimeUIFactory.CreateButton(_panel.transform, $"VoteButton_{i + 1}", "--", out var label,
+                    new Color(0.16f, 0.34f, 0.45f, 0.96f), new Vector2(500f, 56f));
+                RuntimeUIFactory.AddLayoutElement(btn.gameObject, 56f);
+                _voteButtons[i] = btn;
+                _voteLabels[i] = label;
+
+                _voteCounts[i] = RuntimeUIFactory.CreateText(_panel.transform, $"VoteCount_{i + 1}", "0", 18f,
+                    new Color(0.78f, 0.90f, 1f), TextAlignmentOptions.Center, new Vector2(500f, 24f));
+                RuntimeUIFactory.AddLayoutElement(_voteCounts[i].gameObject, 24f);
+            }
+        }
+
         public void ShowVote(BuildVoteStartedData data)
         {
             if (data == null) return;

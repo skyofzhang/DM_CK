@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <rect width="1080" height="1920" fill="#f4f7fa"/>
+  <rect x="24" y="24" width="1032" height="1872" rx="10" fill="none" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="54" y="76" font-size="34" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">GateUpgradeConfirmUI 施工原型</text>
+  <text x="54" y="112" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569">1080x1920 竖屏；灰盒、坐标、节点名均为施工标注，最终效果图不要出现这些文字。</text>
+  <rect x="54" y="150" width="972" height="1" fill="#cbd5e1"/>
+<g id="block_0_ModalBackdrop">
+  <rect x="0" y="0" width="1080" height="1920" rx="8" fill="#1f2937" fill-opacity="0.2" stroke="#334155" stroke-width="3"/>
+  <text x="18" y="42" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#e5e7eb">暗化背景</text>
+  <text x="18" y="76" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#e5e7eb" opacity="0.85">ModalBackdrop</text>
+  <text x="18" y="1902" font-size="20" fill="#e5e7eb" opacity="0.75">A 类弹窗</text>
+</g>
+<g id="block_1_DialogBox">
+  <rect x="150" y="520" width="780" height="620" rx="8" fill="#e8f0f5" fill-opacity="0.98" stroke="#416075" stroke-width="3"/>
+  <text x="168" y="562" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#143042">弹窗盒</text>
+  <text x="168" y="596" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#143042" opacity="0.85">DialogBox</text>
+  <text x="168" y="1122" font-size="20" fill="#143042" opacity="0.75">升级城门</text>
+</g>
+<g id="block_2_Title">
+  <rect x="210" y="570" width="660" height="70" rx="8" fill="#d9edf7" fill-opacity="1" stroke="#2f6f88" stroke-width="3"/>
+  <text x="228" y="605" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#073042">标题</text>
+  <text x="228" y="637" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#073042" opacity="0.85">Title</text>
+  <text x="228" y="622" font-size="20" fill="#073042" opacity="0.75">升级城门</text>
+</g>
+<g id="block_3_CurrentLevel/NextLevel">
+  <rect x="220" y="680" width="640" height="84" rx="8" fill="#f2f5f7" fill-opacity="1" stroke="#7b8a97" stroke-width="3"/>
+  <text x="238" y="722" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#243444">等级对比</text>
+  <text x="238" y="754" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#243444" opacity="0.85">CurrentLevel/NextLevel</text>
+  <text x="238" y="746" font-size="20" fill="#243444" opacity="0.75">当前 Lv.1 -&gt; Lv.2</text>
+</g>
+<g id="block_4_Cost">
+  <rect x="220" y="800" width="640" height="60" rx="8" fill="#ffe2dc" fill-opacity="1" stroke="#c2412d" stroke-width="3"/>
+  <text x="238" y="832" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#7f1d1d">消耗</text>
+  <text x="238" y="862" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#7f1d1d" opacity="0.85">Cost</text>
+  <text x="238" y="842" font-size="20" fill="#7f1d1d" opacity="0.75">消耗矿石 x100</text>
+</g>
+<g id="block_5_Features">
+  <rect x="220" y="890" width="640" height="110" rx="8" fill="#f8fafc" fill-opacity="1" stroke="#94a3b8" stroke-width="3" stroke-dasharray="8 8"/>
+  <text x="238" y="932" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#475569">新特性</text>
+  <text x="238" y="966" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569" opacity="0.85">Features</text>
+  <text x="238" y="982" font-size="20" fill="#475569" opacity="0.75">新特性说明</text>
+</g>
+<g id="block_6_BtnCancel/BtnConfirm">
+  <rect x="220" y="1050" width="640" height="92" rx="8" fill="#d9edf7" fill-opacity="1" stroke="#2f6f88" stroke-width="3"/>
+  <text x="238" y="1092" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#073042">按钮区</text>
+  <text x="238" y="1126" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#073042" opacity="0.85">BtnCancel/BtnConfirm</text>
+  <text x="238" y="1124" font-size="20" fill="#073042" opacity="0.75">取消 / 确认升级</text>
+</g>
+  <rect x="54" y="1660" width="972" height="190" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="80" y="1700" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">Prefab 核对</text>
+  <text x="80" y="1734" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">脚本：GateUpgradeConfirmUI</text>
+  <text x="80" y="1766" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">节点摘录：Title / NextLevel / CurrentLevel / Panel / Text / BtnCancel / BtnConfirm / DialogBox</text>
+<text x="80" y="1726" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：升级城门</text>
+<text x="80" y="1760" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：→ Lv.2「铁栅」</text>
+<text x="80" y="1794" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：当前 Lv.1</text>
+<text x="80" y="1828" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：取消</text>
+</svg>

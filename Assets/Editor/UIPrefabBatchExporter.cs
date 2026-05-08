@@ -48,7 +48,7 @@ namespace DrscfZ.EditorTools
                 return;
             }
 
-            ExportRoots(new List<GameObject>(selected), false);
+            ExportRoots(new List<GameObject>(selected), false, true);
         }
 
         [MenuItem("Tools/DrscfZ/UI Prefabs/Export Scene UI Candidates")]
@@ -70,7 +70,27 @@ namespace DrscfZ.EditorTools
                 return;
             }
 
-            ExportRoots(roots, true);
+            ExportRoots(roots, true, true);
+        }
+
+        [MenuItem("Tools/DrscfZ/UI Prefabs/Export Scene UI Candidates Batch")]
+        public static void ExportSceneCandidatesBatch()
+        {
+            if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
+            {
+                Debug.LogWarning("[UIPrefabBatchExporter] Export cancelled to protect unsaved scene changes.");
+                return;
+            }
+
+            EditorSceneManager.OpenScene("Assets/Scenes/MainScene.unity", OpenSceneMode.Single);
+            var roots = CollectSceneCandidates();
+            if (roots.Count == 0)
+            {
+                Debug.LogWarning("[UIPrefabBatchExporter] No scene UI candidates were found.");
+                return;
+            }
+
+            ExportRoots(roots, true, false);
         }
 
         [MenuItem("Tools/DrscfZ/UI Prefabs/Ping Output Folder")]
@@ -189,7 +209,7 @@ namespace DrscfZ.EditorTools
             return component != null ? component.gameObject : null;
         }
 
-        private static void ExportRoots(List<GameObject> roots, bool useScriptPrefix)
+        private static void ExportRoots(List<GameObject> roots, bool useScriptPrefix, bool showDialog)
         {
             EnsureOutputDir();
 
@@ -217,7 +237,11 @@ namespace DrscfZ.EditorTools
                 string assetPath = MakeUniquePath(OutputDir + "/" + fileName, usedPaths);
 
                 bool success;
-                PrefabUtility.SaveAsPrefabAssetAndConnect(root, assetPath, InteractionMode.UserAction, out success);
+                PrefabUtility.SaveAsPrefabAssetAndConnect(
+                    root,
+                    assetPath,
+                    showDialog ? InteractionMode.UserAction : InteractionMode.AutomatedAction,
+                    out success);
                 if (success)
                 {
                     exported++;
@@ -232,10 +256,12 @@ namespace DrscfZ.EditorTools
 
             AssetDatabase.SaveAssets();
             EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
-            EditorUtility.DisplayDialog(
-                "UI Prefabs",
-                "Exported: " + exported + "\nSkipped: " + skipped + "\nFolder: " + OutputDir,
-                "OK");
+            if (!showDialog)
+                EditorSceneManager.SaveScene(SceneManager.GetActiveScene());
+            string summary = "Exported: " + exported + "\nSkipped: " + skipped + "\nFolder: " + OutputDir;
+            Debug.Log("[UIPrefabBatchExporter] " + summary.Replace("\n", " "));
+            if (showDialog)
+                EditorUtility.DisplayDialog("UI Prefabs", summary, "OK");
         }
 
         private static string BuildPrefabFileName(GameObject root, bool useScriptPrefix)

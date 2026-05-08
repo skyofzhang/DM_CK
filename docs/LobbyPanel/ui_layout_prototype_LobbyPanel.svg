@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <rect width="1080" height="1920" fill="#f4f7fa"/>
+  <rect x="24" y="24" width="1032" height="1872" rx="10" fill="none" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="54" y="76" font-size="34" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">LobbyPanel 施工原型</text>
+  <text x="54" y="112" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569">1080x1920 竖屏；灰盒、坐标、节点名均为施工标注，最终效果图不要出现这些文字。</text>
+  <rect x="54" y="150" width="972" height="1" fill="#cbd5e1"/>
+<g id="block_0_LobbyBg">
+  <rect x="0" y="0" width="1080" height="1920" rx="8" fill="#1f2937" fill-opacity="0.2" stroke="#334155" stroke-width="3"/>
+  <text x="18" y="42" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#e5e7eb">背景</text>
+  <text x="18" y="76" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#e5e7eb" opacity="0.85">LobbyBg</text>
+  <text x="18" y="1902" font-size="20" fill="#e5e7eb" opacity="0.75">极地场景底</text>
+</g>
+<g id="block_1_TitleImage/TitleText">
+  <rect x="120" y="300" width="840" height="180" rx="8" fill="#d9edf7" fill-opacity="1" stroke="#2f6f88" stroke-width="3"/>
+  <text x="138" y="342" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#073042">标题区</text>
+  <text x="138" y="376" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#073042" opacity="0.85">TitleImage/TitleText</text>
+  <text x="138" y="462" font-size="20" fill="#073042" opacity="0.75">极地生存法则</text>
+</g>
+<g id="block_2_ServerStatus/StatusText">
+  <rect x="180" y="620" width="720" height="120" rx="8" fill="#f2f5f7" fill-opacity="1" stroke="#7b8a97" stroke-width="3"/>
+  <text x="198" y="662" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#243444">状态区</text>
+  <text x="198" y="696" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#243444" opacity="0.85">ServerStatus/StatusText</text>
+  <text x="198" y="722" font-size="20" fill="#243444" opacity="0.75">已连接 / 等待主播</text>
+</g>
+<g id="block_3_StartBtn">
+  <rect x="240" y="860" width="600" height="110" rx="8" fill="#d9edf7" fill-opacity="1" stroke="#2f6f88" stroke-width="3"/>
+  <text x="258" y="902" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#073042">开始按钮</text>
+  <text x="258" y="936" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#073042" opacity="0.85">StartBtn</text>
+  <text x="258" y="952" font-size="20" fill="#073042" opacity="0.75">开始游戏</text>
+</g>
+<g id="block_4_RankingBtn/SettingsBtn">
+  <rect x="240" y="1005" width="600" height="96" rx="8" fill="#e8f0f5" fill-opacity="0.98" stroke="#416075" stroke-width="3"/>
+  <text x="258" y="1047" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#143042">次级按钮</text>
+  <text x="258" y="1081" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#143042" opacity="0.85">RankingBtn/SettingsBtn</text>
+  <text x="258" y="1083" font-size="20" fill="#143042" opacity="0.75">排行榜 / 设置</text>
+</g>
+<g id="block_5_SafeFooter">
+  <rect x="80" y="1460" width="920" height="240" rx="8" fill="#f7fbff" fill-opacity="1" stroke="#7aa6c2" stroke-width="3" stroke-dasharray="12 10"/>
+  <text x="98" y="1502" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#2f5065">底部留白</text>
+  <text x="98" y="1536" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#2f5065" opacity="0.85">SafeFooter</text>
+  <text x="98" y="1682" font-size="20" fill="#2f5065" opacity="0.75">适配全面屏</text>
+</g>
+  <rect x="54" y="1660" width="972" height="190" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="80" y="1700" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">Prefab 核对</text>
+  <text x="80" y="1734" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">脚本：外部控制脚本，见策划案</text>
+  <text x="80" y="1766" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">节点摘录：ServerStatus / Text / StatusText / RankingBtn / SettingsBtn / TitleText / StartBtn / TitleImage</text>
+<text x="80" y="1726" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：已连接 √</text>
+<text x="80" y="1760" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：排行榜</text>
+<text x="80" y="1794" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：开始游戏</text>
+<text x="80" y="1828" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：等待主播开始游戏...</text>
+</svg>

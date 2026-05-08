@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <rect width="1080" height="1920" fill="#f4f7fa"/>
+  <rect x="24" y="24" width="1032" height="1872" rx="10" fill="none" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="54" y="76" font-size="34" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">EfficiencyRaceUI_EfficiencyRaceBanner 施工原型</text>
+  <text x="54" y="112" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569">1080x1920 竖屏；灰盒、坐标、节点名均为施工标注，最终效果图不要出现这些文字。</text>
+  <rect x="54" y="150" width="972" height="1" fill="#cbd5e1"/>
+<g id="block_0_SceneSafeArea">
+  <rect x="40" y="250" width="1000" height="1260" rx="8" fill="#f7fbff" fill-opacity="1" stroke="#7aa6c2" stroke-width="3" stroke-dasharray="12 10"/>
+  <text x="58" y="292" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#2f5065">游戏安全区</text>
+  <text x="58" y="326" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#2f5065" opacity="0.85">SceneSafeArea</text>
+  <text x="58" y="1492" font-size="20" fill="#2f5065" opacity="0.75">主画面</text>
+</g>
+<g id="block_1_BannerRoot">
+  <rect x="110" y="135" width="860" height="105" rx="8" fill="#dff7e8" fill-opacity="1" stroke="#2f855a" stroke-width="3"/>
+  <text x="128" y="177" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#14532d">竞速条</text>
+  <text x="128" y="211" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#14532d" opacity="0.85">BannerRoot</text>
+  <text x="128" y="222" font-size="20" fill="#14532d" opacity="0.75">低张力展示</text>
+</g>
+<g id="block_2_MessageText">
+  <rect x="150" y="165" width="780" height="46" rx="8" fill="#d9edf7" fill-opacity="1" stroke="#2f6f88" stroke-width="3"/>
+  <text x="168" y="197" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#073042">对比文案</text>
+  <text x="168" y="223" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#073042" opacity="0.85">MessageText</text>
+  <text x="168" y="193" font-size="20" fill="#073042" opacity="0.75">采集王 A vs B</text>
+</g>
+  <rect x="54" y="1660" width="972" height="190" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="80" y="1700" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">Prefab 核对</text>
+  <text x="80" y="1734" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">脚本：EfficiencyRaceUI</text>
+  <text x="80" y="1766" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">节点摘录：MessageText / BannerRoot</text>
+
+</svg>

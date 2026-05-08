@@ -569,9 +569,10 @@ namespace DrscfZ.UI
 
             string safeAction = action == "recall" ? "recall" : "send";
             long ts = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            string json = $"{{\"type\":\"expedition_command\",\"data\":{{\"action\":\"{safeAction}\"}},\"timestamp\":{ts}}}";
+            string playerId = net.IsGMMode ? "gm_host" : "";
+            string json = $"{{\"type\":\"expedition_command\",\"data\":{{\"playerId\":\"{playerId}\",\"action\":\"{safeAction}\"}},\"timestamp\":{ts}}}";
             net.SendJson(json);
-            Debug.Log($"[BroadcasterPanel] 🧭 expedition_command 已发送 action={safeAction}");
+            Debug.Log($"[BroadcasterPanel] 🧭 expedition_command 已发送 playerId={playerId} action={safeAction}");
         }
 
         /// <summary>获取当前等级升级至下一级的矿石消耗</summary>

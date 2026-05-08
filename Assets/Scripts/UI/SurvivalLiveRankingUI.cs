@@ -30,9 +30,13 @@ namespace DrscfZ.UI
         [Header("排名行（预创建 5 个）")]
         [SerializeField] private GameObject[] _rankRows = new GameObject[5];
 
+        [Header("快捷按钮")]
+        [SerializeField] private Button _settingsButton;
+
         // ─── 内部状态 ────────────────────────────────────────────────────
         private bool   _visible    = false;
         private bool   _subscribed = false;
+        private bool   _settingsButtonBound = false;
 
         // 上一帧 Top5 ID（用于检测排名变化触发高亮动画）
         private readonly string[] _prevRankIds = new string[5];
@@ -47,7 +51,13 @@ namespace DrscfZ.UI
         private void Awake()
         {
             // 🔴 audit-r30：Instance 单例赋值（CLAUDE.md 规则 6 — 不在 Awake 内 SetActive(false) 自身 GO）
-            if (Instance == null) Instance = this;
+            if (Instance != null && Instance != this)
+            {
+                Destroy(gameObject);
+                return;
+            }
+            Instance = this;
+            BindSettingsButton();
             if (_panel != null) _panel.SetActive(false);
         }
 
@@ -143,6 +153,48 @@ namespace DrscfZ.UI
             if (_rankRows == null) return;
             foreach (var row in _rankRows)
                 if (row != null) row.SetActive(false);
+        }
+
+        private void BindSettingsButton()
+        {
+            if (_settingsButtonBound) return;
+
+            var btn = _settingsButton != null ? _settingsButton : FindButtonByName("BtnSettings");
+            if (btn == null || HasValidPersistentClick(btn)) return;
+
+            btn.onClick.AddListener(OpenSettingsPanel);
+            _settingsButtonBound = true;
+        }
+
+        private Button FindButtonByName(string buttonName)
+        {
+            var buttons = GetComponentsInChildren<Button>(true);
+            foreach (var btn in buttons)
+            {
+                if (btn != null && btn.gameObject.name == buttonName)
+                    return btn;
+            }
+            return null;
+        }
+
+        private static bool HasValidPersistentClick(Button btn)
+        {
+            if (btn == null) return false;
+            var evt = btn.onClick;
+            int count = evt.GetPersistentEventCount();
+            for (int i = 0; i < count; i++)
+            {
+                if (evt.GetPersistentTarget(i) != null && !string.IsNullOrEmpty(evt.GetPersistentMethodName(i)))
+                    return true;
+            }
+            return false;
+        }
+
+        private void OpenSettingsPanel()
+        {
+            var settings = SurvivalSettingsUI.Instance ?? FindObjectOfType<SurvivalSettingsUI>(true);
+            if (settings != null) settings.TogglePanel();
+            else Debug.LogWarning("[SurvivalLiveRankingUI] SurvivalSettingsUI 未找到，无法打开设置面板");
         }
 
         // ==================== 刷新显示 ====================

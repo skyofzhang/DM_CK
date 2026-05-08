@@ -372,13 +372,15 @@ namespace DrscfZ.Core
         private async Task ConnectAsyncInternal()
         {
             _cts?.Cancel();
-            _cts = new CancellationTokenSource();
+            var cts = new CancellationTokenSource();
+            _cts = cts;
             _ws?.Dispose();
-            _ws = new ClientWebSocket();
+            var ws = new ClientWebSocket();
+            _ws = ws;
 
             try
             {
-                await _ws.ConnectAsync(new Uri(serverUrl), _cts.Token);
+                await ws.ConnectAsync(new Uri(serverUrl), cts.Token);
                 IsConnected = true;
                 _reconnectCount = 0;
                 _lastHeartbeatResponse = Time.realtimeSinceStartup;
@@ -393,16 +395,17 @@ namespace DrscfZ.Core
                 string playerName = IsGMMode ? "GM主播" : "";
                 string joinMsg = $"{{\"type\":\"join_room\",\"data\":{{\"roomId\":\"{EscapeJsonString(CurrentRoomId)}\",\"isGMMode\":{(IsGMMode ? "true" : "false")},\"explicitGMMode\":{(_explicitGMMode ? "true" : "false")},\"playerId\":\"{EscapeJsonString(playerId)}\",\"playerName\":\"{EscapeJsonString(playerName)}\"}},\"timestamp\":{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}";
                 var joinBytes = Encoding.UTF8.GetBytes(joinMsg);
-                await _ws.SendAsync(new ArraySegment<byte>(joinBytes), WebSocketMessageType.Text, true, _cts.Token);
+                await ws.SendAsync(new ArraySegment<byte>(joinBytes), WebSocketMessageType.Text, true, cts.Token);
                 Debug.Log($"[Net] Joined room: {CurrentRoomId}, isGMMode={IsGMMode}, explicitGM={_explicitGMMode}");
 
                 _actionQueue.Enqueue(() => OnConnected?.Invoke());
-                _ = ReceiveLoop();
-                _ = HeartbeatLoop();
+                _ = ReceiveLoop(ws, cts);
+                _ = HeartbeatLoop(ws, cts);
             }
             catch (Exception e)
             {
                 Debug.LogWarning($"[Net] Connect failed: {e.Message}");
+                if (!IsCurrentConnection(ws, cts)) return;
                 IsConnected = false;
                 string err = $"WebSocket 连接失败: {e.Message}";
                 ConnectError = err;
@@ -412,22 +415,28 @@ namespace DrscfZ.Core
             }
         }
 
-        private async Task ReceiveLoop()
+        private bool IsCurrentConnection(ClientWebSocket ws, CancellationTokenSource cts)
+        {
+            return ReferenceEquals(_ws, ws) && ReferenceEquals(_cts, cts);
+        }
+
+        private async Task ReceiveLoop(ClientWebSocket ws, CancellationTokenSource cts)
         {
             var buffer = new byte[8192];
             var sb = new StringBuilder();
+            var token = cts.Token;
 
             try
             {
-                while (_ws.State == WebSocketState.Open && !_cts.IsCancellationRequested)
+                while (IsCurrentConnection(ws, cts) && ws.State == WebSocketState.Open && !token.IsCancellationRequested)
                 {
                     sb.Clear();
                     WebSocketReceiveResult result;
                     do
                     {
-                        result = await _ws.ReceiveAsync(new ArraySegment<byte>(buffer), _cts.Token);
+                        result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), token);
                         sb.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
-                    } while (!result.EndOfMessage);
+                    } while (!result.EndOfMessage && IsCurrentConnection(ws, cts) && !token.IsCancellationRequested);
 
                     if (result.MessageType == WebSocketMessageType.Close) break;
 
@@ -437,14 +446,19 @@ namespace DrscfZ.Core
             catch (OperationCanceledException) { }
             catch (Exception e)
             {
-                if (!_intentionalClose)
+                if (IsCurrentConnection(ws, cts) && !_intentionalClose)
                     Debug.LogWarning($"[Net] Receive error: {e.Message}");
             }
 
-            IsConnected = false;
-            _actionQueue.Enqueue(() => OnDisconnected?.Invoke("Connection lost"));
+            if (!IsCurrentConnection(ws, cts)) return;
 
-            if (!_intentionalClose) TryReconnect();
+            IsConnected = false;
+
+            if (!_intentionalClose && !token.IsCancellationRequested)
+            {
+                _actionQueue.Enqueue(() => OnDisconnected?.Invoke("Connection lost"));
+                TryReconnect();
+            }
         }
 
         private void ParseAndEnqueue(string json)
@@ -456,8 +470,8 @@ namespace DrscfZ.Core
                 if (string.IsNullOrEmpty(type)) return;
 
                 // 🔴 audit-r45 GAP-B45-03：提取协议头 priority/tick（服务端 _injectProtocolHeader 注入）
-                //   缺失/解析失败默认 priority=5（中等），tick=0（最早），与服务端 PRIORITY_BY_TYPE 默认值一致
-                int priority = 5;
+                //   缺失/解析失败默认 priority=2（normal），与服务端 §19.0 默认档一致
+                int priority = 2;
                 long tick = 0L;
                 string priStr = ExtractNumberField(json, "priority");
                 if (!string.IsNullOrEmpty(priStr) && int.TryParse(priStr, out var p)) priority = p;
@@ -669,14 +683,16 @@ namespace DrscfZ.Core
             return false;
         }
 
-        private async Task HeartbeatLoop()
+        private async Task HeartbeatLoop(ClientWebSocket ws, CancellationTokenSource cts)
         {
+            var token = cts.Token;
             try
             {
-                while (IsConnected && !_cts.IsCancellationRequested)
+                while (IsCurrentConnection(ws, cts) && ws.State == WebSocketState.Open && !token.IsCancellationRequested)
                 {
-                    await Task.Delay((int)(heartbeatInterval * 1000), _cts.Token);
-                    if (IsConnected) SendMessage("heartbeat");
+                    await Task.Delay((int)(heartbeatInterval * 1000), token);
+                    if (IsCurrentConnection(ws, cts) && ws.State == WebSocketState.Open && !token.IsCancellationRequested)
+                        SendMessage("heartbeat");
                 }
             }
             catch (OperationCanceledException) { }

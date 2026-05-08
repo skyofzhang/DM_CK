@@ -755,6 +755,8 @@ class SurvivalGameEngine {
     this._shopSpotlightActive         = {};  // {playerId: {endsAt}} spotlight 激活状态
     this._shopSpotlightUsedThisGame   = {};  // {playerId: true} spotlight 本局已用过（激活结束后）
     this._shopEmergencyAlertUsedWave  = {};  // {playerId: waveIdx} emergency_alert 同波次限 1 次
+    this._nextMonsterWaveIndex        = 0;
+    this._lastSpawnedMonsterWaveIndex = -1;
     this._shopPendingPurchases        = new Map();  // pendingId -> { playerId, itemId, price, expiresAt }
     this._peptTalkBoostUntil          = 0;   // §39.4 A1 worker_pep_talk 有效截止时间戳（Date.now() < 此值 → 采矿 +15%）
     this._shopSpotlightTimers         = {};  // {playerId: setTimeout handle} spotlight 过期句柄
@@ -1502,6 +1504,8 @@ class SurvivalGameEngine {
     this._shopSpotlightActive        = {};
     this._shopSpotlightUsedThisGame  = {};
     this._shopEmergencyAlertUsedWave = {};
+    this._nextMonsterWaveIndex       = 0;
+    this._lastSpawnedMonsterWaveIndex = -1;
     this._shopPendingPurchases.clear();
     this._peptTalkBoostUntil         = 0;
     // 清理 spotlight 过期定时器
@@ -1615,7 +1619,7 @@ class SurvivalGameEngine {
         skinId:     this._getActiveGiftSkinId(pid),
         maxHp:      w.maxHp,
         currentHp:  w.hp,
-        state:      w.isDead ? 'dead' : (this._frozenWorkers && this._frozenWorkers.has(pid) ? 'frozen' : 'active'),
+        state:      w.isDead ? 'dead' : (this._isPlayerOnExpedition(pid) ? 'expedition' : (this._frozenWorkers && this._frozenWorkers.has(pid) ? 'frozen' : 'active')),
       })),
 
       // §36 全服同步 / 赛季 / 堡垒日 / 每日 cap（客户端 survival_game_state 同步）
@@ -2243,7 +2247,22 @@ class SurvivalGameEngine {
     // 投票不活跃时静默忽略（避免与 cmd 1-6 冲突由 `^建\d+$` 限定）；活跃时调用 handleBuildVote
     const buildMatch = content_trim.match(/^建(\d{1,2})$/);
     if (buildMatch) {
-      if (!this._buildVote) return;
+      if (!this._buildVote) {
+        if (playerId && this._supporters && this._supporters.has(playerId)) {
+          const msg = {
+            type: 'build_propose_failed',
+            timestamp: Date.now(),
+            data: {
+              playerId,
+              reason: 'supporter_not_allowed',
+              unlockDay: 0,
+              buildingType: '',
+            },
+          };
+          if (!this._sendToPlayer(playerId, msg)) this._broadcast(msg);
+        }
+        return;
+      }
       const idx = parseInt(buildMatch[1]) - 1;
       if (idx >= 0 && idx < this._buildVote.options.length) {
         this.handleBuildVote(playerId, this._buildVote.proposalId, this._buildVote.options[idx]);
@@ -2354,7 +2373,7 @@ class SurvivalGameEngine {
     // - 已是助威者 → 走助威者分支（优先判断，避免 _trackContribution 污染后被误判为守护者）
     // - 已是正式守护者（contributions[playerId] !== undefined）→ 刷新活跃时间，走现有逻辑
     // - 还有守护者名额（totalPlayers < MAX_PLAYERS） → 绑定为守护者，走现有逻辑
-    // - 名额已满 → 进入助威者分支（_handleSupporterComment 内幂等注册 + 推 supporter_joined）
+    // - 名额已满 → 进入助威者分支；若 D1-D5 supporter_mode 未解锁，弹幕静默丢弃（§33.4）
     // §38：助威者/非 666 情况下，`探`/`召回` 也需要走到下方分支（_handleExpeditionSend 内部会返 supporter_not_allowed）
     const isExpeditionCmd = (content_trim === '探' || content_trim === '召回');
     if (playerId) {
@@ -2381,6 +2400,10 @@ class SurvivalGameEngine {
         if (cmd >= 1 && cmd <= 6) {
           this._handleSupporterComment(playerId, playerName, cmd);
         }
+        // 666 不是数字指令 cmd=1..6；满员观众必须先注册为助威者，D1-D5 未解锁则静默丢弃。
+        if (content_trim === '666' && !this._supporters.has(playerId)) {
+          if (!this._promoteToSupporter(playerId, playerName)) return;
+        }
         // 同上：`探`/`召回` 放行到下方发 supporter_not_allowed
         if (shouldBroadcastFirstBarrage) this._broadcastFirstBarrage(playerId, playerName, cmd);
         if (content_trim !== '666' && !isExpeditionCmd) return;
@@ -2401,9 +2424,15 @@ class SurvivalGameEngine {
       const cmdNames  = ['', 'food', 'coal', 'ore', 'heat'];
       const cmdLabels = ['', '采集食物', '挖掘煤炭', '开采矿石', '添柴升温'];
 
-      // 工作效果：小幅增加对应资源（服务器计算，不依赖客户端确认）
+      // Apply server rewards first; at night we still suppress work_command so Unity miners stay in defense formation.
       // ⚠️ 先执行 work effect 再广播，确保 playerStats.contribution 反映本次 +1 后的最新值
-      this._applyWorkEffect(cmd, playerId);
+      const shouldBroadcastWork = this._applyWorkEffect(cmd, playerId);
+      if (!shouldBroadcastWork) {
+        if (this.state === 'night') {
+          console.log(`[SurvivalEngine] night work cmd applied server-side without work_command: ${playerName} → ${cmdLabels[cmd]}`);
+        }
+        return;
+      }
 
       // §34.3 B9 playerStats（策划案 5158-5170）：work_command 广播附带触发者贡献快照
       //   客户端 PersonalContribUI.cs 按 playerId 过滤自身 → 实时刷新贡献/排名/仙女棒加成
@@ -2643,7 +2672,7 @@ class SurvivalGameEngine {
       const _catchUpMult = (_lc < 100) ? 3 : 1;
       this._lifetimeContrib[playerId] = _lc + gift.score * _catchUpMult;
       this._contribBalance[playerId]  = (this._contribBalance[playerId] || 0) + gift.score;
-      console.log(`[SurvivalEngine] D1-D5 overflow ghost: pid=${playerId} giftId=${gift.id} score=${gift.score} → 仅累加 _lifetimeContrib（策划案 §33.4 line 4731-4732）`);
+      console.log(`[SurvivalEngine] D1-D5 overflow ghost: pid=${playerId} giftId=${gift.id} score=${gift.score} → 累加 _lifetimeContrib + _contribBalance（不挂 contributions 榜，策划案 §33.4 line 4731-4732）`);
     } else {
       // 贡献值 = 礼物得分（策划案 §9）
       if (isSupporter) this._trackSupporterContribution(playerId, gift.score, 'gift');
@@ -2754,7 +2783,7 @@ class SurvivalGameEngine {
 
       case 'mystery_airdrop': {
         // audit-r6 P1-E6 §30.7：G03 限时皮肤（覆盖阶段皮肤，持续到下一次昼夜切换结束）
-        if (playerId) this._applyGiftSkin(playerId, 'G03');
+        if (playerId && !_isOverflowGhost) this._applyGiftSkin(playerId, 'G03');
         // 超级补给：食物+500、煤炭+200、矿石+100、城门+300HP；触发 GIFT_PAUSE 3000ms
         const addFood = this._applyThemeLootAmount(500);
         const addCoal = this._applyThemeLootAmount(200);
@@ -2776,7 +2805,7 @@ class SurvivalGameEngine {
         if (!wasGateMaxBeforeT6) {
           this._upgradeGate(playerId, 'gift_t6');
         }
-        if (playerId) {
+        if (playerId && !_isOverflowGhost) {
           // 🔴 audit-r45 GAP-E45-01：原直接 += contributions 绕过 _addContribution，导致 +100 漏更新 _lifetimeContrib + _contribBalance
           //   （大 R 玩家送 100 张 T6 漏 10000 终身贡献——影响等级/老用户豁免/B 类装备购买余额）
           //   改用 _addContribution 走双轨货币三字段同步累加。source 标 'gift' 让 _trackContribution 走礼物奖励路径
@@ -2883,7 +2912,7 @@ class SurvivalGameEngine {
       giftTierStr: gift.tier,                 // 'T1'~'T5'，供扩展使用
       giftValue,
       score:      gift.score,
-      contribution: gift.score,               // Unity SurvivalGiftData.contribution 字段别名
+      contribution: _isOverflowGhost ? 0 : gift.score, // Unity 本地榜别名；D1-D5 overflow 不挂榜
       // 礼物直接资源加成（扁平化，供 Unity 直接反序列化）
       addFood:    effects.addFood   || 0,
       addCoal:    effects.addCoal   || 0,
@@ -3494,6 +3523,14 @@ class SurvivalGameEngine {
     return (typeof slot === 'number') ? slot : -1;
   }
 
+  _isPlayerOnExpedition(playerId) {
+    if (!playerId || !this._expeditions || typeof this._expeditions.values !== 'function') return false;
+    for (const exp of this._expeditions.values()) {
+      if (exp && exp.playerId === playerId) return true;
+    }
+    return false;
+  }
+
   /** 找一个空槽位（0~MAX_PLAYERS-1）分配给新守护者；满员返回 -1 */
   _allocatePlayerSlot(playerId) {
     if (!playerId) return -1;
@@ -3508,6 +3545,12 @@ class SurvivalGameEngine {
     return -1;
   }
 
+  _expireMeteorFragmentPending(reason) {
+    if (!this._meteorFragmentPending) return;
+    this._meteorFragmentPending = false;
+    console.log(`[SurvivalEngine] meteor_fragment expired: ${reason || 'phase_changed'}`);
+  }
+
   // ==================== 内部：阶段切换 ====================
 
   _enterDay(day) {
@@ -3515,6 +3558,8 @@ class SurvivalGameEngine {
     this._scanGiftSkinExpiry();
     this._clearNightWaves();
     this._activeMonsters.clear();
+    this._nextMonsterWaveIndex = 0;
+    this._lastSpawnedMonsterWaveIndex = -1;
     this.state         = 'day';
 
     // audit-r8 §34 F4: 入白天 → 清零 Boss 弱点窗口（白天无 Boss，不应触发 weakness tick）
@@ -3623,6 +3668,9 @@ class SurvivalGameEngine {
     day = this._getCombatDay(day);
     // audit-r6 P1-E6 §30.7：昼夜切换到来 → 扫描限时皮肤过期（旧 phase 已结束，expireAt 到期）
     this._scanGiftSkinExpiry();
+    this._expireMeteorFragmentPending('day_ended');
+    this._nextMonsterWaveIndex = 0;
+    this._lastSpawnedMonsterWaveIndex = -1;
     this.state         = 'night';
     this.currentDay    = day;
 
@@ -3879,6 +3927,7 @@ class SurvivalGameEngine {
     // §38.6 失败降级 / 手动结束：进入外域的矿工直接取消探险（视同 recall，空手归来），
     //   避免客户端残留 ExpeditionMarkerUI；与 reset() 内的 _cancelAllExpeditions 语义对齐。
     //   注意：此时 state 仍是 'day' 或 'night'，_recallExpedition 会发 expedition_returned（空手）
+    this._expireMeteorFragmentPending('settlement_entered');
     this._cancelAllExpeditions(isManual ? 'manual' : 'demoted');
 
     // §35 Tribe War：本房间进入结算 → 立即断开参与的所有 session（攻击方/防守方均断）
@@ -4150,6 +4199,9 @@ class SurvivalGameEngine {
       if (this._tickCounter % 5 === 0) {
         this.remainingTime = Math.max(0, this.remainingTime - 1);
       }
+      if (this._tickCounter % 50 === 0) {
+        this._tickRecoveryMonstersIfActive();
+      }
       return;
     }
     if (this.state !== 'day' && this.state !== 'night') return;
@@ -4275,6 +4327,34 @@ class SurvivalGameEngine {
         }
       }
     }
+  }
+
+  _tickRecoveryMonstersIfActive() {
+    if (this.state !== 'recovery' || !this._activeMonsters || this._activeMonsters.size === 0) return;
+    if (Date.now() < (this._freezeUntilMs || 0)) return;
+
+    const monsters = [...this._activeMonsters.values()].filter((m) => m && m.currentHp > 0);
+    if (monsters.length === 0) return;
+
+    const aliveWorkers = Object.entries(this._workerHp || {})
+      .filter(([, w]) => w && !w.isDead)
+      .sort(([, a], [, b]) => (a.hp || 0) - (b.hp || 0));
+    if (aliveWorkers.length === 0) return;
+
+    const frostAuraSlowMult = this._getFrostAuraSlowMult();
+    const perHit = Math.max(1, Math.floor(this.monsterGateDamage * this._workerDamageMult * frostAuraSlowMult));
+    const hitCount = Math.max(1, Math.ceil(monsters.length / 3));
+    for (let i = 0; i < hitCount; i++) {
+      const target = aliveWorkers[i % aliveWorkers.length];
+      if (!target) continue;
+      this._damageWorker(target[0], perHit, { reason: 'wave' });
+    }
+
+    if (Object.values(this._workerHp || {}).some((w) => w && !w.isDead)) {
+      this._lastAliveAt = Date.now();
+    }
+    this._broadcastWorkerHp();
+    console.log(`[SurvivalEngine] recovery monsters acted: aliveMonsters=${monsters.length}, hits=${hitCount}, perHit=${perHit}`);
   }
 
   // ==================== §36 GlobalClock 驱动入口 ====================
@@ -4895,7 +4975,8 @@ class SurvivalGameEngine {
   }
 
   _applyWorkEffect(commandId, playerId) {
-    if (this.state !== 'day' && this.state !== 'night') return;
+    if (this.state !== 'day' && this.state !== 'night') return false;
+    if (this._isPlayerOnExpedition(playerId)) return false;
 
     // 综合效率倍率计算（策划案 §4.4 + §30 等级加成）
     // levelMult：等级效率系数（每级 +0.8%，Lv.100≈×1.79）
@@ -4981,6 +5062,8 @@ class SurvivalGameEngine {
       this._dayStats.contributions[playerId] = (this._dayStats.contributions[playerId] || 0) + 1;
       this._dayStats.totalDay++;
     }
+    // Night cmd 1-4 keeps server-side rewards (§36 snowstorm +1 ore), but no client work_command broadcast.
+    return this.state === 'day';
   }
 
   // ==================== 内部：怪物追踪 ====================
@@ -5028,6 +5111,7 @@ class SurvivalGameEngine {
   }
 
   _handleAttack(secOpenId, nickname) {
+    if (this._isPlayerOnExpedition(secOpenId)) return;
     const monsters = [...this._activeMonsters.values()].filter(m => m && m.currentHp > 0);
     if (monsters.length === 0) return;
 
@@ -5422,6 +5506,8 @@ class SurvivalGameEngine {
 
     let waveIndex = 0;
     let waitingPhaseActive = false;
+    this._nextMonsterWaveIndex = 0;
+    this._lastSpawnedMonsterWaveIndex = -1;
 
     // §37.2 watchtower 10s 预告：若建有瞭望塔，每个 wave 在实际 spawn 前 10s 广播 monster_wave_incoming
     //   firstAttackAt ≈ spawnsAt + 3500（怪物走路 3s + _attackCooldown 0.5s，与 §8.4 对齐）
@@ -5494,6 +5580,7 @@ class SurvivalGameEngine {
      */
     const spawnWithWaitingPhase = (wIdx, doSpawn, isBossWave) => {
       if (_engineRef.state !== 'night') return;
+      _engineRef._nextMonsterWaveIndex = wIdx;
       const remainingSec = _engineRef.remainingTime || 0;
       const remainingWavesAfter = Math.max(1, cfg.maxCount - wIdx); // 含本波
       const waitSec = computeWaitingSec(remainingSec, remainingWavesAfter, !!isBossWave);
@@ -5815,6 +5902,9 @@ class SurvivalGameEngine {
     }
 
     // §14 v1.27：废止 _monsterCntMult 后基线 = _dynamicCountMult × _earlyDayMult；§30.6 D1-5 期间 cap 1.0
+    this._lastSpawnedMonsterWaveIndex = waveIndex;
+    this._nextMonsterWaveIndex = Math.max(this._nextMonsterWaveIndex || 0, waveIndex + 1);
+
     const baseCnt    = cfg.baseCount + Math.floor((day - 1) * 0.5);
     const earlyMult  = this._getEarlyDayMult(this.fortressDay);
     const count      = Math.max(1, Math.round(baseCnt * (this._dynamicCountMult || 1.0) * earlyMult));
@@ -7302,6 +7392,54 @@ class SurvivalGameEngine {
       });
     }
     this._buildingInProgress.clear();
+  }
+
+  /** 主播手动拆除已建成建筑，返还 30% 建造成本。 */
+  handleBuildDemolish(playerId, buildId) {
+    const failDemolish = (reason) => {
+      const msg = {
+        type: 'build_propose_failed',
+        timestamp: Date.now(),
+        data: { reason, unlockDay: 0, buildingType: buildId || '' },
+      };
+      if (playerId && this._sendToPlayer(playerId, msg)) return false;
+      this._broadcast(msg);
+      return false;
+    };
+
+    if (this.state !== 'day') {
+      return failDemolish('wrong_phase');
+    }
+    if (this._isSeasonEnding()) {
+      return failDemolish('season_ending');
+    }
+    if (!BUILDING_CATALOG[buildId]) {
+      return failDemolish('already_built');
+    }
+    if (!this._buildings.has(buildId)) {
+      return failDemolish('not_built');
+    }
+
+    const cfg = BUILDING_CATALOG[buildId];
+    const refund = {
+      ore: Math.floor(((cfg.cost && cfg.cost.ore) || 0) * 0.30),
+      coal: Math.floor(((cfg.cost && cfg.cost.coal) || 0) * 0.30),
+      food: Math.floor(((cfg.cost && cfg.cost.food) || 0) * 0.30),
+    };
+
+    this._buildings.delete(buildId);
+    this.ore = Math.min(800, this.ore + refund.ore);
+    this.coal = Math.min(1500, this.coal + refund.coal);
+    this.food = Math.min(2000, this.food + refund.food);
+
+    this._broadcast({
+      type: 'build_demolished',
+      data: { buildId, reason: 'manual', refund },
+    });
+    this._broadcastResourceUpdate();
+    try { this._broadcastRoomState('build_demolished_manual'); } catch (e) { /* ignore */ }
+    console.log(`[Building] manual demolished: ${buildId} refund=${JSON.stringify(refund)}`);
+    return true;
   }
 
   /** 资源检查（内部） */
@@ -10625,7 +10763,7 @@ class SurvivalGameEngine {
       if (itemId === 'emergency_alert') {
         // 同波次同玩家限 1 次
         const lastWave = this._shopEmergencyAlertUsedWave[playerId];
-        const curWave  = this.currentDay;  // 以 currentDay 作为 wave 代理（MVP 简化）
+        const curWave  = this._getEmergencyAlertUseKey(this._getNextMonsterWaveIndexForAlert());
         if (lastWave !== undefined && lastWave === curWave) {
           return this._shopFailPurchase('per_game_limit', itemId, null, playerId);
         }
@@ -10690,6 +10828,22 @@ class SurvivalGameEngine {
     }
   }
 
+  _getNextMonsterWaveIndexForAlert() {
+    if (this.state === 'night') {
+      const next = Number.isFinite(this._nextMonsterWaveIndex)
+        ? this._nextMonsterWaveIndex
+        : ((Number.isFinite(this._lastSpawnedMonsterWaveIndex) ? this._lastSpawnedMonsterWaveIndex : -1) + 1);
+      return Math.max(0, Math.floor(next));
+    }
+    return 0;
+  }
+
+  _getEmergencyAlertUseKey(waveIdx) {
+    const day = Number.isFinite(this.currentDay) ? Math.max(0, Math.floor(this.currentDay)) : 0;
+    const wave = Number.isFinite(waveIdx) ? Math.max(0, Math.floor(waveIdx)) : 0;
+    return day * 1000 + wave;
+  }
+
   /**
    * §39 A 类效果执行（由 handleShopPurchase 扣费成功后调用）
    * worker_pep_talk: 下一波前 30s 采矿 +15%
@@ -10746,10 +10900,10 @@ class SurvivalGameEngine {
         const leadSec = this._buildings.has('watchtower')
           ? SHOP_EMERGENCY_ALERT_LEAD_SEC_WATCHTOWER
           : SHOP_EMERGENCY_ALERT_LEAD_SEC;
-        const waveIdx = this.currentDay; // MVP 简化：以 currentDay 代理 waveIdx
+        const waveIdx = this._getNextMonsterWaveIndexForAlert();
         const spawnsAt = now + leadSec * 1000;
         const firstAttackAt = spawnsAt + 3000;
-        this._shopEmergencyAlertUsedWave[sourcePlayerId] = waveIdx;
+        this._shopEmergencyAlertUsedWave[sourcePlayerId] = this._getEmergencyAlertUseKey(waveIdx);
         this._broadcast({
           type: 'monster_wave_incoming',
           data: {
@@ -10963,7 +11117,8 @@ class SurvivalGameEngine {
       }
       const path = require('path');
       const fs   = require('fs');
-      const file = path.join(__dirname, 'season_shop', `season_${normalizedNum}.json`);
+      let file = path.join(__dirname, 'season_shop', `season_${normalizedNum}.json`);
+      let loadedSeasonLabel = `season_${normalizedNum}`;
       if (!fs.existsSync(file)) {
         console.warn(`[Shop] loadSeason: file not found ${file}`);
         this._seasonShopPool = [];
@@ -10973,7 +11128,7 @@ class SurvivalGameEngine {
       const obj = JSON.parse(raw);
       const items = Array.isArray(obj.items) ? obj.items : [];
       this._seasonShopPool = items;
-      console.log(`[Shop] loadSeason: season_${normalizedNum} loaded ${items.length} SKUs`);
+      console.log(`[Shop] loadSeason: ${loadedSeasonLabel} loaded ${items.length} SKUs`);
       return items.length;
     } catch (e) {
       console.warn(`[Shop] loadSeason failed: ${e.message}`);

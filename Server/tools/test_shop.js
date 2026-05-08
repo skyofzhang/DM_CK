@@ -26,6 +26,7 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const SurvivalGameEngine = require(path.join(ROOT, 'src', 'SurvivalGameEngine'));
+const SurvivalRoom = require(path.join(ROOT, 'src', 'SurvivalRoom'));
 
 let passed = 0;
 let failed = 0;
@@ -64,6 +65,57 @@ function findBroadcast(eng, type, filter) {
 function clearBroadcasts(eng) {
   eng._capturedBroadcasts.length = 0;
 }
+
+function makeWs(playerId) {
+  const out = [];
+  return {
+    _playerId: playerId,
+    openId: playerId,
+    readyState: 1,
+    _sent: out,
+    send(raw) {
+      out.push(JSON.parse(raw));
+    },
+  };
+}
+
+function makeRoomForShopRoute() {
+  const room = new SurvivalRoom('shop_route_' + Math.floor(Math.random() * 1e6), {}, null, null);
+  room.isGMMode = false;
+  room._modeInitialized = true;
+  room.roomCreatorOpenId = 'creator';
+  room.seasonMgr = { seasonDay: 2 };
+  room.survivalEngine.seasonMgr = room.seasonMgr;
+  room.survivalEngine.state = 'day';
+
+  const wsCreator = makeWs('creator');
+  const wsViewer = makeWs('viewer');
+  room.roomCreatorWs = wsCreator;
+  room.clients.add(wsCreator);
+  room.clients.add(wsViewer);
+  return { room, wsCreator, wsViewer };
+}
+
+test('T0b: manual build_demolish removes completed building and refunds 30 percent cost', () => {
+  const eng = makeEngine();
+  eng.ore = 1;
+  eng.coal = 2;
+  eng.food = 3;
+  eng._buildings.add('market');
+  clearBroadcasts(eng);
+
+  const ok = eng.handleBuildDemolish('creator', 'market');
+
+  assert.strictEqual(ok, true, 'manual demolish should succeed for a completed building');
+  assert.ok(!eng._buildings.has('market'), 'building should be removed from completed set');
+  assert.strictEqual(eng.ore, 31, 'market refunds floor(100 * 0.3) ore');
+  assert.strictEqual(eng.food, 63, 'market refunds floor(200 * 0.3) food');
+  assert.strictEqual(eng.coal, 2, 'market has no coal refund');
+  const msg = findBroadcast(eng, 'build_demolished', d => d.buildId === 'market' && d.reason === 'manual');
+  assert.ok(msg, 'manual demolish should broadcast build_demolished');
+  assert.deepStrictEqual(msg.data.refund, { ore: 30, coal: 0, food: 60 }, 'refund payload should match catalog cost');
+  assert.ok(findBroadcast(eng, 'resource_update'), 'manual demolish should broadcast refreshed resources');
+});
 
 // ============================================================
 // T1: A 类购买扣 contributions（不动 _contribBalance / _lifetimeContrib）
@@ -377,6 +429,32 @@ test('T5: idle/loading 拒 wrong_phase；A 类 settlement 拒；B 类 settlement
   assert.ok(alertFail, 'emergency_alert 夜晚应 wrong_phase');
 });
 
+test('T5b: emergency_alert is limited by day and next wave key', () => {
+  const eng = makeEngine();
+  const pid = 'p5b_alert';
+  eng.state = 'day';
+  eng.currentDay = 7;
+  eng.contributions[pid] = 1000;
+  clearBroadcasts(eng);
+
+  eng.handleShopPurchase(pid, 'Alert', 'emergency_alert', null);
+  const incoming = findBroadcast(eng, 'monster_wave_incoming', d => d.waveIndex === 0);
+  assert.ok(incoming, 'day alert should announce wave 0');
+  assert.strictEqual(eng.contributions[pid], 700, 'first alert should charge once');
+
+  clearBroadcasts(eng);
+  eng.handleShopPurchase(pid, 'Alert', 'emergency_alert', null);
+  const perLimit = findBroadcast(eng, 'shop_purchase_failed', d => d.reason === 'per_game_limit');
+  assert.ok(perLimit, 'same day and wave key should be limited');
+  assert.strictEqual(eng.contributions[pid], 700, 'limited alert should not charge');
+
+  eng.currentDay = 8;
+  clearBroadcasts(eng);
+  eng.handleShopPurchase(pid, 'Alert', 'emergency_alert', null);
+  assert.ok(findBroadcast(eng, 'monster_wave_incoming', d => d.waveIndex === 0), 'same wave index on a new day should be allowed');
+  assert.strictEqual(eng.contributions[pid], 400, 'new day alert should charge');
+});
+
 // ============================================================
 // T6: _addContribution 原子同步三个字段
 // ============================================================
@@ -468,6 +546,13 @@ test('T8: loadSeason(season_1) 加载 B9/B10 赛季限定到 _seasonShopPool', (
   assert.ok(b9, 'D2 目录应包含 B9 供客户端灰化预览');
   assert.strictEqual(b9.minSeasonDay, 3, 'B9 payload 应携带 minSeasonDay=3');
   assert.strictEqual(b9.minLifetimeContrib, 1000, 'B9 payload 应携带 minLifetimeContrib=1000');
+});
+
+test('T8d: missing future season shop config does not expose season_1 limited SKUs', () => {
+  const eng = makeEngine();
+  const n = eng.loadSeason(99);
+  assert.strictEqual(n, 0, 'missing season_N should not load fallback defaults');
+  assert.strictEqual(eng._seasonShopPool.length, 0, 'missing season_N should leave limited pool empty');
 });
 
 test('T8a: archived ownedItems use persisted metadata when SKU is no longer listed', () => {
@@ -571,6 +656,21 @@ test('T9: A4 spotlight per-game 限 1 次（激活 spotlight_active / 结束后 
 // ============================================================
 // 总结
 // ============================================================
+test('T10: SurvivalRoom shop_purchase is not broadcaster-only', () => {
+  const { room, wsViewer } = makeRoomForShopRoute();
+  let captured = null;
+  room.survivalEngine.handleShopPurchase = (...args) => { captured = args; };
+
+  room.handleClientMessage(wsViewer, 'shop_purchase', { itemId: 'worker_pep_talk' });
+
+  assert.ok(captured, 'viewer shop_purchase should reach engine');
+  assert.strictEqual(captured[0], 'viewer', 'route must use ws player id');
+  assert.strictEqual(captured[2], 'worker_pep_talk');
+  assert.strictEqual(captured[4], 'hud');
+  const reject = wsViewer._sent.find(m => m.type === 'broadcaster_action_failed' && m.data && m.data.action === 'shop_purchase');
+  assert.ok(!reject, 'shop_purchase should not return broadcaster_action_failed');
+});
+
 console.log(`\n${'='.repeat(60)}`);
 console.log(`§39 Shop System MVP Tests: ${passed} PASS / ${failed} FAIL / ${passed + failed} TOTAL`);
 console.log('='.repeat(60));

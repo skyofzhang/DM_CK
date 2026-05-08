@@ -2,7 +2,7 @@
 // 用法: node Server/tools/smoke_test_ws.js
 const WebSocket = require('ws');
 
-const URL = 'ws://101.34.30.65:8081';
+const URL = process.env.SMOKE_WS_URL || 'ws://127.0.0.1:8081';
 const ROOM_ID = 'smoke_test_' + Date.now();
 const TIMEOUT_MS = 12000;
 
@@ -30,9 +30,11 @@ ws.on('open', () => {
   console.log('[smoke] WS open →', URL);
   ws.send(JSON.stringify({
     type: 'join_room',
-    roomId: ROOM_ID,
-    openId: 'smoke_' + Math.random().toString(36).slice(2, 8),
-    isGMMode: true,
+    data: {
+      roomId: ROOM_ID,
+      openId: 'smoke_' + Math.random().toString(36).slice(2, 8),
+      isGMMode: true,
+    },
   }));
 });
 

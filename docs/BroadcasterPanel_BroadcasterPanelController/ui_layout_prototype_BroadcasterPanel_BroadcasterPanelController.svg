@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <rect width="1080" height="1920" fill="#f4f7fa"/>
+  <rect x="24" y="24" width="1032" height="1872" rx="10" fill="none" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="54" y="76" font-size="34" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">BroadcasterPanel_BroadcasterPanelController 施工原型</text>
+  <text x="54" y="112" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569">1080x1920 竖屏；灰盒、坐标、节点名均为施工标注，最终效果图不要出现这些文字。</text>
+  <rect x="54" y="150" width="972" height="1" fill="#cbd5e1"/>
+<g id="block_0_SceneSafeArea">
+  <rect x="32" y="130" width="760" height="1360" rx="8" fill="#f7fbff" fill-opacity="1" stroke="#7aa6c2" stroke-width="3" stroke-dasharray="12 10"/>
+  <text x="50" y="172" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#2f5065">游戏画面安全区</text>
+  <text x="50" y="206" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#2f5065" opacity="0.85">SceneSafeArea</text>
+  <text x="50" y="1472" font-size="20" fill="#2f5065" opacity="0.75">左侧主视野</text>
+</g>
+<g id="block_1_PanelRoot">
+  <rect x="810" y="250" width="230" height="920" rx="8" fill="#e8f0f5" fill-opacity="0.98" stroke="#416075" stroke-width="3"/>
+  <text x="828" y="292" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#143042">主播控制台</text>
+  <text x="828" y="326" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#143042" opacity="0.85">PanelRoot</text>
+  <text x="828" y="1152" font-size="20" fill="#143042" opacity="0.75">工具按钮栈</text>
+</g>
+<g id="block_2_Boost/Event/Roulette/Shop">
+  <rect x="835" y="305" width="180" height="520" rx="8" fill="#d9edf7" fill-opacity="1" stroke="#2f6f88" stroke-width="3"/>
+  <text x="853" y="347" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#073042">功能按钮网格</text>
+  <text x="853" y="381" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#073042" opacity="0.85">Boost/Event/Roulette/Shop</text>
+  <text x="853" y="807" font-size="20" fill="#073042" opacity="0.75">含 CD 文案</text>
+</g>
+<g id="block_3_Building/Expedition/Gate">
+  <rect x="835" y="850" width="180" height="250" rx="8" fill="#f2f5f7" fill-opacity="1" stroke="#7b8a97" stroke-width="3"/>
+  <text x="853" y="892" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#243444">升级/建造/远征</text>
+  <text x="853" y="926" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#243444" opacity="0.85">Building/Expedition/Gate</text>
+  <text x="853" y="1082" font-size="20" fill="#243444" opacity="0.75">锁定态灰化</text>
+</g>
+<g id="block_4_BroadcasterDecisionHUD">
+  <rect x="110" y="1280" width="760" height="220" rx="8" fill="#fff2bd" fill-opacity="1" stroke="#b88912" stroke-width="3"/>
+  <text x="128" y="1322" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#6b4e00">决策 HUD 子面板</text>
+  <text x="128" y="1356" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#6b4e00" opacity="0.85">BroadcasterDecisionHUD</text>
+  <text x="128" y="1482" font-size="20" fill="#6b4e00" opacity="0.75">本面板覆盖，不单独跑</text>
+</g>
+<g id="block_5_StreamerPromptCard">
+  <rect x="110" y="1515" width="760" height="140" rx="8" fill="#f8fafc" fill-opacity="1" stroke="#94a3b8" stroke-width="3" stroke-dasharray="8 8"/>
+  <text x="128" y="1557" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#475569">主播话术卡</text>
+  <text x="128" y="1591" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569" opacity="0.85">StreamerPromptCard</text>
+  <text x="128" y="1637" font-size="20" fill="#475569" opacity="0.75">本面板覆盖，不单独跑</text>
+</g>
+  <rect x="54" y="1660" width="972" height="190" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="80" y="1700" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">Prefab 核对</text>
+  <text x="80" y="1734" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">脚本：FeatureLockOverlay, BroadcasterPanel</text>
+  <text x="80" y="1766" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">节点摘录：CdText / IconText / PanelRoot / RouletteButton / BuildingButton / ShopTabButton / SupporterModeButton / DisableOnboardingButton</text>
+<text x="80" y="1726" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：建</text>
+<text x="80" y="1760" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：海浪</text>
+<text x="80" y="1794" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：购</text>
+<text x="80" y="1828" font-size="22" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">示例文案：援</text>
+</svg>

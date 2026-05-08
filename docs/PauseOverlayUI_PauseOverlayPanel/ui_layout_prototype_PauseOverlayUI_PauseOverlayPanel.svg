@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <rect width="1080" height="1920" fill="#f4f7fa"/>
+  <rect x="24" y="24" width="1032" height="1872" rx="10" fill="none" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="54" y="76" font-size="34" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">PauseOverlayUI_PauseOverlayPanel 施工原型</text>
+  <text x="54" y="112" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569">1080x1920 竖屏；灰盒、坐标、节点名均为施工标注，最终效果图不要出现这些文字。</text>
+  <rect x="54" y="150" width="972" height="1" fill="#cbd5e1"/>
+<g id="block_0_PauseOverlayRoot/BgImage">
+  <rect x="0" y="0" width="1080" height="1920" rx="8" fill="#1f2937" fill-opacity="0.2" stroke="#334155" stroke-width="3"/>
+  <text x="18" y="42" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#e5e7eb">全屏遮罩</text>
+  <text x="18" y="76" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#e5e7eb" opacity="0.85">PauseOverlayRoot/BgImage</text>
+  <text x="18" y="1902" font-size="20" fill="#e5e7eb" opacity="0.75">黑色 alpha 0.7</text>
+</g>
+<g id="block_1_Title">
+  <rect x="120" y="790" width="840" height="120" rx="8" fill="#fff2bd" fill-opacity="1" stroke="#b88912" stroke-width="3"/>
+  <text x="138" y="832" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#6b4e00">暂停标题</text>
+  <text x="138" y="866" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#6b4e00" opacity="0.85">Title</text>
+  <text x="138" y="892" font-size="20" fill="#6b4e00" opacity="0.75">游戏已暂停</text>
+</g>
+<g id="block_2_Subtitle">
+  <rect x="180" y="915" width="720" height="70" rx="8" fill="#f2f5f7" fill-opacity="1" stroke="#7b8a97" stroke-width="3"/>
+  <text x="198" y="950" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#243444">副标题</text>
+  <text x="198" y="982" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#243444" opacity="0.85">Subtitle</text>
+  <text x="198" y="967" font-size="20" fill="#243444" opacity="0.75">GM 调试模式 — 等待主播恢复</text>
+</g>
+<g id="block_3_RaycastBlocker">
+  <rect x="0" y="0" width="1080" height="1920" rx="8" fill="#f8fafc" fill-opacity="1" stroke="#94a3b8" stroke-width="3" stroke-dasharray="8 8"/>
+  <text x="18" y="42" font-size="30" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#475569">点击阻挡层</text>
+  <text x="18" y="76" font-size="19" font-family="Microsoft YaHei, Arial, sans-serif" fill="#475569" opacity="0.85">RaycastBlocker</text>
+  <text x="18" y="1902" font-size="20" fill="#475569" opacity="0.75">施工标注，不出现在效果图</text>
+</g>
+  <rect x="54" y="1660" width="972" height="190" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="80" y="1700" font-size="24" font-family="Microsoft YaHei, Arial, sans-serif" font-weight="700" fill="#0f172a">Prefab 核对</text>
+  <text x="80" y="1734" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">脚本：PauseOverlayUI</text>
+  <text x="80" y="1766" font-size="20" font-family="Microsoft YaHei, Arial, sans-serif" fill="#334155">节点摘录：仅根节点或运行时生成</text>
+
+</svg>

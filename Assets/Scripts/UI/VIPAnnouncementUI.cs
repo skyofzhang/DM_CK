@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.Video;
 using DrscfZ.Core;
+using DrscfZ.Survival;
 using DrscfZ.Systems;
 
 namespace DrscfZ.UI
@@ -32,28 +33,57 @@ namespace DrscfZ.UI
         [SerializeField] private VideoClip monthlyRank4_10Clip;
         [SerializeField] private VideoClip monthlyRank11_20Clip;
 
-        private CampSystem _campSystem;
-        private bool       _subscribed;
+        [Header("商城入场特效")]
+        [SerializeField] private VideoClip entranceSparkClip;
+        [SerializeField] private float     entranceSparkDuration = 3f;
+
+        private CampSystem          _campSystem;
+        private SurvivalGameManager _survivalManager;
+        private bool                _campSubscribed;
+        private bool                _survivalSubscribed;
+        private float               _nextSubscribeRetryAt;
 
         // ==================== 生命周期 ====================
 
         private void Start()    => TrySubscribe();
         private void OnEnable() => TrySubscribe();
+        private void Update()
+        {
+            if (_campSubscribed && _survivalSubscribed) return;
+            if (Time.unscaledTime < _nextSubscribeRetryAt) return;
+            _nextSubscribeRetryAt = Time.unscaledTime + 1f;
+            TrySubscribe();
+        }
 
         private void TrySubscribe()
         {
-            if (_subscribed) return;
-            _campSystem = FindObjectOfType<CampSystem>();
-            if (_campSystem == null) return;
+            if (!_campSubscribed)
+            {
+                _campSystem = FindObjectOfType<CampSystem>();
+                if (_campSystem != null)
+                {
+                    _campSystem.OnVIPJoined += HandleVIPJoined;
+                    _campSubscribed = true;
+                }
+            }
 
-            _campSystem.OnVIPJoined += HandleVIPJoined;
-            _subscribed = true;
+            if (!_survivalSubscribed)
+            {
+                _survivalManager = SurvivalGameManager.Instance ?? FindObjectOfType<SurvivalGameManager>();
+                if (_survivalManager != null)
+                {
+                    _survivalManager.OnEntranceSparkTriggered += HandleEntranceSparkTriggered;
+                    _survivalSubscribed = true;
+                }
+            }
         }
 
         private void OnDestroy()
         {
             if (_campSystem != null)
                 _campSystem.OnVIPJoined -= HandleVIPJoined;
+            if (_survivalManager != null)
+                _survivalManager.OnEntranceSparkTriggered -= HandleEntranceSparkTriggered;
         }
 
         // ==================== VIP 入场处理 ====================
@@ -79,6 +109,26 @@ namespace DrscfZ.UI
                 : $"第{data.vipRank}名";
 
             anim.ShowVIPEffect(clip, data.playerName, title, playDuration);
+        }
+
+        private void HandleEntranceSparkTriggered(EntranceSparkTriggeredData data)
+        {
+            if (!gameObject.activeInHierarchy) return;
+            if (!SettingsPanelUI.VIPVideoEnabled) return;
+
+            var anim = GiftAnimationUI.Instance;
+            if (anim == null)
+            {
+                Debug.LogWarning("[VIPAnnouncementUI] GiftAnimationUI.Instance 为 null，无法播放商城入场特效");
+                return;
+            }
+
+            var clip = GetEntranceSparkClip();
+            if (clip == null) return;
+
+            string playerName = string.IsNullOrEmpty(data?.playerName) ? "玩家" : data.playerName;
+            float duration = Mathf.Max(0.5f, entranceSparkDuration);
+            anim.ShowVIPEffect(clip, playerName, "火花入场", duration);
         }
 
         /// <summary>根据 vipType / vipRank 选择对应视频及播放时长</summary>
@@ -116,6 +166,17 @@ namespace DrscfZ.UI
                 return isMonthly ? monthlyRank11_20Clip : weeklyRank11_20Clip;
             }
             return null;
+        }
+
+        private VideoClip GetEntranceSparkClip()
+        {
+            return entranceSparkClip
+                ?? weeklyRank4_10Clip
+                ?? weeklyRank11_20Clip
+                ?? weeklyRank3Clip
+                ?? monthlyRank4_10Clip
+                ?? monthlyRank11_20Clip
+                ?? monthlyRank3Clip;
         }
 
         // ==================== 外部调用 ====================

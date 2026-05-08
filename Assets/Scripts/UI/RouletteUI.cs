@@ -83,6 +83,75 @@ namespace DrscfZ.UI
         // ==================== 卡名中文表 ====================
 
         /// <summary>6 张卡的中文显示名（定格/展示通用）</summary>
+        private void EnsureFallbackUI()
+        {
+            if (_panel != null) return;
+            if (transform.parent == null)
+                transform.SetParent(RuntimeUIFactory.GetCanvasTransform(), false);
+
+            _panel = RuntimeUIFactory.CreatePanel(
+                transform,
+                "RoulettePanel",
+                new Vector2(0.5f, 0.5f),
+                new Vector2(0.5f, 0.5f),
+                Vector2.zero,
+                new Vector2(760f, 420f),
+                new Color(0.05f, 0.07f, 0.10f, 0.96f));
+            RuntimeUIFactory.AddVerticalLayout(_panel, 12f, new RectOffset(24, 24, 22, 22));
+
+            var title = RuntimeUIFactory.CreateText(_panel.transform, "Title", "Event Roulette", 30f,
+                new Color(1f, 0.86f, 0.25f), TextAlignmentOptions.Center, new Vector2(700f, 42f));
+            RuntimeUIFactory.AddLayoutElement(title.gameObject, 42f);
+
+            var cards = new GameObject("Cards", typeof(RectTransform), typeof(HorizontalLayoutGroup));
+            cards.transform.SetParent(_panel.transform, false);
+            RuntimeUIFactory.AddLayoutElement(cards, 110f);
+            var row = cards.GetComponent<HorizontalLayoutGroup>();
+            row.spacing = 12f;
+            row.childAlignment = TextAnchor.MiddleCenter;
+            row.childControlWidth = false;
+            row.childControlHeight = true;
+            row.childForceExpandWidth = false;
+            row.childForceExpandHeight = true;
+
+            _card1Text = CreateFallbackCard(cards.transform, "Card1");
+            _card2Text = CreateFallbackCard(cards.transform, "Card2");
+            _card3Text = CreateFallbackCard(cards.transform, "Card3");
+
+            _descText = RuntimeUIFactory.CreateText(_panel.transform, "Description", "", 22f,
+                Color.white, TextAlignmentOptions.Center, new Vector2(700f, 90f));
+            RuntimeUIFactory.AddLayoutElement(_descText.gameObject, 90f);
+
+            btnConfirm = RuntimeUIFactory.CreateButton(_panel.transform, "Confirm", "Apply", out _,
+                new Color(0.18f, 0.43f, 0.28f, 0.96f), new Vector2(260f, 54f));
+            RuntimeUIFactory.AddLayoutElement(btnConfirm.gameObject, 54f);
+
+            _countdownText = RuntimeUIFactory.CreateText(_panel.transform, "Countdown", "", 20f,
+                new Color(1f, 0.86f, 0.25f), TextAlignmentOptions.Center, new Vector2(700f, 32f));
+            RuntimeUIFactory.AddLayoutElement(_countdownText.gameObject, 32f);
+        }
+
+        private static TMP_Text CreateFallbackCard(Transform parent, string name)
+        {
+            var card = RuntimeUIFactory.CreatePanel(
+                parent,
+                name,
+                new Vector2(0.5f, 0.5f),
+                new Vector2(0.5f, 0.5f),
+                Vector2.zero,
+                new Vector2(210f, 100f),
+                new Color(0.14f, 0.18f, 0.24f, 0.98f));
+            RuntimeUIFactory.AddLayoutElement(card, 100f, 210f);
+            var text = RuntimeUIFactory.CreateText(card.transform, "Label", "--", 22f,
+                Color.white, TextAlignmentOptions.Center, new Vector2(200f, 90f));
+            var rt = text.GetComponent<RectTransform>();
+            rt.anchorMin = Vector2.zero;
+            rt.anchorMax = Vector2.one;
+            rt.offsetMin = new Vector2(8f, 6f);
+            rt.offsetMax = new Vector2(-8f, -6f);
+            return text;
+        }
+
         private static string CardDisplayName(string cardId)
         {
             return cardId switch
@@ -126,6 +195,7 @@ namespace DrscfZ.UI
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
 
+            EnsureFallbackUI();
             if (_panel != null) _panel.SetActive(false);
         }
 

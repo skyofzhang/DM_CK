@@ -62,6 +62,7 @@ namespace DrscfZ.UI
 
         private void Start()
         {
+            EnsureRuntimeLayout();
             if (_bgImage != null) _bgImage.color = BG_TINT;
             TrySubscribe();
         }
@@ -154,6 +155,7 @@ namespace DrscfZ.UI
 
         private void PushRow(string text)
         {
+            EnsureRuntimeLayout();
             if (_container == null) return;
 
             // 超员时淡出最老一行
@@ -172,6 +174,28 @@ namespace DrscfZ.UI
 
             // 最新一行插到顶部（sibling index 0）
             item.go.transform.SetSiblingIndex(0);
+        }
+
+        private void EnsureRuntimeLayout()
+        {
+            if (_container != null) return;
+
+            var rt = RuntimeUIFactory.EnsureRectTransform(transform);
+            rt.SetParent(RuntimeUIFactory.GetCanvasTransform(), false);
+            rt.anchorMin = new Vector2(0f, 0.5f);
+            rt.anchorMax = new Vector2(0f, 0.5f);
+            rt.pivot = new Vector2(0f, 0.5f);
+            rt.anchoredPosition = new Vector2(24f, -96f);
+            rt.sizeDelta = new Vector2(360f, 168f);
+
+            _bgImage = gameObject.GetComponent<Image>() ?? gameObject.AddComponent<Image>();
+            _bgImage.color = BG_TINT;
+
+            if (gameObject.GetComponent<VerticalLayoutGroup>() == null)
+            {
+                RuntimeUIFactory.AddVerticalLayout(gameObject, 4f, new RectOffset(10, 10, 10, 10), TextAnchor.UpperLeft);
+            }
+            _container = rt;
         }
 
         private RowItem CreateRow(string text)

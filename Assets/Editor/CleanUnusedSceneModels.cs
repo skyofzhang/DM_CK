@@ -94,19 +94,39 @@ public class CleanUnusedSceneModels
 
         if (doDelete && toDelete.Count > 0)
         {
+            if (!EditorUtility.DisplayDialog(
+                    "Clean Unused Scene Models",
+                    $"Delete {toDelete.Count} unused model asset items and free ~{unusedMB:F1} MB?",
+                    "Delete",
+                    "Cancel"))
+            {
+                Debug.Log("[CleanModels] DELETE cancelled by user.");
+                return;
+            }
+
             int deleted = 0;
             foreach (var path in toDelete)
             {
-                if (Directory.Exists(path))
+                string assetPath = ToAssetPath(path);
+                if (string.IsNullOrEmpty(assetPath) || !assetPath.StartsWith("Assets/"))
                 {
-                    Directory.Delete(path, true);
-                    deleted++;
+                    Debug.LogWarning($"[CleanModels] Skip non-project path: {path}");
+                    continue;
                 }
-                else if (File.Exists(path))
+
+                bool ok;
+                if (assetPath.EndsWith(".meta"))
                 {
-                    File.Delete(path);
-                    deleted++;
+                    FileUtil.DeleteFileOrDirectory(path);
+                    ok = !File.Exists(path);
                 }
+                else
+                {
+                    ok = AssetDatabase.DeleteAsset(assetPath);
+                }
+
+                if (ok) deleted++;
+                else Debug.LogWarning($"[CleanModels] Failed to delete: {assetPath}");
             }
             AssetDatabase.Refresh();
             Debug.Log($"[CleanModels] DELETED {deleted} items, freed ~{unusedMB:F1} MB");
@@ -119,5 +139,16 @@ public class CleanUnusedSceneModels
                 Debug.Log($"  Would delete: {toDelete[i]}");
             if (toDelete.Count > 20) Debug.Log($"  ... and {toDelete.Count - 20} more");
         }
+    }
+
+    static string ToAssetPath(string fullPath)
+    {
+        string projectRoot = Directory.GetParent(Application.dataPath).FullName;
+        string normalizedFull = Path.GetFullPath(fullPath);
+        string normalizedRoot = Path.GetFullPath(projectRoot);
+        if (!normalizedFull.StartsWith(normalizedRoot)) return null;
+        string rel = normalizedFull.Substring(normalizedRoot.Length)
+            .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return rel.Replace('\\', '/');
     }
 }

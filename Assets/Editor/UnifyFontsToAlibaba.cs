@@ -60,6 +60,11 @@ namespace DrscfZ.EditorTools
             }
 
             Debug.Log($"[UnifyFontsToAlibaba] 目标字体: {targetFont.name}");
+            if (HasDirtyOpenScenes())
+            {
+                Debug.LogError("[UnifyFontsToAlibaba] Open scenes have unsaved changes. Save them before running this batch tool.");
+                return;
+            }
 
             // ───── 扫描 1: 所有场景 ─────
             int sceneTmpCount = ProcessAllScenes(targetFont);
@@ -80,11 +85,20 @@ namespace DrscfZ.EditorTools
         // =========================================================================
         //  场景处理
         // =========================================================================
+        private static bool HasDirtyOpenScenes()
+        {
+            for (int i = 0; i < SceneManager.sceneCount; i++)
+            {
+                var scene = SceneManager.GetSceneAt(i);
+                if (scene.isDirty) return true;
+            }
+            return false;
+        }
+
         private static int ProcessAllScenes(TMP_FontAsset targetFont)
         {
             int total = 0;
             var originalScenePath = EditorSceneManager.GetActiveScene().path;
-            bool originalDirty = EditorSceneManager.GetActiveScene().isDirty;
 
             // 收集所有 .unity 场景(去重: build settings + Assets/Scenes)
             var sceneSet = new HashSet<string>();

@@ -35,6 +35,7 @@ namespace DrscfZ.UI
 
         private void Start()
         {
+            EnsureRuntimeLabel();
             if (_label != null) _label.text = "";
             TrySubscribe();
         }
@@ -96,6 +97,19 @@ namespace DrscfZ.UI
         }
 
         // ── 显示 ──────────────────────────────────────────────────────
+
+        private void EnsureRuntimeLabel()
+        {
+            if (_label != null) return;
+            _label = RuntimeUIFactory.CreateText(RuntimeUIFactory.GetCanvasTransform(), "SupporterTopBarLabel",
+                "", 22f, Color.white, TextAlignmentOptions.MidlineRight, new Vector2(420f, 36f));
+            var rt = _label.GetComponent<RectTransform>();
+            rt.anchorMin = new Vector2(1f, 1f);
+            rt.anchorMax = new Vector2(1f, 1f);
+            rt.pivot = new Vector2(1f, 1f);
+            rt.anchoredPosition = new Vector2(-24f, -64f);
+            _label.enableWordWrapping = false;
+        }
 
         private void Refresh()
         {

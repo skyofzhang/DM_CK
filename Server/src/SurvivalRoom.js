@@ -887,6 +887,15 @@ class SurvivalRoom {
         this.survivalEngine.handleBuildVote(pid, proposalId, buildId);
         break;
       }
+      case 'build_demolish': {
+        if (!this._requireBroadcaster(ws, 'build_demolish')) break;
+        if (!this._checkFeatureOrFail('building', 'build_propose_failed', {}, ws)) break;
+        const pid = ws._playerId || '';
+        const buildId = (data && data.buildId) || '';
+        const ok = this.survivalEngine.handleBuildDemolish(pid, buildId);
+        this._gmAudit(ws, 'build_demolish', { buildId, ok });
+        break;
+      }
 
       // ==================== §39 商店系统 ====================
       // PM 决策（MVP）：_roomCreatorId 鉴权放开，引擎内不校验 isRoomCreator；
@@ -926,8 +935,9 @@ class SurvivalRoom {
         // §36.12 shop 门槛
         const itemIdPr = (data && data.itemId) || '';
         if (!this._checkFeatureOrFail('shop', 'shop_purchase_failed', { itemId: itemIdPr }, ws)) break;
-        if (!this._requireBroadcaster(ws, 'shop_purchase')) break;
         // { itemId, pendingId? }
+        // §39.4/§39.7: shop_purchase is the shared commit path for player purchases
+        // and broadcaster HUD confirmations. Only shop_purchase_prepare is broadcaster-only.
         const pid       = ws._playerId || '';
         const pname     = (data && data.playerName)
                           || (this.survivalEngine.playerNames && this.survivalEngine.playerNames[pid])
@@ -1042,6 +1052,8 @@ class SurvivalRoom {
         //   原代码无主播守门 → 任意客户端可查跨房列表泄露元信息（roomId/streamerName/state/fortressDay/...）
         //   修复：与 _requireBroadcaster 行为一致，非主播单播 broadcaster_action_failed { reason: 'not_broadcaster' }
         if (!this._requireBroadcaster(ws, 'tribe_war_room_list')) break;
+        // §36.12 tribe_war 门槛（seasonDay ≥ 7）：房间列表本身也属于攻防战功能，不能只锁 attack 按钮。
+        if (!this._checkFeatureOrFail('tribe_war', 'tribe_war_attack_failed', {}, ws)) break;
         if (!this.tribeWarMgr) {
           this._sendToClient(ws, { type: 'tribe_war_room_list_result', data: { rooms: [] } });
           break;
@@ -1112,13 +1124,23 @@ class SurvivalRoom {
         if (!this.tribeWarMgr) break;
         // 🔴 audit-r41 GAP-PM41-01: 全部改用 _sendToClient helper，自动注入 B01 协议头三字段
         const underAttackSid = this.tribeWarMgr._defenderToSession.get(this.roomId);
-        if (!underAttackSid) {
+        const retaliationWindow = !underAttackSid && typeof this.tribeWarMgr.getRetaliationTarget === 'function'
+          ? this.tribeWarMgr.getRetaliationTarget(this.roomId)
+          : null;
+        if (!underAttackSid && !retaliationWindow) {
           this._sendToClient(ws, { type: 'tribe_war_attack_failed', data: { reason: 'not_under_attack' } });
           break;
         }
-        const atkSession = this.tribeWarMgr._sessions.get(underAttackSid);
-        const targetRoomId = (data && data.targetRoomId) ||
-                             (atkSession && atkSession.attacker && atkSession.attacker.roomId);
+        const atkSession = underAttackSid ? this.tribeWarMgr._sessions.get(underAttackSid) : null;
+        const expectedTargetRoomId = retaliationWindow
+          ? retaliationWindow.targetRoomId
+          : (atkSession && atkSession.attacker && atkSession.attacker.roomId);
+        const requestedTargetRoomId = data && data.targetRoomId;
+        if (requestedTargetRoomId && expectedTargetRoomId && requestedTargetRoomId !== expectedTargetRoomId) {
+          this._sendToClient(ws, { type: 'tribe_war_attack_failed', data: { reason: 'not_under_attack', targetRoomId: requestedTargetRoomId } });
+          break;
+        }
+        const targetRoomId = expectedTargetRoomId || requestedTargetRoomId;
         if (!targetRoomId) {
           // 🔴 audit-r45 GAP-D45-09：补 targetRoomId（即使 fallback 失败也传空字符串保字段一致）
           this._sendToClient(ws, { type: 'tribe_war_attack_failed', data: { reason: 'room_not_found', targetRoomId: '' } });
@@ -1131,6 +1153,8 @@ class SurvivalRoom {
           const failData = { reason: res.reason, targetRoomId };  // r45 GAP-D45-09 补 targetRoomId
           if (res.cooldownMs !== undefined) failData.cooldownMs = res.cooldownMs;
           this._sendToClient(ws, { type: 'tribe_war_attack_failed', data: failData });
+        } else if (typeof this.tribeWarMgr.clearRetaliationWindow === 'function') {
+          this.tribeWarMgr.clearRetaliationWindow(this.roomId);
         }
         this._gmAudit(ws, 'tribe_war_retaliate', { targetRoomId, damageMultiplier: _dm });
         break;

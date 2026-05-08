@@ -971,12 +971,21 @@ namespace DrscfZ.Survival
         public string buildId;
     }
 
+    [Serializable]
+    public class BuildRefundData
+    {
+        public int ore;
+        public int coal;
+        public int food;
+    }
+
     /// <summary>单个建筑拆除（type=build_demolished）</summary>
     [Serializable]
     public class BuildDemolishedData
     {
         public string buildId;
         public string reason;           // 'manual'/'attacked'/'demoted'/'demoted_during_build'
+        public BuildRefundData refund;  // manual 拆除时返回 30% 成本；其他原因可为空
     }
 
     /// <summary>建造提议被拒（type=build_propose_failed）
@@ -1325,6 +1334,15 @@ namespace DrscfZ.Survival
         public int    stolenFood;
         public int    stolenCoal;
         public int    stolenOre;
+    }
+
+    [Serializable]
+    public class TribeWarRetaliationStartedData
+    {
+        public string defenderRoomId;
+        public string targetRoomId;
+        public long   expiresAt;
+        public long   cooldownMs;
     }
 
     // ==================== §17.15 新手引导气泡（🆕 v1.27） ====================

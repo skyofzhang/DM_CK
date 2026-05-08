@@ -42,7 +42,37 @@ namespace DrscfZ.UI
         {
             if (Instance != null && Instance != this) { return; }
             Instance = this;
+            EnsureFallbackUI();
             if (_panel != null) _panel.SetActive(false);
+        }
+
+        private void EnsureFallbackUI()
+        {
+            if (_panel != null && _titleText != null) return;
+            if (transform.parent == null)
+                transform.SetParent(RuntimeUIFactory.GetCanvasTransform(), false);
+
+            _panel = RuntimeUIFactory.CreatePanel(transform, "RoomFailedBannerPanel",
+                new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
+                new Vector2(0f, -150f), new Vector2(680f, 190f),
+                new Color(0.40f, 0.06f, 0.08f, 0.94f));
+            RuntimeUIFactory.AddVerticalLayout(_panel, 8f, new RectOffset(24, 24, 18, 18));
+
+            _titleText = RuntimeUIFactory.CreateText(_panel.transform, "Title", "房间失守", 30f,
+                new Color(1f, 0.92f, 0.72f), TextAlignmentOptions.Center, new Vector2(620f, 40f));
+            RuntimeUIFactory.AddLayoutElement(_titleText.gameObject, 42f);
+
+            _fortressChangeText = RuntimeUIFactory.CreateText(_panel.transform, "FortressChange", "堡垒日 Lv.0 -> Lv.0", 22f,
+                new Color(1f, 0.72f, 0.38f), TextAlignmentOptions.Center, new Vector2(620f, 32f));
+            RuntimeUIFactory.AddLayoutElement(_fortressChangeText.gameObject, 34f);
+
+            _reasonText = RuntimeUIFactory.CreateText(_panel.transform, "Reason", "未知原因", 22f,
+                Color.white, TextAlignmentOptions.Center, new Vector2(620f, 32f));
+            RuntimeUIFactory.AddLayoutElement(_reasonText.gameObject, 34f);
+
+            _closeButton = RuntimeUIFactory.CreateButton(_panel.transform, "CloseButton", "关闭", out _,
+                new Color(0.72f, 0.18f, 0.18f, 1f), new Vector2(180f, 44f));
+            RuntimeUIFactory.AddLayoutElement(_closeButton.gameObject, 44f);
         }
 
         private void Start()

@@ -29,6 +29,8 @@ class TribeWarManager {
     this._defenderToSession = new Map();
     /** @type {Map<string, number>} attackerRoomId → cooldownEndTs — §35 P2 手动停止 60s 冷却 */
     this._manualStopCooldowns = new Map();
+    /** @type {Map<string, {targetRoomId:string, expiresAt:number}>} defenderRoomId -> retaliation window */
+    this._retaliationWindows = new Map();
     this._sessionIdCounter = 0;
     console.log('[TribeWarManager] Initialized');
   }
@@ -134,6 +136,8 @@ class TribeWarManager {
     this._sessions.set(sessionId, session);
     this._attackerToSession.set(attackerRoomId, sessionId);
     this._defenderToSession.set(defenderRoomId, sessionId);
+    this.clearRetaliationWindow(attackerRoomId);
+    this.clearRetaliationWindow(defenderRoomId);
 
     // 双向通知（attacker → tribe_war_attack_started；defender → tribe_war_under_attack）
     const atkName = attacker.streamerName || attackerRoomId;
@@ -207,6 +211,7 @@ class TribeWarManager {
       const s = this._sessions.get(asDefender);
       if (s) this._endSession(s, 'settlement');
     }
+    this._clearRetaliationWindowsForRoom(roomId);
   }
 
   /**
@@ -223,6 +228,7 @@ class TribeWarManager {
       const s = this._sessions.get(asDefender);
       if (s) this._endSession(s, 'room_destroyed');
     }
+    this._clearRetaliationWindowsForRoom(roomId);
   }
 
   // ==================== 能量 / 远征怪 ====================
@@ -265,6 +271,38 @@ class TribeWarManager {
   getSessionAsDefender(roomId) {
     const sid = this._defenderToSession.get(roomId);
     return sid ? this._sessions.get(sid) : null;
+  }
+
+  _pruneRetaliationWindow(roomId) {
+    const win = this._retaliationWindows.get(roomId);
+    if (!win) return null;
+    if (!win.expiresAt || win.expiresAt <= Date.now()) {
+      this._retaliationWindows.delete(roomId);
+      return null;
+    }
+    return win;
+  }
+
+  getRetaliationTarget(defenderRoomId) {
+    const win = this._pruneRetaliationWindow(defenderRoomId);
+    if (!win) return null;
+    return {
+      targetRoomId: win.targetRoomId,
+      expiresAt: win.expiresAt,
+      cooldownMs: Math.max(0, win.expiresAt - Date.now()),
+    };
+  }
+
+  clearRetaliationWindow(roomId) {
+    if (roomId) this._retaliationWindows.delete(roomId);
+  }
+
+  _clearRetaliationWindowsForRoom(roomId) {
+    if (!roomId) return;
+    this._retaliationWindows.delete(roomId);
+    for (const [defenderRoomId, win] of [...this._retaliationWindows.entries()]) {
+      if (win && win.targetRoomId === roomId) this._retaliationWindows.delete(defenderRoomId);
+    }
   }
 
   // ==================== 内部 ====================
@@ -311,7 +349,31 @@ class TribeWarManager {
 
     // §35 P2 手动停止 → 给 attacker 60s 冷却（仅 reason === 'manual' 生效）
     if (reason === 'manual' && session.attacker && session.attacker.roomId) {
-      this._manualStopCooldowns.set(session.attacker.roomId, Date.now() + 60000);
+      const now = Date.now();
+      this._manualStopCooldowns.set(session.attacker.roomId, now + 60000);
+      if (session.defender && session.defender.roomId) {
+        const expiresAt = now + 60000;
+        this._retaliationWindows.set(session.defender.roomId, {
+          targetRoomId: session.attacker.roomId,
+          expiresAt,
+        });
+        try {
+          if (session.defender.status !== 'destroyed') {
+            session.defender.broadcast({
+              type: 'tribe_war_retaliation_started',
+              timestamp: now,
+              data: {
+                defenderRoomId: session.defender.roomId,
+                targetRoomId: session.attacker.roomId,
+                expiresAt,
+                cooldownMs: 60000,
+              },
+            });
+          }
+        } catch (e) {
+          console.warn(`[TribeWarManager] retaliation broadcast error: ${e.message}`);
+        }
+      }
     }
 
     // §35 P2 战报持久化：向双方 engine._warReports 追加一条（10 条滑动窗口由 engine 自行维持）
@@ -375,6 +437,7 @@ class TribeWarManager {
     this._sessions.clear();
     this._attackerToSession.clear();
     this._defenderToSession.clear();
+    this._retaliationWindows.clear();
     console.log('[TribeWarManager] Shutdown');
   }
 
@@ -396,6 +459,7 @@ class TribeWarManager {
     }
     // 赛季切换同时清冷却（避免跨赛季继承 60s 冷却）
     this._manualStopCooldowns.clear();
+    this._retaliationWindows.clear();
     if (count > 0) {
       console.log(`[TribeWarManager] stopAllSessions: ${count} session(s) terminated (reason=${r})`);
     }
