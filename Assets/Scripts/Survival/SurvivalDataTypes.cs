@@ -791,6 +791,15 @@ namespace DrscfZ.Survival
         public string cardId;
     }
 
+    /// <summary>轮盘抽奖失败（type=roulette_spin_failed）。</summary>
+    [Serializable]
+    public class RouletteSpinFailedData
+    {
+        public string reason;
+        public int unlockDay;
+        public long cooldownMs;
+    }
+
     /// <summary>神秘商人交易卡（2 选 1 中单张）</summary>
     [Serializable]
     public class TraderCard

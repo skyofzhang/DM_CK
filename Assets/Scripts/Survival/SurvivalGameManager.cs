@@ -3592,10 +3592,10 @@ namespace DrscfZ.Survival
         private void HandleTribeWarAttackFailed(TribeWarAttackFailedData data)
         {
             OnTribeWarAttackFailed?.Invoke(data);
-            string reasonText = FormatTribeWarFailReason(data.reason, data.cooldownMs);
+            string reasonText = FormatTribeWarFailReason(data.reason, data.cooldownMs, data.unlockDay);
             OnPlayerActivityMessage?.Invoke($"攻防战操作失败：{reasonText}");
             UI.HorizontalMarqueeUI.Instance?.AddMessage("攻防战", null, reasonText);
-            Debug.Log($"[SGM] tribe_war_attack_failed: reason={data.reason} cooldownMs={data.cooldownMs}");
+            Debug.Log($"[SGM] tribe_war_attack_failed: reason={data.reason} cooldownMs={data.cooldownMs} unlockDay={data.unlockDay}");
         }
 
         /// <summary>攻击开始广播（双方房间均广播）：按当前 roomId 区分攻守视角。</summary>
@@ -3716,7 +3716,7 @@ namespace DrscfZ.Survival
 
         /// <summary>§35.10 attack_failed.reason → 中文（MVP 仅活动消息/跑马灯用）
         /// 🔴 audit-r25 GAP-D25-04：加 cooldownMs 参数，in_cooldown 时显示实时倒计时秒数（替代静态"60s"）。</summary>
-        private static string FormatTribeWarFailReason(string reason, long cooldownMs = 0)
+        private static string FormatTribeWarFailReason(string reason, long cooldownMs = 0, int unlockDay = 0)
         {
             if (string.IsNullOrEmpty(reason)) return "未知原因";
             switch (reason)
@@ -3738,7 +3738,7 @@ namespace DrscfZ.Survival
                 case "target_not_playing":          return "目标房间未在游戏中";
                 case "not_under_attack":            return "未被攻击，无法反击";
                 case "wrong_phase":                 return "当前阶段不允许发起";
-                case "feature_locked":              return "功能未解锁";
+                case "feature_locked":              return unlockDay > 0 ? $"功能未解锁（D{unlockDay}解锁）" : "功能未解锁";
                 case "room_not_found":              return "目标房间不存在";
                 default:                            return reason;
             }
@@ -3998,8 +3998,8 @@ namespace DrscfZ.Survival
             int unlockDay = 0;
             try
             {
-                // 轻量反序列化（无专用 Data 类）
-                var probe = JsonUtility.FromJson<BroadcasterActionFailedData>(dataJson);
+                // 轻量反序列化专用失败数据。
+                var probe = JsonUtility.FromJson<RouletteSpinFailedData>(dataJson);
                 if (probe != null) { reason = probe.reason; unlockDay = probe.unlockDay; }
             }
             catch { /* ignore */ }

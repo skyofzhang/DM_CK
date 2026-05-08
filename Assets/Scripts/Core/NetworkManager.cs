@@ -77,6 +77,8 @@ namespace DrscfZ.Core
 
         public bool IsConnected { get; private set; }
         public string CurrentRoomId => string.IsNullOrEmpty(roomId) ? "default" : roomId;
+        public string LocalPlayerId => IsGMMode ? "gm_host" : (_douyinAnchorOpenId ?? "");
+        public string LocalPlayerName => IsGMMode ? "GM主播" : (string.IsNullOrEmpty(_douyinAnchorName) ? "主播" : _douyinAnchorName);
 
         private long _serverClockOffsetMs = 0L;
         public long ServerNowMs => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + _serverClockOffsetMs;
@@ -86,9 +88,13 @@ namespace DrscfZ.Core
 
         /// <summary>是否已通过抖音token初始化获取到roomId</summary>
         public bool IsDouyinInitialized { get; private set; }
+        public string DouyinAnchorOpenId => _douyinAnchorOpenId;
+        public string DouyinAnchorName => _douyinAnchorName;
 
         /// <summary>显式 GM 模式标识：命令行带 -gm / -gm=1 / --gm 时为 true（强显式，覆盖 token 判定）</summary>
         private bool _explicitGMMode;
+        private string _douyinAnchorOpenId = "";
+        private string _douyinAnchorName = "";
 
         /// <summary>GM 模式判定（分层）：
         ///   1) _explicitGMMode == true  → GM 模式（强显式）
@@ -130,6 +136,7 @@ namespace DrscfZ.Core
         private bool _isConnecting;
         private float _lastHeartbeatResponse;
         private bool _heartbeatTimeoutFired;
+        private bool _syncStateAfterReconnect;
         private long _lastServerTick;
 
         private void Awake()
@@ -231,8 +238,23 @@ namespace DrscfZ.Core
                 _heartbeatTimeoutFired = true;
                 IsServerTimeout = true;
                 Debug.LogError($"[Net] 心跳超时！最后回应 {Time.realtimeSinceStartup - _lastHeartbeatResponse:F1}s 前");
-                OnHeartbeatTimeout?.Invoke();
+                ForceReconnectAfterHeartbeatTimeout();
             }
+        }
+
+        private void ForceReconnectAfterHeartbeatTimeout()
+        {
+            _syncStateAfterReconnect = true;
+            IsConnected = false;
+            OnHeartbeatTimeout?.Invoke();
+            OnDisconnected?.Invoke("Heartbeat timeout");
+            try { _cts?.Cancel(); } catch { }
+            try { _ws?.Abort(); } catch { }
+            try { _ws?.Dispose(); } catch { }
+            _ws = null;
+            _cts = null;
+
+            TryReconnect();
         }
 
         private void OnDestroy()
@@ -314,6 +336,7 @@ namespace DrscfZ.Core
         {
             _intentionalClose = true;
             _isConnecting = false;
+            _syncStateAfterReconnect = false;
             _cts?.Cancel();
             if (_ws != null && _ws.State == WebSocketState.Open)
             {
@@ -341,7 +364,8 @@ namespace DrscfZ.Core
             try
             {
                 var bytes = Encoding.UTF8.GetBytes(json);
-                await _ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, _cts.Token);
+                var token = _cts != null ? _cts.Token : CancellationToken.None;
+                await _ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, token);
             }
             catch (Exception e)
             {
@@ -388,15 +412,25 @@ namespace DrscfZ.Core
                 IsServerTimeout = false;
                 _lastServerTick = 0;
 
-                // 连接后立即发送 join_room（告知服务器要加入哪个房间 + 当前模式）
-                // 服务端据 isGMMode 字段区分 GM 模式（显式或兜底）与真实抖音模式，用于权限/路由分流
-                // 🆕 GM 模式默认 playerId="gm_host" / playerName="GM主播"；真实抖音模式留空由服务端从 roomInfo 补全
-                string playerId = IsGMMode ? "gm_host" : "";
-                string playerName = IsGMMode ? "GM主播" : "";
+                // 连接后立即发送 join_room（告知服务器要加入哪个房间 + 当前模式 + 本端主播身份）
+                // 服务端据 isGMMode 字段区分 GM 模式与真实抖音模式；真实抖音模式用 /api/douyin/init 返回的 anchorOpenId 做主播鉴权。
+                string playerId = LocalPlayerId;
+                string playerName = LocalPlayerName;
+                if (!IsGMMode && string.IsNullOrEmpty(playerId))
+                    Debug.LogWarning("[Net] Douyin mode joined without anchorOpenId; server will use fallback creator binding if available.");
                 string joinMsg = $"{{\"type\":\"join_room\",\"data\":{{\"roomId\":\"{EscapeJsonString(CurrentRoomId)}\",\"isGMMode\":{(IsGMMode ? "true" : "false")},\"explicitGMMode\":{(_explicitGMMode ? "true" : "false")},\"playerId\":\"{EscapeJsonString(playerId)}\",\"playerName\":\"{EscapeJsonString(playerName)}\"}},\"timestamp\":{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}";
                 var joinBytes = Encoding.UTF8.GetBytes(joinMsg);
                 await ws.SendAsync(new ArraySegment<byte>(joinBytes), WebSocketMessageType.Text, true, cts.Token);
-                Debug.Log($"[Net] Joined room: {CurrentRoomId}, isGMMode={IsGMMode}, explicitGM={_explicitGMMode}");
+                Debug.Log($"[Net] Joined room: {CurrentRoomId}, isGMMode={IsGMMode}, explicitGM={_explicitGMMode}, playerId={(string.IsNullOrEmpty(playerId) ? "none" : playerId)}");
+
+                if (_syncStateAfterReconnect)
+                {
+                    string syncMsg = $"{{\"type\":\"sync_state\",\"timestamp\":{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}";
+                    var syncBytes = Encoding.UTF8.GetBytes(syncMsg);
+                    await ws.SendAsync(new ArraySegment<byte>(syncBytes), WebSocketMessageType.Text, true, cts.Token);
+                    _syncStateAfterReconnect = false;
+                    Debug.Log("[Net] sync_state requested after reconnect");
+                }
 
                 _actionQueue.Enqueue(() => OnConnected?.Invoke());
                 _ = ReceiveLoop(ws, cts);
@@ -868,12 +902,16 @@ namespace DrscfZ.Core
                 // 简单解析JSON响应（不用JsonUtility因为字段名不匹配）
                 string extractedRoomId = ExtractField(response, "roomId");
                 string success = ExtractField(response, "success");
+                string anchorOpenId = ExtractField(response, "anchorOpenId");
+                string anchorName = ExtractField(response, "anchorName");
 
                 if (!string.IsNullOrEmpty(extractedRoomId) && extractedRoomId != "null")
                 {
                     roomId = extractedRoomId;
+                    _douyinAnchorOpenId = anchorOpenId == "null" ? "" : (anchorOpenId ?? "");
+                    _douyinAnchorName = anchorName == "null" ? "" : (anchorName ?? "");
                     IsDouyinInitialized = true;
-                    Debug.Log($"[Net] Douyin init success! roomId={roomId}");
+                    Debug.Log($"[Net] Douyin init success! roomId={roomId}, anchorOpenId={(string.IsNullOrEmpty(_douyinAnchorOpenId) ? "none" : _douyinAnchorOpenId)}");
                     return true;
                 }
 

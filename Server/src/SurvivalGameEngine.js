@@ -1224,7 +1224,14 @@ class SurvivalGameEngine {
       for (const entry of snap._supporters) {
         if (!Array.isArray(entry) || entry.length < 2) continue;
         const [pid, data] = entry;
-        if (pid) this._supporters.set(pid, data || {});
+        if (pid) {
+          const supporterData = data || {};
+          this._supporters.set(pid, supporterData);
+          const rememberedName = supporterData.name || supporterData.playerName;
+          if (rememberedName && this.playerNames && !this.playerNames[pid]) {
+            this.playerNames[pid] = rememberedName;
+          }
+        }
       }
     }
     // _dailyBuildVoteUsed：对象 seasonId:seasonDay → bool；兼容旧存档的 seasonDay → bool
@@ -2511,7 +2518,7 @@ class SurvivalGameEngine {
 
   /**
    * 处理礼物（策划案 §5.1 七种礼物体系）
-   * giftId   — 抖音平台 gift_id（douyin_id，当前均为 TBD，对齐后可精确匹配）
+   * giftId   — 抖音平台 gift_id（douyin_id；GiftConfig 已配置正式 id，price_fen 仅作兼容兜底）
    * giftValue — 礼物价格，单位：分（1分=0.01元=0.1抖币）
    */
   handleGift(playerId, playerName, avatarUrl, giftId, giftValue, giftName) {
@@ -2530,7 +2537,7 @@ class SurvivalGameEngine {
 
     // §34.3 B6 双路匹配：优先 douyin_id 精确命中 → price_fen 兜底 → 忽略
     //   命中方式分别计入 _giftMatchStats，供 60s 日志监控
-    //   douyin_id 仍为 TBD（运营待定），兜底 price_fen 是当前主路径
+    //   douyin_id 为主路径；price_fen 仅用于本地/旧推送兼容兜底
     let gift = findGiftById(giftId);
     let _matchPath = 'exact';
     if (!gift) {
@@ -3064,7 +3071,16 @@ class SurvivalGameEngine {
   _promoteToSupporter(playerId, playerName) {
     if (!playerId) return false;
     // 幂等：已是助威者直接返回 true
-    if (this._supporters.has(playerId)) return true;
+    if (this._supporters.has(playerId)) {
+      const existing = this._supporters.get(playerId);
+      const rememberedName = playerName || (existing && (existing.name || existing.playerName)) || playerId;
+      if (existing && rememberedName) {
+        existing.name = rememberedName;
+        existing.playerName = rememberedName;
+      }
+      if (rememberedName && this.playerNames) this.playerNames[playerId] = rememberedName;
+      return true;
+    }
 
     // §36.12 supporter_mode 门槛：seasonDay < 6 且非老用户 → 静默保留旁观者身份
     //   不推送任何 shop_purchase_failed / supporter_joined（策划案"不骚扰未主动请求的观众"）
@@ -3078,13 +3094,15 @@ class SurvivalGameEngine {
       } catch (e) { /* ignore require error on fallback */ }
     }
 
+    const supporterName = playerName || playerId;
     this._supporters.set(playerId, {
-      name: playerName || playerId,
+      name: supporterName,
+      playerName: supporterName,
       joinedAt: Date.now(),
       totalContrib: 0,
     });
     // 保持 playerNames 缓存同步（live_ranking / 结算显示名共用）
-    if (!this.playerNames[playerId]) this.playerNames[playerId] = playerName || playerId;
+    this.playerNames[playerId] = supporterName;
 
     this.broadcast({
       type: 'supporter_joined',
@@ -3512,7 +3530,7 @@ class SurvivalGameEngine {
     if (!playerId) return '';
     if (this.playerNames[playerId]) return this.playerNames[playerId];
     const s = this._supporters.get(playerId);
-    if (s && s.name) return s.name;
+    if (s && (s.name || s.playerName)) return s.name || s.playerName;
     return playerId;
   }
 
@@ -8935,7 +8953,10 @@ class SurvivalGameEngine {
   _getPlayerName(playerId) {
     if (!playerId) return 'Unknown';
     if (this.playerNames && this.playerNames[playerId]) return this.playerNames[playerId];
-    // TODO §33 助威模式：若有 _supporters Map，亦可 fallback
+    const s = this._supporters && typeof this._supporters.get === 'function'
+      ? this._supporters.get(playerId)
+      : null;
+    if (s && (s.name || s.playerName)) return s.name || s.playerName;
     return playerId;
   }
 
@@ -9049,7 +9070,6 @@ class SurvivalGameEngine {
    */
   _getAverageLevel() {
     const ids = new Set(Object.keys(this.contributions));
-    // TODO §33 助威模式：合并 this._supporters 的 key
     if (this._supporters && typeof this._supporters.keys === 'function') {
       for (const id of this._supporters.keys()) ids.add(id);
     }
@@ -9198,6 +9218,10 @@ class SurvivalGameEngine {
       this._trackContribution(playerId, amount, source);
       return;
     }
+    const rememberedName = entry.name || entry.playerName;
+    if (rememberedName && this.playerNames && !this.playerNames[playerId]) {
+      this.playerNames[playerId] = rememberedName;
+    }
 
     if (amount > 0) {
       if (!this._playerLastActiveTs) this._playerLastActiveTs = {};
@@ -9224,7 +9248,8 @@ class SurvivalGameEngine {
       this._evaluateVeteranForCreator('lifetime_contrib');
     }
 
-    this._contribBalance[playerId] = (this._contribBalance[playerId] || 0) + finalAmount * catchUpMult;
+    // §39 双轨货币不变式：商店余额只按真实贡献增长，不吃 §30 新人追赶倍率。
+    this._contribBalance[playerId] = (this._contribBalance[playerId] || 0) + finalAmount;
     if (this._playerLevel[playerId] == null) this._playerLevel[playerId] = 1;
     this._checkLevelUp(playerId);
 

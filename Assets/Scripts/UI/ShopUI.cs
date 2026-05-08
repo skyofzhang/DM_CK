@@ -101,6 +101,7 @@ namespace DrscfZ.UI
             if (sgm == null) return;
             sgm.OnShopPurchaseFailed  += HandleShopPurchaseFailedToast;
             sgm.OnShopPurchaseConfirm += HandleShopPurchaseConfirmRefresh;
+            sgm.OnShopEquipChanged     += HandleShopEquipChangedRefresh;
             _sgmSubscribed = true;
         }
 
@@ -112,6 +113,7 @@ namespace DrscfZ.UI
             {
                 sgm.OnShopPurchaseFailed  -= HandleShopPurchaseFailedToast;
                 sgm.OnShopPurchaseConfirm -= HandleShopPurchaseConfirmRefresh;
+                sgm.OnShopEquipChanged     -= HandleShopEquipChangedRefresh;
             }
             _sgmSubscribed = false;
         }
@@ -128,9 +130,19 @@ namespace DrscfZ.UI
         private void HandleShopPurchaseConfirmRefresh(ShopPurchaseConfirmData data)
         {
             if (_panel == null || !_panel.activeSelf) return;
+            var net = NetworkManager.Instance;
+            bool isMine = data == null || net == null || string.IsNullOrEmpty(data.playerId) || data.playerId == net.LocalPlayerId;
+            if (isMine && data != null && data.category == "B")
+                RequestInventory();
             if (_currentTab == "I")
                 RenderInventory();
             if (_statusText != null) _statusText.text = "";
+        }
+
+        private void HandleShopEquipChangedRefresh(ShopEquipChangedData data)
+        {
+            if (_panel == null || !_panel.activeSelf || _currentTab != "I") return;
+            RenderInventory();
         }
 
         // ==================== 对外接口 ====================
@@ -201,7 +213,8 @@ namespace DrscfZ.UI
 
             if (tab == "I")
             {
-                // 背包：本地渲染即可（不发服务器请求）
+                // 背包：先拉一次权威快照，再渲染本地缓存。
+                RequestInventory();
                 RenderInventory();
                 return;
             }
@@ -437,6 +450,16 @@ namespace DrscfZ.UI
             string json = $"{{\"type\":\"shop_list\",\"data\":{{\"category\":\"{EscapeJson(category)}\"}},\"timestamp\":{ts}}}";
             net.SendJson(json);
             Debug.Log($"[ShopUI] 发送 shop_list category={category}");
+        }
+
+        private static void RequestInventory()
+        {
+            var net = NetworkManager.Instance;
+            if (net == null || !net.IsConnected) return;
+            long ts = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            string json = $"{{\"type\":\"shop_inventory\",\"data\":{{}},\"timestamp\":{ts}}}";
+            net.SendJson(json);
+            Debug.Log("[ShopUI] request shop_inventory");
         }
 
         private static void SendShopPurchasePrepare(string itemId)

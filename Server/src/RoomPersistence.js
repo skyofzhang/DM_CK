@@ -47,9 +47,9 @@ class RoomPersistence {
 
   /** 保存房间快照到 JSON 文件 */
   save(room) {
-    if (!room || !room.roomId) return;
+    if (!room || !room.roomId) return false;
     const engine = room.survivalEngine;
-    if (!engine) return;
+    if (!engine) return false;
 
     // §36.12 v1.27：VeteranTracker 是全局单例；每个房间快照镜像一份局部视图，
     //   即使跨进程重启，任一房间快照恢复时都能还原"当前玩家曾是老用户"的判定
@@ -181,8 +181,10 @@ class RoomPersistence {
     try {
       const file = path.join(this.dataDir, `${room.roomId}.json`);
       this._writeJsonAtomic(file, snapshot);
+      return true;
     } catch (e) {
       console.warn(`[RoomPersistence] save fail ${room.roomId}: ${e.message}`);
+      return false;
     }
   }
 
@@ -325,15 +327,20 @@ class RoomPersistence {
   saveAll(rooms) {
     if (!rooms || rooms.size === 0) return 0;
     let saved = 0;
+    let failed = 0;
     for (const [, room] of rooms) {
       try {
         if (!room || room.status === 'destroyed') continue;
-        this.save(room);
-        saved++;
+        if (this.save(room)) saved++;
+        else failed++;
       } catch (e) {
-        // ignore
+        failed++;
+        const roomId = room && room.roomId ? room.roomId : '?';
+        console.warn(`[RoomPersistence] saveAll fail ${roomId}: ${e.message}`);
       }
     }
+    this.lastSaveAllFailures = failed;
+    if (failed > 0) console.warn(`[RoomPersistence] saveAll completed with ${failed} failure(s), saved=${saved}`);
     return saved;
   }
 }

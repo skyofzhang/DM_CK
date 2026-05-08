@@ -18,6 +18,10 @@ const SurvivalGameEngine = require('../src/SurvivalGameEngine');
   assert.strictEqual(engine.contributions.supporter_1, undefined, 'supporter must not enter guardian contributions');
   assert.ok(engine._supporters.has('supporter_1'), 'supporter should be registered');
   assert.ok(engine._supporters.get('supporter_1').totalContrib > 0, 'supporter contribution should be tracked separately');
+  assert.strictEqual(engine.playerNames.supporter_1, 'Supporter One', 'supporter display name should be remembered');
+
+  engine._handleSupporterComment('supporter_1', 'Supporter Renamed', 2);
+  assert.strictEqual(engine.playerNames.supporter_1, 'Supporter Renamed', 'existing supporter display name should refresh');
 
   engine.state = 'night';
   engine._initWorkerHp();
@@ -33,6 +37,13 @@ const SurvivalGameEngine = require('../src/SurvivalGameEngine');
   const first = captures.find(m => m.type === 'first_barrage');
   assert.ok(first, 'first_barrage should broadcast');
   assert.ok(first.data.workerId >= 0, 'guardian first_barrage should include allocated workerId');
+  engine._clearAllTimers();
+}
+
+{
+  const engine = new SurvivalGameEngine({}, () => {});
+  engine._supporters.set('supporter_named', { playerName: 'PlayerName Only' });
+  assert.strictEqual(engine._getPlayerName('supporter_named'), 'PlayerName Only', 'supporter playerName fallback should be used');
   engine._clearAllTimers();
 }
 
@@ -55,6 +66,31 @@ const SurvivalGameEngine = require('../src/SurvivalGameEngine');
   assert.strictEqual(engine.totalPlayers, 1, 'like-first player should occupy a guardian slot');
   assert.strictEqual(engine.contributions.like_first, 10, 'like-first contribution should apply after registration');
   assert.ok(engine._getWorkerIndex('like_first') >= 0, 'like-first player should get a worker slot');
+  engine._clearAllTimers();
+}
+
+{
+  const engine = new SurvivalGameEngine({}, () => {});
+  engine.room = { seasonMgr: { seasonDay: 6 } };
+  engine.state = 'day';
+  engine._supporters.set('supporter_balance', {
+    playerId: 'supporter_balance',
+    playerName: 'Supporter Balance',
+    totalContrib: 0,
+  });
+
+  engine._trackSupporterContribution('supporter_balance', 50, 'gift');
+
+  assert.strictEqual(
+    engine._lifetimeContrib.supporter_balance,
+    150,
+    'supporter lifetime contribution should still use newcomer catch-up'
+  );
+  assert.strictEqual(
+    engine._contribBalance.supporter_balance,
+    50,
+    'supporter shop balance must use real contribution, not catch-up multiplier'
+  );
   engine._clearAllTimers();
 }
 

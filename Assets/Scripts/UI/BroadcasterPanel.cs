@@ -127,6 +127,8 @@ namespace DrscfZ.UI
         // ==================== 状态 ====================
 
         private bool _isRoomCreator = false;
+        private bool _netSubscribed = false;
+        private NetworkManager _subscribedNetworkManager;
 
         // ==================== 生命周期 ====================
 
@@ -178,13 +180,7 @@ namespace DrscfZ.UI
             ResetEventBtn();
 
             // 订阅网络消息
-            var net = NetworkManager.Instance;
-            if (net != null)
-            {
-                net.OnMessageReceived += HandleMessage;
-                net.OnConnected       += HandleConnected;
-                net.OnDisconnected    += HandleDisconnected;
-            }
+            TrySubscribeNetwork();
 
             // 🆕 §17.15 主播话术卡：订阅 phase_changed / resource_update
             var sgm = SurvivalGameManager.Instance;
@@ -199,13 +195,7 @@ namespace DrscfZ.UI
 
         private void OnDestroy()
         {
-            var net = NetworkManager.Instance;
-            if (net != null)
-            {
-                net.OnMessageReceived -= HandleMessage;
-                net.OnConnected       -= HandleConnected;
-                net.OnDisconnected    -= HandleDisconnected;
-            }
+            UnsubscribeNetwork();
             var sgm = SurvivalGameManager.Instance;
             if (sgm != null)
             {
@@ -216,6 +206,8 @@ namespace DrscfZ.UI
 
         private void Update()
         {
+            if (!_netSubscribed) TrySubscribeNetwork();
+
             // ⚡ 冷却倒计时
             if (_boostCd > 0f)
             {
@@ -248,6 +240,33 @@ namespace DrscfZ.UI
         }
 
         // ==================== 网络消息处理 ====================
+
+        /// <summary>订阅网络消息（NetworkManager 可能晚于面板初始化）。</summary>
+        private void TrySubscribeNetwork()
+        {
+            if (_netSubscribed) return;
+            var net = NetworkManager.Instance;
+            if (net == null) return;
+            net.OnMessageReceived += HandleMessage;
+            net.OnConnected += HandleConnected;
+            net.OnDisconnected += HandleDisconnected;
+            _subscribedNetworkManager = net;
+            _netSubscribed = true;
+        }
+
+        private void UnsubscribeNetwork()
+        {
+            if (!_netSubscribed) return;
+            var net = _subscribedNetworkManager;
+            if (net != null)
+            {
+                net.OnMessageReceived -= HandleMessage;
+                net.OnConnected -= HandleConnected;
+                net.OnDisconnected -= HandleDisconnected;
+            }
+            _subscribedNetworkManager = null;
+            _netSubscribed = false;
+        }
 
         /// <summary>
         /// 处理服务器消息。
@@ -558,7 +577,7 @@ namespace DrscfZ.UI
         public void OpenBuildingPanel() => OnBuildingClicked();
         public void OpenExpeditionPanel() => OnExpeditionClicked();
 
-        public void SendExpeditionCommand(string action = "send")
+        public void SendExpeditionCommand(string action = "send", string playerId = null)
         {
             var net = NetworkManager.Instance;
             if (net == null || !net.IsConnected)
@@ -569,13 +588,25 @@ namespace DrscfZ.UI
 
             string safeAction = action == "recall" ? "recall" : "send";
             long ts = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            string playerId = net.IsGMMode ? "gm_host" : "";
-            string json = $"{{\"type\":\"expedition_command\",\"data\":{{\"playerId\":\"{playerId}\",\"action\":\"{safeAction}\"}},\"timestamp\":{ts}}}";
+            string targetPlayerId = playerId ?? (safeAction == "send" ? net.LocalPlayerId : "");
+            if (safeAction == "send" && string.IsNullOrEmpty(targetPlayerId))
+            {
+                Debug.LogWarning("[BroadcasterPanel] expedition_command send skipped: local playerId is empty");
+                AnnouncementUI.Instance?.ShowAnnouncement("探险", "主播身份尚未同步，请稍后重试", new Color(1f, 0.7f, 0.2f), 2f);
+                return;
+            }
+            string json = $"{{\"type\":\"expedition_command\",\"data\":{{\"playerId\":\"{EscapeJson(targetPlayerId)}\",\"action\":\"{safeAction}\"}},\"timestamp\":{ts}}}";
             net.SendJson(json);
-            Debug.Log($"[BroadcasterPanel] 🧭 expedition_command 已发送 playerId={playerId} action={safeAction}");
+            Debug.Log($"[BroadcasterPanel] 🧭 expedition_command 已发送 playerId={targetPlayerId} action={safeAction}");
         }
 
         /// <summary>获取当前等级升级至下一级的矿石消耗</summary>
+        private static string EscapeJson(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            return value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+        }
+
         private static int GetUpgradeCost(int currentLevel)
         {
             int idx = currentLevel - 1;

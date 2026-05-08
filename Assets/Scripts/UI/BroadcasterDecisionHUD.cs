@@ -71,9 +71,14 @@ namespace DrscfZ.UI
         private int    _activeBuildingsCount   = 0;
         private int    _activeExpeditionsCount = 0;
         private string _tribeWarState   = "idle";    // "idle" | "attacking" | "defending"
+        private readonly Dictionary<string, ExpeditionEntry> _activeExpeditions = new Dictionary<string, ExpeditionEntry>();
+        private GameObject _expeditionControlsPanel;
+        private Transform  _expeditionRecallListRoot;
+        private TMP_Text   _expeditionControlsStatusText;
 
         /// <summary>PlayerPrefs key：首次显示气泡标志。</summary>
         private const string PREFS_KEY_TIP_SHOWN = "bdh_tip_shown";
+        private const string EXPEDITION_CONTROLS_MODAL_ID = "expedition_controls";
 
         // ==================== §10 城门升级消耗表（对齐 BroadcasterPanel._upgradeCostTable 与 Server GATE_UPGRADE_COSTS） ====================
         // 索引 i 对应 gateLevel=i+1 → i+2 的升级消耗（Lv1→Lv2=100, Lv2→Lv3=250, ..., Lv5→Lv6=1500）
@@ -120,6 +125,7 @@ namespace DrscfZ.UI
                 // r24 之前仅订阅 OnExpeditionStarted/Returned 增减，断线重连时 room_state.expeditions[] 数组不同步
                 // → HUD 推荐"可派矿工探险"但实际服务端有进行中探险，会被拒（被动 wrong_phase 提示，体验失真）
                 sgm.OnRoomState                += HandleRoomStateForExpeditionCount;
+                sgm.OnExpeditionsRestore       += HandleExpeditionsRestore;
             }
 
             // 从 SurvivalGameManager 缓存初始化 seasonDay / variant
@@ -170,10 +176,12 @@ namespace DrscfZ.UI
                 sgm.OnExpeditionReturned       -= HandleExpeditionReturned;
                 sgm.OnExpeditionFailed         -= HandleExpeditionFailed;
                 sgm.OnRoomState                -= HandleRoomStateForExpeditionCount;
+                sgm.OnExpeditionsRestore       -= HandleExpeditionsRestore;
                 sgm.OnTribeWarAttackStarted    -= HandleTribeWarAttackStarted;
                 sgm.OnTribeWarUnderAttack      -= HandleTribeWarUnderAttack;
                 sgm.OnTribeWarAttackEnded      -= HandleTribeWarAttackEnded;
             }
+            ModalRegistry.Release(EXPEDITION_CONTROLS_MODAL_ID);
             if (Instance == this) Instance = null;
         }
 
@@ -245,14 +253,21 @@ namespace DrscfZ.UI
 
         private void HandleExpeditionStarted(ExpeditionStartedData data)
         {
-            _activeExpeditionsCount++;
+            if (data != null && !string.IsNullOrEmpty(data.playerId))
+            {
+                AddOrUpdateExpedition(data.playerId, data.expeditionId, data.workerIdx, data.returnsAt);
+            }
+            _activeExpeditionsCount = _activeExpeditions.Count > 0 ? _activeExpeditions.Count : _activeExpeditionsCount + 1;
             RefreshCards();
+            RefreshExpeditionControlsPanel();
         }
 
         private void HandleExpeditionReturned(ExpeditionReturnedData data)
         {
-            _activeExpeditionsCount = Mathf.Max(0, _activeExpeditionsCount - 1);
+            if (data != null) RemoveExpedition(data.playerId, data.expeditionId);
+            _activeExpeditionsCount = _activeExpeditions.Count;
             RefreshCards();
+            RefreshExpeditionControlsPanel();
         }
 
         private void HandleExpeditionFailed(ExpeditionFailedData data)
@@ -279,12 +294,65 @@ namespace DrscfZ.UI
                 RefreshCards();
             }
             if (data.expeditions == null) return;
-            int newCount = data.expeditions.Length;
+            SyncExpeditions(data.expeditions);
+            int newCount = _activeExpeditions.Count;
             if (newCount != _activeExpeditionsCount)
             {
                 Debug.Log($"[BroadcasterDecisionHUD] room_state sync expeditions: {_activeExpeditionsCount} → {newCount}");
                 _activeExpeditionsCount = newCount;
                 RefreshCards();
+            }
+            RefreshExpeditionControlsPanel();
+        }
+
+        private void HandleExpeditionsRestore(ExpeditionInProgressData[] expeditions)
+        {
+            SyncExpeditions(expeditions);
+            _activeExpeditionsCount = _activeExpeditions.Count;
+            RefreshCards();
+            RefreshExpeditionControlsPanel();
+        }
+
+        private void AddOrUpdateExpedition(string playerId, string expeditionId, int workerIdx, long returnsAt)
+        {
+            if (string.IsNullOrEmpty(playerId)) return;
+            _activeExpeditions[playerId] = new ExpeditionEntry
+            {
+                playerId = playerId,
+                expeditionId = expeditionId,
+                workerIdx = workerIdx,
+                returnsAt = returnsAt,
+            };
+        }
+
+        private void RemoveExpedition(string playerId, string expeditionId)
+        {
+            if (!string.IsNullOrEmpty(playerId))
+            {
+                _activeExpeditions.Remove(playerId);
+                return;
+            }
+            if (string.IsNullOrEmpty(expeditionId)) return;
+            string removeKey = null;
+            foreach (var kvp in _activeExpeditions)
+            {
+                if (kvp.Value != null && kvp.Value.expeditionId == expeditionId)
+                {
+                    removeKey = kvp.Key;
+                    break;
+                }
+            }
+            if (!string.IsNullOrEmpty(removeKey)) _activeExpeditions.Remove(removeKey);
+        }
+
+        private void SyncExpeditions(ExpeditionInProgressData[] expeditions)
+        {
+            _activeExpeditions.Clear();
+            if (expeditions == null) return;
+            foreach (var exp in expeditions)
+            {
+                if (exp == null || string.IsNullOrEmpty(exp.playerId)) continue;
+                AddOrUpdateExpedition(exp.playerId, exp.expeditionId, exp.workerIdx, exp.returnsAt);
             }
         }
 
@@ -438,8 +506,8 @@ namespace DrscfZ.UI
             int listenerCount = InvokeJumpEvent(_onExpeditionClicked, "OpenExpeditionPanel");
             if (listenerCount == 0)
             {
-                BroadcasterPanel.Instance?.SendExpeditionCommand("send");
-                Debug.Log("[BroadcasterDecisionHUD] OpenExpeditionPanel: fallback BroadcasterPanel.SendExpeditionCommand(send)");
+                OpenExpeditionControlsPanel();
+                Debug.Log("[BroadcasterDecisionHUD] OpenExpeditionPanel: fallback runtime expedition controls");
             }
         }
 
@@ -499,6 +567,120 @@ namespace DrscfZ.UI
             unityEvent?.Invoke();
             Debug.Log($"[BroadcasterDecisionHUD] {label}: UnityEvent listeners={listenerCount}");
             return listenerCount;
+        }
+
+        public void OpenExpeditionControlsPanel()
+        {
+            if (_expeditionControlsPanel == null) CreateExpeditionControlsPanel();
+            if (_expeditionControlsPanel == null) return;
+            if (!ModalRegistry.Request(EXPEDITION_CONTROLS_MODAL_ID, 54, CloseExpeditionControlsPanel)) return;
+            _expeditionControlsPanel.SetActive(true);
+            RefreshExpeditionControlsPanel();
+        }
+
+        private void CloseExpeditionControlsPanel()
+        {
+            if (_expeditionControlsPanel != null)
+                _expeditionControlsPanel.SetActive(false);
+            ModalRegistry.Release(EXPEDITION_CONTROLS_MODAL_ID);
+        }
+
+        private void CreateExpeditionControlsPanel()
+        {
+            var parent = RuntimeUIFactory.GetCanvasTransform();
+            _expeditionControlsPanel = RuntimeUIFactory.CreatePanel(
+                parent,
+                "ExpeditionControlsPanel",
+                new Vector2(0.5f, 0.5f),
+                new Vector2(0.5f, 0.5f),
+                Vector2.zero,
+                new Vector2(520f, 460f),
+                new Color(0.05f, 0.08f, 0.11f, 0.95f));
+            RuntimeUIFactory.AddVerticalLayout(_expeditionControlsPanel, 10f, new RectOffset(22, 22, 18, 18));
+
+            var title = RuntimeUIFactory.CreateText(_expeditionControlsPanel.transform, "Title", "探险调度", 28f,
+                new Color(0.75f, 0.92f, 1f), TextAlignmentOptions.Center, new Vector2(460f, 40f));
+            RuntimeUIFactory.AddLayoutElement(title.gameObject, 40f);
+
+            _expeditionControlsStatusText = RuntimeUIFactory.CreateText(_expeditionControlsPanel.transform, "Status", "", 19f,
+                Color.white, TextAlignmentOptions.Center, new Vector2(460f, 34f));
+            RuntimeUIFactory.AddLayoutElement(_expeditionControlsStatusText.gameObject, 34f);
+
+            TextMeshProUGUI sendLabel;
+            var sendBtn = RuntimeUIFactory.CreateButton(_expeditionControlsPanel.transform, "SendExpedition", "派出主播矿工", out sendLabel,
+                new Color(0.16f, 0.36f, 0.46f, 0.96f), new Vector2(460f, 48f));
+            RuntimeUIFactory.AddLayoutElement(sendBtn.gameObject, 48f);
+            sendBtn.onClick.AddListener(() =>
+            {
+                BroadcasterPanel.Instance?.SendExpeditionCommand("send");
+                CloseExpeditionControlsPanel();
+            });
+
+            var listGo = new GameObject("RecallList", typeof(RectTransform), typeof(VerticalLayoutGroup));
+            listGo.transform.SetParent(_expeditionControlsPanel.transform, false);
+            RuntimeUIFactory.AddLayoutElement(listGo, 220f);
+            var listLayout = listGo.GetComponent<VerticalLayoutGroup>();
+            listLayout.spacing = 6f;
+            listLayout.childAlignment = TextAnchor.UpperCenter;
+            listLayout.childControlWidth = true;
+            listLayout.childControlHeight = false;
+            listLayout.childForceExpandWidth = true;
+            listLayout.childForceExpandHeight = false;
+            _expeditionRecallListRoot = listGo.transform;
+
+            TextMeshProUGUI closeLabel;
+            var closeBtn = RuntimeUIFactory.CreateButton(_expeditionControlsPanel.transform, "Close", "关闭", out closeLabel,
+                new Color(0.36f, 0.36f, 0.40f, 0.96f), new Vector2(460f, 44f));
+            RuntimeUIFactory.AddLayoutElement(closeBtn.gameObject, 44f);
+            closeBtn.onClick.AddListener(CloseExpeditionControlsPanel);
+
+            _expeditionControlsPanel.SetActive(false);
+        }
+
+        private void RefreshExpeditionControlsPanel()
+        {
+            if (_expeditionControlsPanel == null || !_expeditionControlsPanel.activeSelf) return;
+            if (_expeditionControlsStatusText != null)
+                _expeditionControlsStatusText.text = _activeExpeditions.Count > 0
+                    ? $"进行中探险：{_activeExpeditions.Count}"
+                    : "当前没有可召回的探险";
+            if (_expeditionRecallListRoot == null) return;
+
+            for (int i = _expeditionRecallListRoot.childCount - 1; i >= 0; i--)
+                Destroy(_expeditionRecallListRoot.GetChild(i).gameObject);
+
+            if (_activeExpeditions.Count == 0)
+            {
+                var empty = RuntimeUIFactory.CreateText(_expeditionRecallListRoot, "Empty", "派出后会在这里显示可召回目标", 18f,
+                    new Color(0.72f, 0.78f, 0.84f), TextAlignmentOptions.Center, new Vector2(460f, 42f));
+                RuntimeUIFactory.AddLayoutElement(empty.gameObject, 42f);
+                return;
+            }
+
+            var entries = new List<ExpeditionEntry>(_activeExpeditions.Values);
+            entries.Sort((a, b) => a.returnsAt.CompareTo(b.returnsAt));
+            foreach (var entry in entries)
+            {
+                if (entry == null || string.IsNullOrEmpty(entry.playerId)) continue;
+                string pid = entry.playerId;
+                int sec = Mathf.Max(0, Mathf.CeilToInt((entry.returnsAt - NetworkManager.SyncedNowMs) / 1000f));
+                string label = $"召回 W{entry.workerIdx + 1}  {ShortId(pid)}  {sec}s";
+                TextMeshProUGUI recallLabel;
+                var btn = RuntimeUIFactory.CreateButton(_expeditionRecallListRoot, $"Recall_{pid}", label, out recallLabel,
+                    new Color(0.45f, 0.18f, 0.14f, 0.96f), new Vector2(460f, 42f));
+                RuntimeUIFactory.AddLayoutElement(btn.gameObject, 42f);
+                btn.onClick.AddListener(() =>
+                {
+                    BroadcasterPanel.Instance?.SendExpeditionCommand("recall", pid);
+                    CloseExpeditionControlsPanel();
+                });
+            }
+        }
+
+        private static string ShortId(string value)
+        {
+            if (string.IsNullOrEmpty(value) || value.Length <= 12) return value;
+            return value.Substring(0, 6) + "..." + value.Substring(value.Length - 4);
         }
 
         private void RenderCard(CardView view, CardData data)
@@ -721,6 +903,14 @@ namespace DrscfZ.UI
         public enum Urgency { Red = 0, Yellow = 1, Green = 2 }
 
         public enum CardAction { None, UpgradeGate, Roulette, Build, Expedition, TribeWar }
+
+        private class ExpeditionEntry
+        {
+            public string playerId;
+            public string expeditionId;
+            public int workerIdx;
+            public long returnsAt;
+        }
 
         public class CardData
         {

@@ -192,11 +192,27 @@ class SurvivalRoom {
    */
   handleJoinRoom(ws, joinData) {
     const isGMMode = !!(joinData && joinData.isGMMode === true);
-    const playerId = (joinData && typeof joinData.playerId === 'string') ? joinData.playerId : '';
+    let playerId = (joinData && typeof joinData.playerId === 'string') ? joinData.playerId : '';
+    const playerName = (joinData && typeof joinData.playerName === 'string') ? joinData.playerName : '';
+
+    if (!playerId
+        && !isGMMode
+        && this.clients.size === 0
+        && this.roomCreatorOpenId
+        && !String(this.roomCreatorOpenId).startsWith('gm_creator_')) {
+      playerId = this.roomCreatorOpenId;
+      console.log(`[SurvivalRoom:${this.roomId}] join_room fallback-bound ws playerId to douyin anchorOpenId`);
+    }
 
     // 缓存 openId 到 ws（便于后续 _isRoomCreator 判定 / 审计）
     if (playerId) {
       ws._playerId = playerId;
+      if (playerName) {
+        ws._playerName = playerName;
+        if (this.survivalEngine && this.survivalEngine.playerNames) {
+          this.survivalEngine.playerNames[playerId] = playerName;
+        }
+      }
       ws.openId = playerId;  // 保留别名，便于日志/审计引用
     }
 
@@ -261,7 +277,7 @@ class SurvivalRoom {
       if (isFirstClient) {
         this.roomCreatorWs = ws;
         // §36.12 从 ws._playerId 缓存 roomCreatorOpenId；GM 模式下若构造时已写入 gm_creator_* 占位则保留
-        if (ws && ws._playerId && !this.roomCreatorOpenId) {
+        if (ws && ws._playerId && (!this.roomCreatorOpenId || String(this.roomCreatorOpenId).startsWith('gm_creator_'))) {
           this.roomCreatorOpenId = ws._playerId;
         }
         this._refreshVeteranStatus();
@@ -365,6 +381,16 @@ class SurvivalRoom {
     }
   }
 
+  _saveRoomSnapshot(reason) {
+    if (!this.roomPersistence) return false;
+    try {
+      return !!this.roomPersistence.save(this);
+    } catch (e) {
+      console.warn(`[SurvivalRoom:${this.roomId}] snapshot save failed (${reason || 'unknown'}): ${e.message}`);
+      return false;
+    }
+  }
+
   /** 停止模拟器并清理所有定时器 */
   _stopSimulation() {
     this._simRunning = false;
@@ -400,9 +426,7 @@ class SurvivalRoom {
     }
 
     // §36 销毁前保存一次快照
-    if (this.roomPersistence) {
-      try { this.roomPersistence.save(this); } catch (e) { /* ignore */ }
-    }
+    this._saveRoomSnapshot('destroy');
 
     // 🔴 audit-r44 GAP-E44-02：r? 起 TribeWarManager 已实现 onRoomDestroyed (TribeWarManager.js:205) 但全代码 0 调用方
     //   后果：30min 无人 → 房间 destroy → 旧 TribeWarSession 仍残留在 _sessions / _attackerToSession / _defenderToSession Map
@@ -637,9 +661,7 @@ class SurvivalRoom {
       case 'reset_game':
         if (!this._requireBroadcaster(ws, 'reset_game')) break;
         // §36 重置前保存一次（保留 fortressDay / 持久化字段）
-        if (this.roomPersistence) {
-          try { this.roomPersistence.save(this); } catch (e) { /* ignore */ }
-        }
+        this._saveRoomSnapshot('reset_game');
         this._stopSimulation();
         this.survivalEngine.reset();
         // reset() 本身只改内存状态；立刻广播 idle 快照，避免客户端一直停在 Loading 等待 15s 超时。
@@ -737,9 +759,7 @@ class SurvivalRoom {
         if (!this._requireBroadcaster(ws, 'end_game')) break;
         // §16.4 GM 手动结束游戏 → 阶段性结算（走失败结算 UI，但不触发 fortressDay 降级 / 不重置每日 cap）
         // §36 结束前保存一次（_enterSettlement 内部会再保存；此处双保险）
-        if (this.roomPersistence) {
-          try { this.roomPersistence.save(this); } catch (e) { /* ignore */ }
-        }
+        this._saveRoomSnapshot('end_game');
         this._stopSimulation();
         this._gmAudit(ws, 'end_game', { state: this.survivalEngine.state });
         // §16.4 v1.27 修正语病：必须逐项比较（state === 'day' || 'night' 按 JS 语义恒真，原表达有 bug）
@@ -838,7 +858,11 @@ class SurvivalRoom {
             });
             break;
           }
-          const targetPid = (data && data.playerId) || '';
+          let targetPid = (data && data.playerId) || '';
+          if (!targetPid && this.survivalEngine && this.survivalEngine._expeditions && this.survivalEngine._expeditions.size > 0) {
+            const firstExp = this.survivalEngine._expeditions.values().next().value;
+            targetPid = firstExp && firstExp.playerId || '';
+          }
           if (!targetPid) break;
           this.survivalEngine.handleExpeditionCommand(targetPid, 'recall', ws._playerId || targetPid);
           this._gmAudit(ws, 'expedition_recall', { targetPlayerId: targetPid });

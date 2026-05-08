@@ -60,6 +60,7 @@ namespace DrscfZ.Survival
         public const string BroadcasterRouletteReady       = "broadcaster_roulette_ready";
         public const string BroadcasterRouletteResult      = "broadcaster_roulette_result";
         public const string BroadcasterRouletteEffectEnded = "broadcaster_roulette_effect_ended";
+        public const string RouletteSpinFailed             = "roulette_spin_failed";
         public const string BroadcasterTraderOffer         = "broadcaster_trader_offer";
         public const string BroadcasterTraderResult        = "broadcaster_trader_result";  // Critical 修复: 交易结果反馈
         // C→S 消息（客户端发送时直接用字面量，无需此常量解析）：
